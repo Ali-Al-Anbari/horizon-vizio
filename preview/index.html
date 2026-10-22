@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Horizon — local TV home prototype</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <div class="backdrop" aria-hidden="true"></div>
+    <main class="screen">
+      <header class="masthead">
+        <span class="wordmark">Horizon</span>
+        <span class="prototype-label">Local prototype</span>
+      </header>
+
+      <section class="main-content" aria-label="Custom home preview">
+        <div class="intro">
+          <h1>Good evening</h1>
+          <p>Your apps and the open web, in one place.</p>
+        </div>
+
+        <div class="app-grid" aria-label="Apps">
+          <button class="app-tile" type="button" data-row="0" data-column="0" data-app="YouTube">YouTube</button>
+          <button class="app-tile" type="button" data-row="0" data-column="1" data-app="Plex">Plex</button>
+          <button class="app-tile" type="button" data-row="0" data-column="2" data-app="Browser" autofocus>Browser</button>
+        </div>
+
+        <form class="address-bar" id="address-form" autocomplete="off">
+          <label class="visually-hidden" for="address">Website address or search</label>
+          <input id="address" name="address" type="text" inputmode="url" placeholder="Search or enter a website" data-row="1" data-column="0" />
+          <button class="go-button" type="submit" data-row="1" data-column="1">Go</button>
+        </form>
+
+        <section class="bookmarks" aria-label="Bookmarks">
+          <h2>Bookmarks</h2>
+          <div class="bookmark-row">
+            <button type="button" class="bookmark" data-row="2" data-column="0" data-url="https://www.wikipedia.org/">Wikipedia</button>
+            <button type="button" class="bookmark" data-row="2" data-column="1" data-url="https://developer.mozilla.org/">MDN</button>
+            <button type="button" class="bookmark" data-row="2" data-column="2" data-url="https://archive.org/">Archive.org</button>
+          </div>
+        </section>
+      </section>
+
+      <footer class="footer">
+        <p>Use arrow keys to move <span aria-hidden="true">·</span> Enter to select <span aria-hidden="true">·</span> Esc to go back</p>
+      </footer>
+      <div class="notice" role="status" aria-live="polite" hidden></div>
+    </main>
+  </body>
+</html>

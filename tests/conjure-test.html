@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <title>Horizon — Vizio remote test</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="conjure-test.css" />
+    <script src="conjure-test.js" defer></script>
+  </head>
+  <body>
+    <div class="backdrop" aria-hidden="true"></div>
+    <main class="screen test-screen">
+      <header class="masthead">
+        <span class="wordmark">Horizon</span>
+        <span class="prototype-label">Remote test</span>
+      </header>
+
+      <section class="test-main">
+        <div class="intro test-intro">
+          <h1>Remote check</h1>
+          <p>Press each direction, OK, and Back. Try Home last; the TV may exit this page.</p>
+        </div>
+
+        <div class="direction-grid" aria-label="Directional input status">
+          <div class="key-cell key-up" data-key="Up">Up</div>
+          <div class="key-cell key-left" data-key="Left">Left</div>
+          <div class="key-cell key-center" data-key="OK">OK</div>
+          <div class="key-cell key-right" data-key="Right">Right</div>
+          <div class="key-cell key-down" data-key="Down">Down</div>
+        </div>
+
+        <div class="test-details">
+          <section class="metric-panel" aria-label="Input events">
+            <h2>Last input</h2>
+            <p class="last-key" id="last-key">Waiting for remote</p>
+            <p class="raw-key" id="raw-key">Raw key: —</p>
+            <p class="event-count" id="event-count">Events: 0</p>
+            <div class="special-keys"><span id="back-state">Back: waiting</span><span id="home-state">Home: waiting</span></div>
+          </section>
+          <section class="metric-panel" aria-label="Performance">
+            <h2>Performance</h2>
+            <p class="metric-value"><span id="fps">—</span> <small>FPS</small></p>
+            <p class="metric-value"><span id="input-latency">—</span> <small>ms keydown → next frame</small></p>
+            <p class="metric-note">This measures page response, not remote radio latency.</p>
+          </section>
+        </div>
+      </section>
+
+      <footer class="footer"><p>Temporary page <span aria-hidden="true">·</span> No TV settings or storage changes</p></footer>
+    </main>
+  </body>
+</html>

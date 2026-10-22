@@ -1,0 +1,40 @@
+# Local settings and credentials
+.env
+.env.*
+!.env.example
+*auth*.json
+*token*.json
+credentials.json
+secrets.json
+config.local.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editors and operating systems
+.DS_Store
+._*
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs, state, generated output
+*.log
+*.out
+*.pid
+coverage/
+dist/
+build/
+site/
+*.plist
+*.pem
+*.key

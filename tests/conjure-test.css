@@ -1,0 +1,54 @@
+.test-screen { max-width: 1600px; }
+.test-main { flex: 1; display: flex; flex-direction: column; }
+.test-intro { margin-top: clamp(28px, 4vh, 58px); }
+.test-intro h1 { font-size: clamp(52px, 6.6vw, 110px); }
+.test-intro p { max-width: 1100px; font-size: clamp(19px, 2vw, 33px); line-height: 1.25; }
+.direction-grid {
+  width: min(100%, 720px);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(3, clamp(70px, 10vh, 120px));
+  gap: clamp(10px, 1vw, 18px);
+  margin: clamp(28px, 4vh, 50px) auto;
+}
+.key-cell {
+  display: grid;
+  place-items: center;
+  border: 2px solid #365583;
+  border-radius: 22px;
+  background: rgba(13, 38, 79, .84);
+  color: #e5efff;
+  font-size: clamp(21px, 2.4vw, 38px);
+  font-weight: 600;
+  transition: background .1s, border-color .1s, box-shadow .1s;
+}
+.key-cell.is-active {
+  border-color: #1ed5ff;
+  background: #1266bb;
+  box-shadow: 0 0 30px rgba(0, 190, 255, .55);
+}
+.key-up { grid-column: 2; grid-row: 1; }
+.key-left { grid-column: 1; grid-row: 2; }
+.key-center { grid-column: 2; grid-row: 2; }
+.key-right { grid-column: 3; grid-row: 2; }
+.key-down { grid-column: 2; grid-row: 3; }
+.test-details { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(18px, 2vw, 32px); }
+.metric-panel { min-width: 0; padding: clamp(18px, 2vw, 28px); border: 2px solid #304e7d; border-radius: 24px; background: rgba(6, 24, 55, .76); }
+.metric-panel h2 { margin: 0 0 12px; color: #aebfe8; font-size: clamp(20px, 1.5vw, 27px); font-weight: 500; }
+.last-key { margin: 0; font-size: clamp(30px, 3.2vw, 54px); font-weight: 600; }
+.raw-key, .event-count, .metric-note { color: #b8c9ed; font-size: clamp(16px, 1.3vw, 22px); }
+.raw-key, .event-count { margin: 6px 0; overflow-wrap: anywhere; }
+.special-keys { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.special-keys span { padding: 9px 13px; border: 1px solid #466aa0; border-radius: 12px; color: #dbeaff; font-size: clamp(15px, 1.2vw, 19px); }
+.special-keys .received { border-color: #1ed5ff; background: #125aa2; }
+.metric-value { margin: 7px 0; font-size: clamp(32px, 3.1vw, 52px); font-weight: 600; }
+.metric-value small { font-size: clamp(16px, 1.3vw, 22px); font-weight: 400; color: #b8c9ed; }
+.metric-note { margin: 12px 0 0; }
+.test-screen .footer { margin-top: 28px; }
+@media (max-width: 800px) {
+  .test-intro { margin-top: 36px; }
+  .test-intro h1 { font-size: clamp(45px, 12vw, 72px); }
+  .direction-grid { grid-template-rows: repeat(3, 76px); }
+  .test-details { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { .key-cell { transition: none; } }

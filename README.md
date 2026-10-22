@@ -66,6 +66,10 @@ Use `--host-ip` if the controller LAN address differs from the configured value.
 
 The guarded diagnostic test helpers are in [`tests/`](tests/). They send a TV launch only when given `--approved-launch`; read [`docs/CONJURE_TEST.md`](docs/CONJURE_TEST.md) first.
 
+## Cloudflare Pages
+
+For Git integration, use repository root `.` and publish only `frontend/`. Select no framework preset, set the build command to `exit 0`, and set the build output directory to `frontend`. The root `frontend/index.html` and its relative assets are the production website; the controller, tests, and pairing files are outside the publish directory. See [`docs/CLOUDFLARE_PAGES.md`](docs/CLOUDFLARE_PAGES.md).
+
 ## Automatic power-on launch
 
 The controller polls the authenticated read-only power endpoint every three seconds and launches after it sees an off→on transition. It records the current power as a baseline when enabled, so starting it while the TV is already on does not launch the page. Home, input changes, and opening another app do not create a new power edge.

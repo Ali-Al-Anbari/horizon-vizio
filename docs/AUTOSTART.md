@@ -17,7 +17,7 @@ python3 controller/horizon-controller.py install-agent
 python3 controller/horizon-controller.py remove-agent
 ```
 
-`launch` sends one app ID 17 / namespace 4 request. By default it serves `frontend/` on the controller's LAN address at port 8765. Set `HORIZON_HOST_IP` or pass `--host-ip` if the address differs. For independent HTTPS hosting, set `HORIZON_URL` or pass `--url https://YOUR-PROJECT.pages.dev/horizon.html`.
+`launch` sends one app ID 17 / namespace 4 request. By default it opens the hosted HTTPS page configured in `.env.example`; it does not start a local HTTP server. Set `HORIZON_URL` or pass `--url` to select another hosted address. To use local hosting instead, explicitly pass `--url http://YOUR-CONTROLLER-LAN-IP:8765/horizon.html` and set `HORIZON_HOST_IP` or `--host-ip` to that address.
 
 The watcher is disabled by default. `enable` reads the current power state and records it as a baseline, so enabling while the TV is already on does not launch Horizon. `disable` clears pending work. The watcher reacts only to a reported 0/off→1/on transition. Home, app switching, and input switching do not trigger another launch.
 
@@ -45,4 +45,4 @@ The SmartCast API may become unreachable in Eco standby. The VQD50R-1007 manual 
 
 ## Static HTTPS hosting
 
-`frontend/` is the static deployment root and contains no controller or credentials. Upload its contents to a static HTTPS host such as Cloudflare Pages. The `pages.dev` domain can be used without buying a custom domain. Hosting removes the need for the Mac to serve the page, but it does not remove the need for an always-on private controller for power detection and SmartCast authentication.
+`frontend/` is the static deployment root and contains no controller or credentials. It is hosted at the URL in `.env.example`. Hosting removes the need for the Mac to serve the page, but it does not remove the need for an always-on private controller for power detection and SmartCast authentication.

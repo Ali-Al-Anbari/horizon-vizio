@@ -56,19 +56,21 @@ Requirements: Python 3, a Vizio TV reachable over your local network, and an exi
 
 ## Launch manually
 
-To serve the page from this computer on the TV's LAN and launch it once:
+To launch the hosted page once:
 
 ```sh
 python3 controller/horizon-controller.py launch
 ```
 
-Use `--host-ip` if the controller LAN address differs from the configured value. To use a hosted HTTPS page, pass `--url https://YOUR-PROJECT.pages.dev/horizon.html`. The TV must be able to reach the selected page URL. A Home press exits the Conjure session.
+The default is the public HTTPS URL in `.env.example`, so the controller does not start a local web server. To use another hosted page, pass `--url https://YOUR-HOST/`. For local hosting, explicitly pass `--url http://YOUR-CONTROLLER-LAN-IP:8765/horizon.html` and `--host-ip YOUR-CONTROLLER-LAN-IP`. A Home press exits the Conjure session.
 
 The guarded diagnostic test helpers are in [`tests/`](tests/). They send a TV launch only when given `--approved-launch`; read [`docs/CONJURE_TEST.md`](docs/CONJURE_TEST.md) first.
 
 ## Cloudflare Pages
 
 For Git integration, use repository root `.` and publish only `frontend/`. Select no framework preset, set the build command to `exit 0`, and set the build output directory to `frontend`. The root `frontend/index.html` and its relative assets are the production website; the controller, tests, and pairing files are outside the publish directory. See [`docs/CLOUDFLARE_PAGES.md`](docs/CLOUDFLARE_PAGES.md).
+
+The current Cloudflare Workers production site is [horizon-vizio.ali-al-anbari.workers.dev](https://horizon-vizio.ali-al-anbari.workers.dev/); the controller defaults to that HTTPS root URL. The Pages instructions above are retained for the Git-integrated Pages deployment path.
 
 ## Automatic power-on launch
 

@@ -27,6 +27,7 @@ TV_DEFAULT = os.environ.get("VIZIO_TV_IP", "192.168.1.50")
 PORT = 7345
 NAMESPACE = 4
 APP_ID = "17"
+HOSTED_HORIZON_URL = "https://horizon-vizio.ali-al-anbari.workers.dev/"
 AUTH_DEFAULT = pathlib.Path(os.environ.get(
     "VIZIO_AUTH_FILE", "~/.config/vizio-smartcast/auth.json"
 )).expanduser()
@@ -381,7 +382,8 @@ def add_connection_options(parser):
 
 def add_host_options(parser):
     parser.add_argument("--host-ip", default=os.environ.get("HORIZON_HOST_IP", "192.168.1.20"), help="controller LAN IP reachable by the TV")
-    parser.add_argument("--url", default=os.environ.get("HORIZON_URL"), help="hosted Horizon HTTPS URL; omit to serve the page from this Mac")
+    parser.add_argument("--url", default=os.environ.get("HORIZON_URL") or HOSTED_HORIZON_URL,
+                        help="Horizon page URL (defaults to the public HTTPS site)")
 
 
 def main():

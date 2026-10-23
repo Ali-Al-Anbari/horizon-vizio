@@ -38,3 +38,11 @@ site/
 *.plist
 *.pem
 *.key
+
+# Pico 2 W device-local configuration and trust material
+controller/pico2w/config.py
+controller/pico2w/secrets.py
+controller/pico2w/state.json
+controller/pico2w/state.json.tmp
+controller/pico2w/*.der
+controller/pico2w/*.crt

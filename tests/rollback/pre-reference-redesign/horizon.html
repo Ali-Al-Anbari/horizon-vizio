@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <title>Horizon for Vizio</title>
+    <link rel="stylesheet" href="horizon.css" />
+    <script src="horizon-config.js" defer></script>
+    <script src="horizon-diagnostics.js" defer></script>
+    <script src="horizon.js" defer></script>
+  </head>
+  <body>
+    <main class="home-shell" id="home-screen">
+      <header class="topbar">
+        <div class="brand" aria-label="Horizon">Horizon</div>
+        <div class="topbar-right">
+          <div class="clock" aria-label="Current date and time">
+            <time id="clock-time">--:--</time>
+            <span id="clock-date">---</span>
+          </div>
+          <button class="settings-open" id="settings-open" type="button" aria-label="Open settings" title="Settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.7a3.3 3.3 0 1 0 0 6.6 3.3 3.3 0 0 0 0-6.6Z"/><path d="m19.4 13.5 1.1.9-1.1 1.9-1.4-.5a7.8 7.8 0 0 1-1.5.9l-.2 1.5h-2.2l-.4-1.4a7.8 7.8 0 0 1-1.8 0l-.8 1.2-1.9-1.1.5-1.4a7.8 7.8 0 0 1-.9-1.5l-1.5-.2v-2.2l1.4-.4a7.8 7.8 0 0 1 0-1.8L7.5 8.6l1.1-1.9 1.4.5a7.8 7.8 0 0 1 1.5-.9l.2-1.5h2.2l.4 1.4a7.8 7.8 0 0 1 1.8 0l.8-1.2 1.9 1.1-.5 1.4a7.8 7.8 0 0 1 .9 1.5l1.5.2v2.2l-1.4.4a7.8 7.8 0 0 1 0 1.7Z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <section class="favorites" aria-labelledby="favorites-title">
+        <h1 id="favorites-title">Favorites</h1>
+        <nav id="app-grid" class="app-grid" aria-label="Favorite applications" aria-live="off"></nav>
+      </section>
+
+      <footer class="bottom-bar">
+        <p class="remote-hint"><span class="remote-glyph" aria-hidden="true">✣</span> Navigate <kbd>OK</kbd> Open <kbd>Back</kbd> Return</p>
+        <p class="home-note">Your entertainment, in one place.</p>
+      </footer>
+    </main>
+
+    <section class="settings-screen" id="settings-screen" aria-label="Horizon settings" hidden>
+      <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <header class="settings-header">
+          <div>
+            <h1 id="settings-title">Settings</h1>
+            <p>Make Horizon feel like yours.</p>
+          </div>
+          <button class="settings-close" id="settings-close" type="button" aria-label="Close settings">Done</button>
+        </header>
+        <div class="settings-options" id="settings-options">
+          <button class="setting-row" type="button" data-setting="wallpaper">
+            <span class="setting-icon setting-icon-wallpaper" aria-hidden="true"></span>
+                    <span class="setting-copy"><strong>Wallpaper</strong><small>Choose a quiet backdrop</small></span>
+            <span class="setting-value" data-value="wallpaper"></span><span class="setting-chevron" aria-hidden="true">›</span>
+          </button>
+          <button class="setting-row" type="button" data-setting="accent">
+            <span class="setting-icon setting-icon-accent" aria-hidden="true"></span>
+            <span class="setting-copy"><strong>Accent color</strong><small>Set your focus highlight</small></span>
+            <span class="setting-value" data-value="accent"></span><span class="setting-chevron" aria-hidden="true">›</span>
+          </button>
+          <button class="setting-row" type="button" data-setting="arrangement">
+            <span class="setting-icon setting-icon-layout" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <span class="setting-copy"><strong>Tile arrangement</strong><small>Reorder your favorites</small></span>
+            <span class="setting-value" data-value="arrangement"></span><span class="setting-chevron" aria-hidden="true">›</span>
+          </button>
+        </div>
+        <p class="settings-footnote" id="settings-storage">Changes are saved on this device.</p>
+      </div>
+    </section>
+
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+    <aside id="diagnostics" class="diagnostics" aria-label="Performance diagnostics" hidden>
+      <span><i id="diag-indicator" class="event-indicator" aria-hidden="true"></i> Key <b id="diag-key">—</b></span>
+      <span>Arrived <b id="diag-arrival">—</b></span>
+      <span>Focus <b id="diag-focus">—</b> ms</span>
+      <span>Next frame <b id="diag-frame">—</b> ms</span>
+      <span><b id="diag-fps">—</b> FPS</span>
+      <span>Long <b id="diag-long-frames">0</b></span>
+      <span>Pending <b id="diag-pending">0</b></span>
+      <span id="diag-memory">Heap n/a</span>
+    </aside>
+  </body>
+</html>

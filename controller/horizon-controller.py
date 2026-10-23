@@ -8,6 +8,7 @@ are unknown state, never power-off. Pairing credentials stay on the controller.
 import argparse
 import errno
 import http.server
+import ipaddress
 import json
 import os
 import pathlib
@@ -37,10 +38,42 @@ STATE_DEFAULT = (
     else pathlib.Path.home() / ".config/horizon-controller/state.json"
 )
 ALLOWED_PATHS = {
-    "/horizon.html", "/horizon.css", "/horizon-config.js",
-    "/horizon.js", "/horizon-diagnostics.js",
+    "/", "/index.html", "/horizon.html", "/horizon.css", "/horizon-config.js",
+    "/horizon.js", "/horizon-diagnostics.js", "/wallpaper-manifest.js",
 }
-REQUIRED_ASSETS = set(ALLOWED_PATHS)
+FRONTEND_DIR = pathlib.Path(__file__).resolve().parent.parent / "frontend"
+ALLOWED_PATHS.update("/" + str(path.relative_to(FRONTEND_DIR)) for path in (FRONTEND_DIR / "assets").rglob("*") if path.is_file())
+REQUIRED_ASSETS = {"/horizon.html", "/horizon.css", "/horizon-config.js", "/horizon.js"}
+NATIVE_APPS = {
+    "youtube": {"APP_ID": "1", "NAME_SPACE": 5, "MESSAGE": None},
+    "prime-video": {"APP_ID": "3", "NAME_SPACE": 3, "MESSAGE": None},
+    # Launch with the catalog candidate; this TV reports the active Disney+
+    # receiver as namespace 4 with its Bamgrid URL after the transition.
+    "disney-plus": {"APP_ID": "75", "NAME_SPACE": 2, "MESSAGE": None},
+    "live-tv": {
+        "APP_ID": "3014", "NAME_SPACE": 2,
+        "MESSAGE": "http://127.0.0.1:12345/scfs/sctv/main.html#/watchfreeplus",
+    },
+    "plex": {"APP_ID": "9", "NAME_SPACE": 2, "MESSAGE": None},
+}
+NATIVE_APP_EXPECTED_STATES = {
+    "disney-plus": [{
+        "APP_ID": "75", "NAME_SPACE": 4,
+        "MESSAGE": "https://cd-dmgz.bamgrid.com/bbd/vizio_tv/index.html",
+    }],
+    "live-tv": [{
+        "APP_ID": "3014", "NAME_SPACE": 4,
+        "MESSAGE": "http://127.0.0.1:12345/scfs/sctv/main.html#/watchfreeplus",
+    }],
+    "plex": [{
+        "APP_ID": "9", "NAME_SPACE": 4,
+        "MESSAGE": "https://app.plex.tv/tv-smartcast",
+    }],
+}
+NATIVE_APP_NAMES = {
+    "youtube": "YouTube", "prime-video": "Prime Video", "disney-plus": "Disney+",
+    "live-tv": "Live TV", "plex": "Plex",
+}
 RETRY_SECONDS = (5, 10, 20, 40, 60, 60, 60)
 POLL_SECONDS = 3
 
@@ -96,6 +129,22 @@ def current_app_id(tv, token):
         if isinstance(value, dict) and "APP_ID" in value:
             return str(value["APP_ID"])
     return None
+
+
+def current_app_config(tv, token):
+    response = tv_request(tv, token, "GET", "/app/current")
+    if not status_ok(response):
+        raise RuntimeError("TV rejected the current-app request")
+    value = response.get("ITEM", {}).get("VALUE")
+    if not isinstance(value, dict):
+        raise RuntimeError("TV did not report a current app")
+    return value
+
+
+def app_configs_match(actual, expected):
+    return (str(actual.get("APP_ID")) == expected["APP_ID"]
+            and actual.get("NAME_SPACE") == expected["NAME_SPACE"]
+            and (actual.get("MESSAGE") or "") == (expected["MESSAGE"] or ""))
 
 
 def launch_horizon(tv, token, url):
@@ -159,6 +208,70 @@ class HorizonHandler(http.server.SimpleHTTPRequestHandler):
         if REQUIRED_ASSETS.issubset(self.server.assets_seen):
             self.server.assets_event.set()
 
+    def do_HEAD(self):
+        self.send_error(405)
+
+    def do_POST(self):
+        if urllib.parse.urlsplit(self.path).path != "/api/apps/launch":
+            self.send_error(404)
+            return
+        host = f"{self.server.server_address[0]}:{self.server.server_address[1]}"
+        if (self.client_address[0] != self.server.tv_ip
+                or self.headers.get("Host") != host
+                or self.headers.get("Origin") != f"http://{host}"):
+            self.send_json(403, "unauthorized", "This device is not authorized to launch apps.")
+            return
+        if (self.headers.get_content_type() != "application/json"
+                or self.headers.get("X-Horizon-Action") != "launch-app"):
+            self.send_json(400, "invalid_request", "Invalid launch request.")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 128:
+                raise ValueError("invalid body length")
+            body = json.loads(self.rfile.read(length))
+            if not isinstance(body, dict) or set(body) != {"app"} or not isinstance(body["app"], str):
+                raise ValueError("invalid body")
+        except (ValueError, UnicodeDecodeError):
+            self.send_json(400, "invalid_request", "Invalid launch request.")
+            return
+        app = body["app"]
+        if app not in NATIVE_APPS:
+            self.send_json(404, "unsupported_app", "This app has no verified native launch mapping.")
+            return
+        with self.server.launch_lock:
+            if time.monotonic() < self.server.next_launch_at:
+                self.send_json(429, "duplicate", "A launch was just requested. Please wait.")
+                return
+            self.server.next_launch_at = time.monotonic() + 15
+        try:
+            token = load_auth(self.server.auth_file)
+            result = tv_request(self.server.tv_ip, token, "PUT", "/app/launch",
+                                {"VALUE": NATIVE_APPS[app]}, timeout=5)
+            if not status_ok(result):
+                self.send_json(502, "tv_rejected", "The TV rejected the app launch.")
+                return
+            for attempt in range(20):
+                current = current_app_config(self.server.tv_ip, token)
+                expected_states = NATIVE_APP_EXPECTED_STATES.get(app, [NATIVE_APPS[app]])
+                if any(app_configs_match(current, expected) for expected in expected_states):
+                    self.send_json(200, "launched", f"{NATIVE_APP_NAMES[app]} opened.")
+                    return
+                if attempt < 19:
+                    time.sleep(0.5)
+            self.send_json(409, "unconfirmed", f"The TV accepted the request, but did not confirm {NATIVE_APP_NAMES[app]} opened.")
+        except (OSError, urllib.error.URLError, RuntimeError, KeyError, ValueError):
+            self.send_json(503, "controller_unavailable", "The controller could not reach the TV.")
+
+    def send_json(self, status, code, message):
+        payload = json.dumps({"code": code, "message": message}).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(payload)
+
     def log_message(self, fmt, *args):
         # Avoid noisy request logs in the unattended watcher.
         return
@@ -170,10 +283,17 @@ def needs_local_server(args):
 
 
 def start_local_server(args):
+    address = ipaddress.ip_address(args.host_ip)
+    if address.version != 4 or address.is_unspecified or address.is_multicast or not (address.is_private or address.is_loopback):
+        raise ValueError("Local app bridge must bind to a private LAN address")
     server = http.server.ThreadingHTTPServer(
         (args.host_ip, 8765),
-        lambda *a, **kw: HorizonHandler(*a, directory=pathlib.Path(__file__).resolve().parent.parent / "frontend", **kw),
+        lambda *a, **kw: HorizonHandler(*a, directory=FRONTEND_DIR, **kw),
     )
+    server.tv_ip = args.tv
+    server.auth_file = args.auth_file
+    server.launch_lock = threading.Lock()
+    server.next_launch_at = 0.0
     server.assets_seen = set()
     server.assets_event = threading.Event()
     server.daemon_threads = True
@@ -240,6 +360,20 @@ def run_launch(args, token):
         if server:
             server.shutdown()
             server.server_close()
+
+
+def command_serve(args):
+    server = start_local_server(args)
+    print(f"Horizon local controller serving http://{args.host_ip}:8765/horizon.html")
+    print("Only the configured TV address can request verified app launches.")
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        print("Horizon local controller stopped")
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def maybe_process_pending(args, token, state, mode, dry_run):
@@ -389,10 +523,10 @@ def add_host_options(parser):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name, handler in (("status", command_status), ("enable", command_enable), ("disable", command_disable), ("launch", None), ("watch", command_watch), ("install-agent", command_install_agent), ("remove-agent", command_remove_agent)):
+    for name, handler in (("status", command_status), ("enable", command_enable), ("disable", command_disable), ("launch", None), ("serve", command_serve), ("watch", command_watch), ("install-agent", command_install_agent), ("remove-agent", command_remove_agent)):
         command = sub.add_parser(name)
         add_connection_options(command)
-        if name in ("launch", "watch", "install-agent"):
+        if name in ("launch", "serve", "watch", "install-agent"):
             add_host_options(command)
         if name in ("watch", "install-agent"):
             command.add_argument("--dry-run", action="store_true", help="log detected power-on events without launching")

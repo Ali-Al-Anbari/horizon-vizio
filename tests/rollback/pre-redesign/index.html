@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <title>Horizon — Vizio home</title>
+    <link rel="stylesheet" href="horizon.css" />
+    <script src="horizon-config.js" defer></script>
+    <script src="horizon-diagnostics.js" defer></script>
+    <script src="horizon.js" defer></script>
+  </head>
+  <body>
+    <div class="ambient" aria-hidden="true"></div>
+    <main class="home-shell">
+      <header class="topbar">
+        <div class="brand" aria-label="Horizon"><span class="brand-mark" aria-hidden="true">H</span><span>Horizon</span></div>
+        <div class="session-badge"><span class="status-dot" aria-hidden="true"></span><span>Conjure session</span></div>
+      </header>
+
+      <section class="welcome" aria-labelledby="welcome-title">
+        <p class="eyebrow">YOUR SCREEN, YOUR WAY</p>
+        <h1 id="welcome-title">Good evening.</h1>
+        <p class="welcome-copy">Pick up where you left off.</p>
+      </section>
+
+      <section class="apps-section" aria-labelledby="apps-title">
+        <div class="section-heading">
+          <h2 id="apps-title">Your apps</h2>
+          <span id="app-count" class="section-count"></span>
+        </div>
+        <nav id="app-grid" class="app-grid" aria-label="Applications"></nav>
+      </section>
+
+      <footer class="bottom-bar">
+        <p class="remote-hint"><kbd>←</kbd><kbd>↑</kbd><kbd>↓</kbd><kbd>→</kbd> Navigate <kbd>OK</kbd> Select <kbd>Back</kbd> Return</p>
+        <p class="footer-note">A lightweight home for your TV</p>
+      </footer>
+
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+      <aside id="diagnostics" class="diagnostics" aria-label="Performance diagnostics" hidden>
+        <span><i id="diag-indicator" class="event-indicator" aria-hidden="true"></i> Key <b id="diag-key">—</b></span>
+        <span>Arrived since load <b id="diag-arrival">—</b></span>
+        <span>Focus <b id="diag-focus">—</b> ms</span>
+        <span>Next frame <b id="diag-frame">—</b> ms</span>
+        <span><b id="diag-fps">—</b> FPS</span>
+        <span>Long frames <b id="diag-long-frames">0</b></span>
+        <span>Pending <b id="diag-pending">0</b></span>
+        <span id="diag-memory">Heap n/a</span>
+      </aside>
+    </main>
+  </body>
+</html>

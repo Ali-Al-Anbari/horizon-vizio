@@ -7,10 +7,10 @@ Horizon runs as a web page in Vizio's Conjure runtime through SmartCast app ID *
 ## Features
 
 - 10-foot launcher layout with lightweight D-pad focus movement, visible focus, OK, and Back handling.
-- Configurable app tiles and a reserved browser tile. Streaming app launching and a full browser are not implemented in the page yet.
+- Configurable app tiles and a reserved browser tile. YouTube, Prime Video, Disney+, Live TV/WatchFree+, and Plex launches are verified on the tested TV through the local controller; other app tiles remain unverified, and the browser remains unimplemented.
 - Optional performance diagnostics: key event timing, focus update, next-frame timing, FPS, long frames, pending input work, and memory when the runtime exposes it.
 - Python standard-library controller for manual launch, power-edge detection, and optional macOS LaunchAgent setup.
-- Token stays in the controller's private local auth file. The static page has a restrictive Content Security Policy and cannot connect to SmartCast APIs.
+- Token stays in the controller's private local auth file. The static page has a restrictive Content Security Policy and can contact only its own origin; it cannot contact SmartCast APIs directly.
 
 ### Preview
 
@@ -66,6 +66,12 @@ The default is the public HTTPS URL in `.env.example`, so the controller does no
 
 The guarded diagnostic test helpers are in [`tests/`](tests/). They send a TV launch only when given `--approved-launch`; read [`docs/CONJURE_TEST.md`](docs/CONJURE_TEST.md) first.
 
+## Open native YouTube from Horizon
+
+The tested TV opened native YouTube using authenticated `PUT /app/launch` with namespace `5`, app ID `1`, and a null message. The owner confirmed the visible app and then confirmed that pressing OK on the YouTube tile in locally served Horizon opened native YouTube. Prime Video, Disney+, Live TV/WatchFree+, and Plex are also visually verified and enabled. Disney+, WatchFree+, and Plex launch from namespace-2 catalog configurations; this TV reports their active states in namespace `4`.
+
+The OK-button bridge requires Horizon to be served from the controller on the LAN. Start `serve` on the Mac/Pi and keep it running, then use the existing Conjure `launch` command with `--url http://CONTROLLER_LAN_IP:8765/horizon.html`. On a supported tile, OK sends only its fixed app identifier to the same-origin local controller. The controller applies the allowlisted SmartCast mapping and verifies the current app, including Disney+'s observed namespace change. See [native app integration](docs/SMARTCAST_INTEGRATION.md) for the exact commands, restrictions, and test status.
+
 ## Cloudflare Pages
 
 For Git integration, use repository root `.` and publish only `frontend/`. Select no framework preset, set the build command to `exit 0`, and set the build output directory to `frontend`. The root `frontend/index.html` and its relative assets are the production website; the controller, tests, and pairing files are outside the publish directory. See [`docs/CLOUDFLARE_PAGES.md`](docs/CLOUDFLARE_PAGES.md).
@@ -91,11 +97,11 @@ Horizon has **not** been configured to start at TV boot. The tested automatic be
 
 - Conjure app ID 17 works on the tested firmware but remains an experimental retail-TV launch route. Vizio Home remains the actual system home screen.
 - SmartCast power polling can miss a complete power cycle if the TV API is unreachable in standby. Quick Start behavior varies; Horizon does not change TV settings.
-- The TV page cannot hold the pairing token or call the authenticated API. App tile launch needs a carefully scoped companion-controller feature that is not implemented in the frontend.
+- The TV page cannot hold the pairing token or call the authenticated API. YouTube launch uses a narrowly scoped local companion-controller bridge; the public HTTPS copy of Horizon cannot use this HTTP LAN bridge.
 - The Internet tile is a placeholder, not a browser. Cookies, DRM, text entry, site compatibility, and navigation have not been validated as browser features.
 - A public HTTPS static host can serve the page, but the power watcher and SmartCast credentials still need a private always-on controller.
 
-Roadmap: verify more Vizio models, finish a token-free app-launch bridge, evaluate a browser experience within Conjure's webview limits, and improve startup/controller resilience without changing TV firmware or Vizio Home.
+Roadmap: verify more Vizio models and individual app mappings, evaluate an embedded-device bridge to replace the Mac, evaluate a browser experience within Conjure's webview limits, and improve startup/controller resilience without changing TV firmware or Vizio Home.
 
 ## Troubleshooting
 

@@ -13,7 +13,9 @@ import json
 import os
 import pathlib
 import plistlib
+import re
 import ssl
+import stat
 import sys
 import subprocess
 import threading
@@ -376,6 +378,113 @@ def command_serve(args):
         server.server_close()
 
 
+class NoCloudRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+def load_cloud_secret(path):
+    secret_path = pathlib.Path(path).expanduser()
+    info = secret_path.stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
+        raise RuntimeError("Controller credential file must be private (mode 0600)")
+    secret = secret_path.read_text().strip()
+    if len(secret) < 32:
+        raise RuntimeError("Controller credential is missing or too short")
+    return secret
+
+
+def cloud_origin(url):
+    parts = urllib.parse.urlsplit(url)
+    local = parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1", "::1")
+    if (not (parts.scheme == "https" or local) or not parts.netloc
+            or parts.username or parts.password or parts.path not in ("", "/")
+            or parts.query or parts.fragment):
+        raise ValueError("Cloud URL must be an HTTPS origin (or loopback HTTP for local tests)")
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def cloud_request(origin, credential, path, body=None):
+    payload = json.dumps(body, separators=(",", ":")).encode() if body is not None else b""
+    request = urllib.request.Request(
+        origin + path, data=payload,
+        headers={"Authorization": "Bearer " + credential,
+                 "Content-Type": "application/json", "Cache-Control": "no-store",
+                 "User-Agent": "HorizonController/1.0"},
+        method="POST",
+    )
+    opener = urllib.request.build_opener(NoCloudRedirects())
+    with opener.open(request, timeout=10) as response:
+        return response.status, json.load(response) if response.status != 204 else None
+
+
+def launch_cloud_command(tv, auth_file, app):
+    """Execute one fixed mapping; report only an allowlisted result code to Cloudflare."""
+    if app not in NATIVE_APPS:
+        return "failed", "controller_error"
+    try:
+        token = load_auth(auth_file)
+        response = tv_request(tv, token, "PUT", "/app/launch", {"VALUE": NATIVE_APPS[app]}, timeout=5)
+        if not status_ok(response):
+            return "failed", "tv_rejected"
+        expected = NATIVE_APP_EXPECTED_STATES.get(app, [NATIVE_APPS[app]])
+        for attempt in range(40):
+            current = current_app_config(tv, token)
+            if any(app_configs_match(current, state) for state in expected):
+                return "verified", "app_confirmed"
+            if attempt < 39:
+                time.sleep(0.5)
+        return "failed", "tv_unconfirmed"
+    except (OSError, urllib.error.URLError, RuntimeError, KeyError, ValueError):
+        return "failed", "tv_unavailable"
+
+
+def cloud_poll_once(origin, credential, tv, auth_file):
+    status, command = cloud_request(origin, credential, "/api/controller/claim")
+    if status == 204:
+        return False
+    if status != 200 or not isinstance(command, dict):
+        raise RuntimeError("Cloud queue returned an invalid claim")
+    identifier = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+    if (not isinstance(command.get("id"), str) or not identifier.fullmatch(command["id"])
+            or not isinstance(command.get("claimId"), str) or not identifier.fullmatch(command["claimId"])
+            or command.get("app") not in NATIVE_APPS):
+        raise RuntimeError("Cloud queue returned a command outside the controller allowlist")
+    print(f"Cloud command claimed: {command['app']}")
+    outcome, code = launch_cloud_command(tv, auth_file, command["app"])
+    status, result = cloud_request(origin, credential, "/api/controller/result", {
+        "id": command["id"], "claimId": command["claimId"], "outcome": outcome, "code": code,
+    })
+    if status != 200 or not isinstance(result, dict) or result.get("id") != command["id"] or result.get("state") != outcome:
+        raise RuntimeError("Cloud queue did not accept the app result")
+    elapsed = result.get("elapsedMs")
+    duration = (f"; queue-to-TV-state {elapsed} ms"
+                if isinstance(elapsed, int) and 0 <= elapsed <= 120000 else "")
+    print(f"Cloud launch {command['app']}: {outcome} ({code}){duration}")
+    return True
+
+
+def command_cloud_poll(args):
+    origin = cloud_origin(args.cloud_url)
+    credential = load_cloud_secret(args.cloud_secret_file)
+    if not 1 <= args.poll_seconds <= 30:
+        raise ValueError("Poll interval must be 1 to 30 seconds")
+    print(f"Horizon cloud controller polling {origin} every {args.poll_seconds:g} seconds")
+    try:
+        while True:
+            try:
+                cloud_poll_once(origin, credential, args.tv, args.auth_file)
+            except urllib.error.HTTPError as error:
+                print(f"Cloud poll HTTP {error.code}; check command status", file=sys.stderr)
+            except (OSError, urllib.error.URLError, RuntimeError, ValueError) as error:
+                print(f"Cloud poll error: {type(error).__name__}; check command status", file=sys.stderr)
+            if args.once:
+                return
+            time.sleep(args.poll_seconds)
+    except KeyboardInterrupt:
+        print("Horizon cloud controller stopped")
+
+
 def maybe_process_pending(args, token, state, mode, dry_run):
     pending = state.get("pending")
     if not pending:
@@ -523,9 +632,14 @@ def add_host_options(parser):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name, handler in (("status", command_status), ("enable", command_enable), ("disable", command_disable), ("launch", None), ("serve", command_serve), ("watch", command_watch), ("install-agent", command_install_agent), ("remove-agent", command_remove_agent)):
+    for name, handler in (("status", command_status), ("enable", command_enable), ("disable", command_disable), ("launch", None), ("serve", command_serve), ("cloud-poll", command_cloud_poll), ("watch", command_watch), ("install-agent", command_install_agent), ("remove-agent", command_remove_agent)):
         command = sub.add_parser(name)
         add_connection_options(command)
+        if name == "cloud-poll":
+            command.add_argument("--cloud-url", required=True, help="HTTPS Worker origin")
+            command.add_argument("--cloud-secret-file", required=True, help="private controller credential file")
+            command.add_argument("--poll-seconds", type=float, default=2, help="outbound claim interval (default: 2 seconds)")
+            command.add_argument("--once", action="store_true", help="perform one poll for local testing")
         if name in ("launch", "serve", "watch", "install-agent"):
             add_host_options(command)
         if name in ("watch", "install-agent"):

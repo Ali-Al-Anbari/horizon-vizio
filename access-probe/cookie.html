@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Horizon cookie test</title>
+  <link rel="stylesheet" href="/probe.css">
+  <script src="/cookie-probe.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>Horizon cookie test</h1>
+    <p>This checks first-party cookie and HTTPS request behavior only. The cookie cannot authorize app launches.</p>
+    <p id="status" role="status" aria-live="polite">Checking cookie...</p>
+    <div class="actions">
+      <button id="create" type="button">Create test cookie</button>
+      <button id="check" type="button">Check cookie</button>
+      <button id="reload" type="button">Reload page</button>
+      <button id="clear" type="button">Clear test cookie</button>
+    </div>
+    <p class="hint">The page checks automatically when it opens. After creating a cookie, check it, reload and check again, then leave Conjure and reopen this page for the final check.</p>
+  </main>
+</body>
+</html>

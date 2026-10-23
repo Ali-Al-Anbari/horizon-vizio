@@ -1,0 +1,20 @@
+{
+  // Review-only until the owner approves the integrated staging deployment.
+  // The identical Worker name and Durable Object class reuse paired TV sessions.
+  "name": "horizon-pairing-staging",
+  "main": "./cloud/bridge-worker.js",
+  "compatibility_date": "2026-10-19",
+  "workers_dev": true,
+  "keep_vars": true,
+  "vars": { "PAIRING_ONLY": false, "STAGING_YOUTUBE_ONLY": true },
+  "secrets": { "required": ["TEAM_DOMAIN", "ACCESS_AUD", "OWNER_EMAIL", "CONTROLLER_TOKEN"] },
+  "assets": {
+    "directory": "./frontend",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "LAUNCH_QUEUE", "class_name": "LaunchQueue" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LaunchQueue"] }]
+}

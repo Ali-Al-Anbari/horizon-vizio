@@ -1,0 +1,13 @@
+{
+  // Separate, auth-only staging Worker. Never deploy using the production name.
+  "name": "horizon-access-probe-staging",
+  "main": "./cloud/access-probe-worker.js",
+  "compatibility_date": "2026-10-19",
+  "workers_dev": true,
+  "keep_vars": true,
+  "assets": {
+    "directory": "./access-probe",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  }
+}

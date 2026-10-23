@@ -38,6 +38,9 @@ site/
 *.plist
 *.pem
 *.key
+node_modules/
+.wrangler/
+.dev.vars*
 
 # Pico 2 W device-local configuration and trust material
 controller/pico2w/config.py

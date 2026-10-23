@@ -196,7 +196,7 @@ button:focus { outline: none; }
 .selection-info span { color: rgba(255,255,255,.75); }
 .selection-info span::before { content: "·"; padding-right: .8em; }
 
-.settings-screen, .browser-screen {
+.settings-screen, .browser-screen, .pairing-screen {
   position: fixed;
   z-index: 6;
   inset: 0;
@@ -205,7 +205,7 @@ button:focus { outline: none; }
   padding: 5vw;
   background: rgba(5,8,15,.9);
 }
-.settings-screen::before, .browser-screen::before {
+.settings-screen::before, .browser-screen::before, .pairing-screen::before {
   position: absolute;
   inset: 0;
   background: var(--current-wallpaper, #101723) center top / cover no-repeat;
@@ -213,7 +213,7 @@ button:focus { outline: none; }
   content: "";
   pointer-events: none;
 }
-.settings-panel, .browser-panel {
+.settings-panel, .browser-panel, .pairing-panel {
   position: relative;
   width: min(1000px, 83vw);
   padding: clamp(32px, 3.5vw, 84px);
@@ -257,6 +257,13 @@ button:focus { outline: none; }
 .browser-panel { text-align: center; width: min(760px, 78vw); }
 .browser-symbol { display: block; width: clamp(54px, 6vw, 140px); height: auto; margin: 0 auto; filter: invert(1); }
 .browser-panel p { margin: .8vw 0 2.2vw; }
+.pairing-panel { text-align: center; width: min(830px, 82vw); }
+.pairing-panel h1 { margin: .5em 0 .2em; font-size: clamp(38px, 3.5vw, 90px); font-weight: 500; }
+.pairing-panel p { font-size: clamp(18px, 1.25vw, 34px); color: #d3dce9; line-height: 1.45; overflow-wrap: anywhere; }
+.pairing-panel strong { color: white; }
+.pairing-code { display: block; margin: .5em 0; font: 600 clamp(34px, 4vw, 90px) ui-monospace, monospace; letter-spacing: .13em; }
+.pairing-actions button { padding: .8em 1.3em; margin: .4em; border: 1px solid rgba(255,255,255,.3); border-radius: 100px; background: rgba(255,255,255,.1); font-size: clamp(18px, 1.15vw, 32px); }
+.pairing-actions button.is-focused { box-shadow: 0 0 0 2px var(--accent); background: rgba(255,255,255,.2); }
 .notice { position: fixed; z-index: 8; bottom: 7vh; left: 50%; max-width: 80vw; padding: 1vw 1.6vw; transform: translateX(-50%); border: 1px solid rgba(255,255,255,.25); border-radius: .8vw; background: #151c28; box-shadow: 0 12px 25px rgba(0,0,0,.35); font-size: clamp(17px, 1.2vw, 36px); white-space: nowrap; }
 .diagnostics { position: fixed; top: 10vh; right: 2vw; z-index: 10; max-width: 64vw; display: flex; flex-wrap: wrap; gap: .5vw 1vw; padding: 12px 16px; border: 1px solid #566174; border-radius: 10px; background: rgba(4,7,13,.96); color: #dae4f0; font: clamp(14px, .9vw, 24px) ui-monospace, monospace; }
 .event-indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #758196; }

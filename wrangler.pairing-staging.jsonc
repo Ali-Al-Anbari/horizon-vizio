@@ -1,0 +1,19 @@
+{
+  // Separate Worker name and SQLite-backed Durable Object namespace.
+  // Deploy only after owner approval and after configuring a new Access app.
+  "name": "horizon-pairing-staging",
+  "main": "./cloud/bridge-worker.js",
+  "compatibility_date": "2026-10-19",
+  "workers_dev": true,
+  "keep_vars": true,
+  "vars": { "PAIRING_ONLY": true },
+  "assets": {
+    "directory": "./frontend",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "LAUNCH_QUEUE", "class_name": "LaunchQueue" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LaunchQueue"] }]
+}

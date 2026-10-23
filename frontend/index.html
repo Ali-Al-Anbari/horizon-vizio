@@ -58,6 +58,19 @@
         <button id="browser-close" class="browser-close" type="button">Back to Home</button>
       </div>
     </section>
+    <section class="pairing-screen" id="pairing-screen" aria-label="Pair Horizon TV" hidden>
+      <div class="pairing-panel" role="dialog" aria-modal="true" aria-labelledby="pairing-title">
+        <span class="settings-eyebrow">HORIZON</span>
+        <h1 id="pairing-title">Pair this TV</h1>
+        <p>On your phone or Mac, open <strong id="pairing-url">the owner page</strong> and sign in. Enter this code and approve the TV.</p>
+        <strong class="pairing-code" id="pairing-code" aria-label="Pairing code">—</strong>
+        <p id="pairing-status" role="status" aria-live="polite">Connecting…</p>
+        <div class="pairing-actions">
+          <button id="pairing-retry" type="button">New code</button>
+          <button id="pairing-close" type="button">Back to Horizon</button>
+        </div>
+      </div>
+    </section>
     <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
     <aside id="diagnostics" class="diagnostics" aria-label="Performance diagnostics" hidden>
       <span><i id="diag-indicator" class="event-indicator" aria-hidden="true"></i> Key <b id="diag-key">—</b></span>

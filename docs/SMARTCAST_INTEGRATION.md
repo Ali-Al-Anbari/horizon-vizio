@@ -30,7 +30,7 @@ The Python controller can serve `frontend/` at `http://CONTROLLER_LAN_IP:8765/ho
 
 This source-IP and same-origin protection assumes a trusted home LAN. Plain HTTP on the LAN is not a strong identity mechanism against an adversary on that LAN. Do not forward port 8765, publish this endpoint, or put the TV token in the page. The existing controller uses a certificate-unverified TLS connection to the TV, so a hostile LAN could intercept SmartCast traffic; certificate pinning is a separate controller hardening task.
 
-The Cloudflare-hosted page remains a preview and can show a clear local-controller-required message on YouTube OK. Browser mixed-content and private-network restrictions prevent treating the public HTTPS page as a reliable client of an HTTP LAN bridge. To use the launch button, launch the **local** Horizon URL through the existing Conjure mechanism and keep `serve` running:
+The current Cloudflare-hosted page has no deployed launch API. Browser mixed-content and private-network restrictions prevent it from using the HTTP LAN bridge. The separate [cloud bridge prototype](CLOUD_BRIDGE.md) is local only and still needs Conjure authorization testing. For the verified LAN launch path, launch the **local** Horizon URL through the existing Conjure mechanism and keep `serve` running:
 
 ```sh
 python3 controller/horizon-controller.py serve --tv TV_LAN_IP --auth-file /private/path/auth.json --host-ip CONTROLLER_LAN_IP
@@ -41,6 +41,6 @@ The second command changes the TV screen and requires the owner's approval befor
 
 ## Test status
 
-`tests/native-youtube-launch-test.py` performed the guarded real-TV YouTube check. The owner then approved launching the locally served Horizon page from YouTube and confirmed that pressing OK on its focused YouTube tile with the physical remote opened native YouTube. A subsequent `GET /app/current` confirmed app ID `1`, namespace `5`, and an empty message. Prime Video, Disney+, WatchFree+, and Plex were also visually confirmed. `tests/native-app-bridge-test.py` uses a mock TV to cover success, unauthorized and unsupported requests, offline errors, stale mappings, duplicate suppression, and local asset access. Its five tests pass. Headless Chrome checked the rendered local page, focus retention, unsupported-app notice, offline feedback, and one request after three rapid OK presses.
+`tests/native-youtube-launch-test.py` performed the guarded real-TV YouTube check. The owner then approved launching the locally served Horizon page from YouTube and confirmed that pressing OK on its focused YouTube tile with the physical remote opened native YouTube. A subsequent `GET /app/current` confirmed app ID `1`, namespace `5`, and an empty message. Prime Video, Disney+, WatchFree+, and Plex were also visually confirmed. `tests/native-app-bridge-test.py` uses a mock TV to cover success, unauthorized and unsupported requests, offline errors, stale mappings, duplicate suppression, and local asset access. Its six tests pass. Headless Chrome checked the rendered local page, focus retention, unsupported-app notice, offline feedback, and one request after three rapid OK presses.
 
 The page can be hosted at a static HTTPS address. Hosting does not replace the always-on controller for automatic power-on detection. See [AUTOSTART.md](AUTOSTART.md).

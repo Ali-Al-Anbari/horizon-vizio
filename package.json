@@ -1,0 +1,17 @@
+{
+  "name": "horizon-vizio-cloud-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:cloud": "node --test tests/cloud-bridge.test.js",
+    "dev:cloud": "wrangler dev --local",
+    "test:access-probe": "node --test tests/access-probe*.test.js",
+    "dev:access-probe": "wrangler dev --local --config wrangler.access-probe.jsonc"
+  },
+  "dependencies": {
+    "jose": "6.2.13"
+  },
+  "devDependencies": {
+    "wrangler": "4.151.0"
+  }
+}

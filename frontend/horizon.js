@@ -11,6 +11,12 @@
   const settingsOpen = document.getElementById("settings-open");
   const settingsClose = document.getElementById("settings-close");
   const browserClose = document.getElementById("browser-close");
+  const pairing = document.getElementById("pairing-screen");
+  const pairingCode = document.getElementById("pairing-code");
+  const pairingUrl = document.getElementById("pairing-url");
+  const pairingStatus = document.getElementById("pairing-status");
+  const pairingRetry = document.getElementById("pairing-retry");
+  const pairingClose = document.getElementById("pairing-close");
   const settingRows = [...document.querySelectorAll(".setting-row")];
   const notice = document.getElementById("notice");
   const selectionName = document.getElementById("selection-name");
@@ -26,6 +32,8 @@
     arrangement: [{ value: "original", label: "Original" }, { value: "reverse", label: "Reverse" }, { value: "alphabetical", label: "A–Z" }],
   };
   const localControllerPage = location.protocol === "http:" && location.port === "8765";
+  const cloudControllerPage = location.protocol === "https:"
+    || (location.port === "8787" && ["localhost", "127.0.0.1"].includes(location.hostname));
   let storageAvailable = true;
   let preferences = loadPreferences();
   let tiles = [];
@@ -41,6 +49,10 @@
   let nextWallpaper = null;
   let launchPending = false;
   let launchConfirmed = false;
+  let paired = false;
+  let pairingTimer = 0;
+  let pairingGeneration = 0;
+  let pairingBusy = false;
   const failedWallpapers = new Set();
 
   function loadPreferences() {
@@ -205,36 +217,175 @@
     selectionName.textContent = tile.name;
     selectionStatus.textContent = tile.kind === "browser" ? "Browser coming soon"
       : tile.kind === "settings" ? "Personalize Horizon"
-      : tile.launchState === "supported" ? (localControllerPage ? "Press OK to open" : "Local controller required")
+      : tile.launchState === "supported" ? (localControllerPage ? "Press OK to open"
+        : cloudControllerPage ? (paired ? "Press OK to open" : "Pair this TV to open") : "Controller required")
       : "Native launch unverified";
+  }
+
+  const cloudErrors = {
+    not_authorized: "This TV needs pairing before it can open apps.",
+    rate_limited: "Too many pairing attempts. Try again later.",
+    pairing_busy: "Pairing is busy. Try again in a few minutes.",
+    authorization_unconfigured: "Cloud launch authorization is not configured.",
+    queue_unavailable: "Cloud launch service is unavailable.",
+    controller_unconfigured: "Cloud launch controller is not configured.",
+    unsupported_app: "This native app has not been verified.",
+    staging_app_disabled: "Only YouTube is enabled for this staging test.",
+    busy: "Another app is opening. Please wait.",
+    cooldown: "Please wait before opening another app.",
+    controller_offline: "The home controller did not respond.",
+    controller_timeout: "The home controller did not finish the launch.",
+    tv_rejected: "The TV rejected the app launch.",
+    tv_unconfirmed: "The TV accepted the request but did not confirm the app opened.",
+    tv_unavailable: "The home controller could not reach the TV.",
+    controller_error: "The home controller could not process the request.",
+    result_unavailable: "The launch result is no longer available.",
+  };
+
+  async function cloudJson(path, options) {
+    let response;
+    try { response = await fetch(path, { cache: "no-store", ...options }); }
+    catch (_error) { throw new Error("Cloud sign-in or launch service is unavailable."); }
+    if (response.status === 401 || response.status === 403) throw new Error(cloudErrors.not_authorized);
+    if (!response.headers.get("content-type")?.includes("application/json")) {
+      throw new Error("Cloud sign-in or launch service is unavailable.");
+    }
+    const result = await response.json();
+    if (!response.ok) throw new Error(cloudErrors[result.code] || "Cloud launch failed.");
+    return result;
+  }
+
+  function showPairing() {
+    if (!cloudControllerPage || localControllerPage) return;
+    pairing.hidden = false;
+    focusElement(pairingRetry);
+    if (!pairingBusy && pairingCode.textContent === "—") startPairing();
+  }
+
+  function closePairing() {
+    pairing.hidden = true;
+    focusElement(grid.children[activeIndex]);
+  }
+
+  async function startPairing() {
+    if (pairingBusy || paired) return;
+    pairingBusy = true;
+    const generation = ++pairingGeneration;
+    clearTimeout(pairingTimer);
+    pairingCode.textContent = "—";
+    pairingStatus.textContent = "Creating a short-lived code…";
+    try {
+      const result = await cloudJson("/api/pair/start", {
+        method: "POST", headers: { "X-Horizon-Action": "pair" },
+      });
+      if (generation !== pairingGeneration) return;
+      pairingCode.textContent = result.code;
+      pairingUrl.textContent = result.pairingUrl;
+      pairingStatus.textContent = "Waiting for your approval. This code expires in five minutes.";
+      const poll = async () => {
+        if (generation !== pairingGeneration || paired) return;
+        try {
+          const status = await cloudJson("/api/pair/status", {
+            method: "POST", headers: { "X-Horizon-Action": "pair" },
+          });
+          if (status.state === "paired") {
+            paired = true;
+            pairingCode.textContent = "—";
+            pairingStatus.textContent = "TV paired.";
+            pairing.hidden = true;
+            focusElement(grid.children[activeIndex]);
+            if (tiles[activeIndex]) updateSelection(tiles[activeIndex]);
+            showNotice("This TV is paired and ready.");
+            return;
+          }
+          if (status.state === "rejected" || status.state === "expired" || status.state === "unpaired") {
+            pairingStatus.textContent = status.state === "rejected" ? "Pairing was rejected. Select New code to try again."
+              : "Pairing expired. Select New code to try again.";
+            return;
+          }
+        } catch (_error) { pairingStatus.textContent = "Cannot reach the pairing service. Retrying…"; }
+        pairingTimer = setTimeout(poll, 3000);
+      };
+      pairingTimer = setTimeout(poll, 3000);
+    } catch (error) {
+      pairingStatus.textContent = error.message || "Could not start pairing.";
+    } finally { pairingBusy = false; }
+  }
+
+  async function checkCloudSession() {
+    if (!cloudControllerPage || localControllerPage) return;
+    try {
+      const response = await fetch("/api/pair/session", { cache: "no-store" });
+      const state = response.ok ? await response.json() : null;
+      if (state?.state === "paired") {
+        if (state.rotationDue) await cloudJson("/api/pair/rotate", {
+          method: "POST", headers: { "X-Horizon-Action": "pair" },
+        });
+        paired = true;
+        pairing.hidden = true;
+        if (tiles[activeIndex]) updateSelection(tiles[activeIndex]);
+        return;
+      }
+    } catch (_error) { /* The pairing panel reports connection failure. */ }
+    showPairing();
+  }
+
+  async function launchCloudApp(tile) {
+    const queued = await cloudJson("/api/apps/launch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Horizon-Action": "launch-app" },
+      body: JSON.stringify({ app: tile.controllerAppId }),
+    });
+    if (!queued.id) throw new Error("Cloud launch returned no command ID.");
+    let result = queued;
+    for (let attempt = 0; attempt < 40 && ["queued", "processing"].includes(result.state); attempt++) {
+      selectionStatus.textContent = result.state === "queued" ? "Waiting for controller…" : "Opening…";
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      result = await cloudJson(`/api/apps/commands/${encodeURIComponent(queued.id)}`);
+    }
+    if (result.state !== "verified") {
+      throw new Error(cloudErrors[result.code] || "The app launch could not be confirmed.");
+    }
   }
 
   async function launchNative(tile) {
     if (launchPending || launchConfirmed) return;
-    if (!localControllerPage) {
-      showNotice("Open Horizon from the local controller to launch apps.");
+    if (cloudControllerPage && !localControllerPage && !paired) {
+      showPairing();
+      return;
+    }
+    if (!localControllerPage && !cloudControllerPage) {
+      showNotice("Open Horizon through its controller to launch apps.");
       return;
     }
     launchPending = true;
     selectionStatus.textContent = "Opening…";
     showNotice(`Opening ${tile.name}…`);
     try {
-      const response = await fetch("/api/apps/launch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Horizon-Action": "launch-app" },
-        body: JSON.stringify({ app: tile.controllerAppId }),
-        cache: "no-store",
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.message || "The TV did not open the app.");
+      if (cloudControllerPage && !localControllerPage) {
+        await launchCloudApp(tile);
+      } else {
+        const response = await fetch("/api/apps/launch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Horizon-Action": "launch-app" },
+          body: JSON.stringify({ app: tile.controllerAppId }),
+          cache: "no-store",
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || "The TV did not open the app.");
+      }
       launchConfirmed = true;
       selectionStatus.textContent = "Opened";
     } catch (error) {
       const message = error instanceof TypeError || error instanceof SyntaxError
-        ? "Local controller is offline or unavailable."
+        ? (localControllerPage ? "Local controller is offline or unavailable." : "Cloud launch service is unavailable.")
         : error.message;
       selectionStatus.textContent = message;
       showNotice(message);
+      if (message === cloudErrors.not_authorized) {
+        paired = false;
+        showPairing();
+      }
     } finally {
       launchPending = false;
     }
@@ -396,6 +547,12 @@
   settingsOpen.addEventListener("click", openSettings);
   settingsClose.addEventListener("click", closeSettings);
   browserClose.addEventListener("click", closeBrowser);
+  pairingRetry.addEventListener("focus", () => markFocused(pairingRetry));
+  pairingRetry.addEventListener("blur", () => pairingRetry.classList.remove("is-focused"));
+  pairingClose.addEventListener("focus", () => markFocused(pairingClose));
+  pairingClose.addEventListener("blur", () => pairingClose.classList.remove("is-focused"));
+  pairingRetry.addEventListener("click", startPairing);
+  pairingClose.addEventListener("click", closePairing);
   settingRows.forEach(row => {
     row.addEventListener("focus", () => markFocused(row));
     row.addEventListener("blur", () => row.classList.remove("is-focused"));
@@ -408,7 +565,18 @@
     diagnostics?.received(key, event, receivedAt);
     let focusChanged = false;
 
-    if (!browser.hidden) {
+    if (!pairing.hidden) {
+      if (key === "Back") { event.preventDefault(); closePairing(); focusChanged = true; }
+      else if (key === "OK") {
+        event.preventDefault();
+        if (document.activeElement === pairingClose) closePairing();
+        else startPairing();
+      } else if (key.startsWith("Arrow")) {
+        event.preventDefault();
+        focusElement(document.activeElement === pairingRetry ? pairingClose : pairingRetry);
+        focusChanged = true;
+      }
+    } else if (!browser.hidden) {
       if (key === "Back" || key === "OK") {
         event.preventDefault();
         closeBrowser();
@@ -456,6 +624,7 @@
   applyPreferences();
   if (wallpapers.length) showWallpaper(Math.max(0, wallpapers.findIndex(wallpaper => wallpaper.id === preferences.wallpaper)));
   renderTiles();
+  checkCloudSession();
   updateClock();
   setInterval(updateClock, 60000);
 })();

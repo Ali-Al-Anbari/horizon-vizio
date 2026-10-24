@@ -3,6 +3,7 @@ import { before, test } from "node:test";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { CommandQueue, QUEUED_MS, PROCESSING_MS } from "../cloud/queue.js";
 import { DevicePairing, PAIR_MS, ROTATE_AFTER_MS, SESSION_ABSOLUTE_MS, SESSION_MS } from "../cloud/pairing.js";
+import { lookupWithDiagnostic, startWithDiagnostic } from "../cloud/pairing-diagnostics.js";
 import { handleApi } from "../cloud/api.js";
 
 const ORIGIN = "https://horizon.example";
@@ -94,6 +95,47 @@ async function pair(env) {
   return { owner, pendingId: id, deviceId: devices.devices.at(-1).id,
     ...started, session: cookieFrom(poll, "__Host-horizon_session") };
 }
+
+test("fresh pair/start code is immediately available to the authorized owner", async () => {
+  const { env } = fixture();
+  const started = await start(env);
+  const response = await api(env, "/api/owner/lookup", "POST", await ownerHeaders(), { code: started.code });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(typeof result.id, "string");
+  assert.equal(result.expiresAt > result.createdAt, true);
+});
+
+test("pairing diagnostics preserve start and lookup results and state", () => {
+  const makePairing = () => {
+    const state = new Map();
+    const kv = { get: key => structuredClone(state.get(key)), put: (key, value) => state.set(key, structuredClone(value)) };
+    return { pairing: new DevicePairing(kv, () => 1_000_000, () => "stable-test-id"), state };
+  };
+  const args = ["p".repeat(64), "c".repeat(64), "s".repeat(64), { userAgent: "test" }, null];
+  const plain = makePairing();
+  const observed = makePairing();
+  const logs = [];
+
+  const plainStart = plain.pairing.start(...args);
+  const observedStart = startWithDiagnostic(observed.pairing, args, "test-object", line => logs.push(line));
+  assert.deepEqual(observedStart, plainStart);
+  assert.deepEqual(observed.state, plain.state);
+
+  const plainLookup = plain.pairing.lookup(args[1]);
+  const observedLookup = lookupWithDiagnostic(observed.pairing, args[1], "test-object", line => logs.push(line), () => 1_000_000);
+  assert.deepEqual(observedLookup, plainLookup);
+  assert.deepEqual(observed.state, plain.state);
+  assert.equal(logs.length, 2);
+  assert.ok(logs.every(line => !line.includes(args[0]) && !line.includes(args[1])));
+
+  const throwingLog = () => { throw new Error("diagnostic sink unavailable"); };
+  const noLog = makePairing();
+  assert.deepEqual(startWithDiagnostic(noLog.pairing, args, "test-object", throwingLog), plainStart);
+  assert.deepEqual(lookupWithDiagnostic(noLog.pairing, args[1], "test-object", throwingLog,
+    () => 1_000_000), plainLookup);
+  assert.deepEqual(noLog.state, plain.state);
+});
 
 test("owner approval pairs a TV; controller claims once and reports observed launch", async () => {
   const { env, advance } = fixture();

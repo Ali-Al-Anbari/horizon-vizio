@@ -21,7 +21,12 @@
   const notice = document.getElementById("notice");
   const selectionName = document.getElementById("selection-name");
   const selectionStatus = document.getElementById("selection-status");
-  const diagnostics = window.HorizonDiagnostics?.start();
+  const perfProfile = window.HorizonDiagnostics?.profile() || "baseline";
+  const leanFocus = perfProfile !== "baseline";
+  document.body.dataset.perfProfile = perfProfile;
+  const diagnostics = window.HorizonDiagnostics?.start(perfProfile);
+  const now = () => typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now() : Date.now();
   const wallpapers = window.HORIZON_WALLPAPERS || [];
   const wallpaperLayers = [...document.querySelectorAll(".wallpaper-layer")];
   const wallpaperInterval = 60000;
@@ -75,14 +80,22 @@
     if (focusedElement !== element) {
       focusedElement?.classList.remove("is-focused");
       focusedElement = element;
+      element?.classList.add("is-focused");
+      diagnostics?.focusChanged();
+    } else if (!leanFocus) {
+      element?.classList.add("is-focused");
     }
-    element?.classList.add("is-focused");
+  }
+
+  function blurFocused(element) {
+    if (leanFocus && focusedElement === element) focusedElement = null;
+    element.classList.remove("is-focused");
   }
 
   function focusElement(element) {
     if (!element) return;
-    element.focus({ preventScroll: true });
-    markFocused(element);
+    if (!leanFocus || document.activeElement !== element) element.focus({ preventScroll: true });
+    if (!leanFocus || focusedElement !== element) markFocused(element);
   }
 
   function savePreferences() {
@@ -128,8 +141,9 @@
 
   function loadWallpaper(index, done) {
     const image = new Image();
-    image.onload = () => done(true, image);
-    image.onerror = () => done(false, image);
+    const started = diagnostics ? now() : 0;
+    image.onload = () => { diagnostics?.imageLoaded(now() - started, true); done(true, image); };
+    image.onerror = () => { diagnostics?.imageLoaded(now() - started, false); done(false, image); };
     image.src = wallpapers[index].src;
   }
 
@@ -159,7 +173,7 @@
   }
 
   function showWallpaper(requestedIndex) {
-    if (!wallpapers.length || wallpaperLayers.length !== 2) return;
+    if (perfProfile === "minimal" || !wallpapers.length || wallpaperLayers.length !== 2) return;
     const request = ++wallpaperRequest;
     const tryIndex = (index, attempts) => {
       if (index < 0 || attempts >= wallpapers.length) return;
@@ -172,6 +186,7 @@
           tryIndex(nextAvailableIndex(index), attempts + 1);
           return;
         }
+        const changedAt = diagnostics ? now() : 0;
         clearTimeout(wallpaperCleanupTimer);
         const incoming = wallpaperIndex < 0 ? activeWallpaperLayer : 1 - activeWallpaperLayer;
         const outgoing = activeWallpaperLayer;
@@ -192,6 +207,7 @@
         scheduleWallpaper();
         nextWallpaper = null;
         preloadNextWallpaper();
+        diagnostics?.wallpaperChanged(now() - changedAt);
       };
       if (ready) finish(true, ready);
       else loadWallpaper(index, finish);
@@ -214,12 +230,13 @@
   }
 
   function updateSelection(tile) {
-    selectionName.textContent = tile.name;
-    selectionStatus.textContent = tile.kind === "browser" ? "Browser coming soon"
+    const status = tile.kind === "browser" ? "Browser coming soon"
       : tile.kind === "settings" ? "Personalize Horizon"
       : tile.launchState === "supported" ? (localControllerPage ? "Press OK to open"
         : cloudControllerPage ? (paired ? "Press OK to open" : "Pair this TV to open") : "Controller required")
       : "Native launch unverified";
+    if (!leanFocus || selectionName.textContent !== tile.name) selectionName.textContent = tile.name;
+    if (!leanFocus || selectionStatus.textContent !== status) selectionStatus.textContent = status;
   }
 
   const cloudErrors = {
@@ -331,18 +348,22 @@
   }
 
   async function launchCloudApp(tile) {
+    diagnostics?.launchStage("send");
     const queued = await cloudJson("/api/apps/launch", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Horizon-Action": "launch-app" },
       body: JSON.stringify({ app: tile.controllerAppId }),
     });
     if (!queued.id) throw new Error("Cloud launch returned no command ID.");
+    diagnostics?.launchStage("queued", queued);
     let result = queued;
     for (let attempt = 0; attempt < 40 && ["queued", "processing"].includes(result.state); attempt++) {
       selectionStatus.textContent = result.state === "queued" ? "Waiting for controller…" : "Opening…";
       await new Promise(resolve => setTimeout(resolve, 2000));
       result = await cloudJson(`/api/apps/commands/${encodeURIComponent(queued.id)}`);
+      if (result.state === "processing") diagnostics?.launchStage("processing", result);
     }
+    diagnostics?.launchStage("terminal", result);
     if (result.state !== "verified") {
       throw new Error(cloudErrors[result.code] || "The app launch could not be confirmed.");
     }
@@ -359,12 +380,14 @@
       return;
     }
     launchPending = true;
+    diagnostics?.launchStage("ok", tile.name);
     selectionStatus.textContent = "Opening…";
     showNotice(`Opening ${tile.name}…`);
     try {
       if (cloudControllerPage && !localControllerPage) {
         await launchCloudApp(tile);
       } else {
+        diagnostics?.launchStage("send");
         const response = await fetch("/api/apps/launch", {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Horizon-Action": "launch-app" },
@@ -373,10 +396,12 @@
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.message || "The TV did not open the app.");
+        diagnostics?.launchStage("terminal", { state: "verified" });
       }
       launchConfirmed = true;
       selectionStatus.textContent = "Opened";
     } catch (error) {
+      diagnostics?.launchStage("failed");
       const message = error instanceof TypeError || error instanceof SyntaxError
         ? (localControllerPage ? "Local controller is offline or unavailable." : "Cloud launch service is unavailable.")
         : error.message;
@@ -425,11 +450,13 @@
       const icon = document.createElement("span");
       icon.className = `tile-icon icon-${tile.id}`;
       icon.setAttribute("aria-hidden", "true");
-      const image = document.createElement("img");
-      image.src = `assets/${tile.artwork}`;
-      image.alt = "";
-      image.draggable = false;
-      icon.append(image);
+      if (perfProfile !== "minimal") {
+        const image = document.createElement("img");
+        image.src = `assets/${tile.artwork}`;
+        image.alt = "";
+        image.draggable = false;
+        icon.append(image);
+      }
 
       const name = document.createElement("span");
       name.className = "tile-label";
@@ -440,7 +467,7 @@
         markFocused(button);
         updateSelection(tile);
       });
-      button.addEventListener("blur", () => button.classList.remove("is-focused"));
+      button.addEventListener("blur", () => blurFocused(button));
       button.addEventListener("click", () => activate(tile));
       grid.append(button);
     }
@@ -518,9 +545,13 @@
       next = rowStart + Math.min(current % cols, Math.min(cols, count - rowStart) - 1);
     }
     if (next === current) return false;
+    const beforeFocusScroll = diagnostics ? home.scrollTop : 0;
     focusElement(grid.children[next]);
+    diagnostics?.focusScroll(home.scrollTop - beforeFocusScroll);
     if (Math.floor(next / cols) !== Math.floor(current / cols)) {
+      const started = diagnostics ? now() : 0;
       home.scrollTop = next < cols ? 0 : Math.round(window.innerHeight * .43 * Math.floor(next / cols));
+      diagnostics?.scroll(now() - started);
     }
     return true;
   }
@@ -539,28 +570,28 @@
   }
 
   settingsOpen.addEventListener("focus", () => markFocused(settingsOpen));
-  settingsOpen.addEventListener("blur", () => settingsOpen.classList.remove("is-focused"));
+  settingsOpen.addEventListener("blur", () => blurFocused(settingsOpen));
   settingsClose.addEventListener("focus", () => markFocused(settingsClose));
-  settingsClose.addEventListener("blur", () => settingsClose.classList.remove("is-focused"));
+  settingsClose.addEventListener("blur", () => blurFocused(settingsClose));
   browserClose.addEventListener("focus", () => markFocused(browserClose));
-  browserClose.addEventListener("blur", () => browserClose.classList.remove("is-focused"));
+  browserClose.addEventListener("blur", () => blurFocused(browserClose));
   settingsOpen.addEventListener("click", openSettings);
   settingsClose.addEventListener("click", closeSettings);
   browserClose.addEventListener("click", closeBrowser);
   pairingRetry.addEventListener("focus", () => markFocused(pairingRetry));
-  pairingRetry.addEventListener("blur", () => pairingRetry.classList.remove("is-focused"));
+  pairingRetry.addEventListener("blur", () => blurFocused(pairingRetry));
   pairingClose.addEventListener("focus", () => markFocused(pairingClose));
-  pairingClose.addEventListener("blur", () => pairingClose.classList.remove("is-focused"));
+  pairingClose.addEventListener("blur", () => blurFocused(pairingClose));
   pairingRetry.addEventListener("click", startPairing);
   pairingClose.addEventListener("click", closePairing);
   settingRows.forEach(row => {
     row.addEventListener("focus", () => markFocused(row));
-    row.addEventListener("blur", () => row.classList.remove("is-focused"));
+    row.addEventListener("blur", () => blurFocused(row));
     row.addEventListener("click", () => setPreference(row.dataset.setting));
   });
 
   window.addEventListener("keydown", event => {
-    const receivedAt = performance.now();
+    const receivedAt = now();
     const key = keyName(event);
     diagnostics?.received(key, event, receivedAt);
     let focusChanged = false;

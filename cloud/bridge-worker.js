@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { CommandQueue } from "./queue.js";
 import { DevicePairing } from "./pairing.js";
+import { lookupWithDiagnostic, startWithDiagnostic } from "./pairing-diagnostics.js";
 import { handleApi } from "./api.js";
 
 export class LaunchQueue extends DurableObject {
@@ -8,6 +9,7 @@ export class LaunchQueue extends DurableObject {
     super(ctx, env);
     this.queue = new CommandQueue(ctx.storage.kv);
     this.pairing = new DevicePairing(ctx.storage.kv);
+    this.objectTag = ctx.id.toString().slice(0, 12);
   }
 
   async schedule() {
@@ -44,12 +46,15 @@ export class LaunchQueue extends DurableObject {
   }
 
   async pairStart(pendingHash, codeHash, sourceKey, details, previousHash) {
-    const result = this.pairing.start(pendingHash, codeHash, sourceKey, details, previousHash);
+    const result = startWithDiagnostic(this.pairing,
+      [pendingHash, codeHash, sourceKey, details, previousHash], this.objectTag);
     await this.schedule();
     return result;
   }
 
-  async pairLookup(codeHash) { return this.pairing.lookup(codeHash); }
+  async pairLookup(codeHash) {
+    return lookupWithDiagnostic(this.pairing, codeHash, this.objectTag);
+  }
   async pairDecide(id, codeHash, decision) {
     const result = this.pairing.decide(id, codeHash, decision);
     await this.schedule();

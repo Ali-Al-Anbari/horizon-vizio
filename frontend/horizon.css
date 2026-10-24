@@ -266,8 +266,32 @@ button:focus { outline: none; }
 .pairing-actions button.is-focused { box-shadow: 0 0 0 2px var(--accent); background: rgba(255,255,255,.2); }
 .notice { position: fixed; z-index: 8; bottom: 7vh; left: 50%; max-width: 80vw; padding: 1vw 1.6vw; transform: translateX(-50%); border: 1px solid rgba(255,255,255,.25); border-radius: .8vw; background: #151c28; box-shadow: 0 12px 25px rgba(0,0,0,.35); font-size: clamp(17px, 1.2vw, 36px); white-space: nowrap; }
 .diagnostics { position: fixed; top: 10vh; right: 2vw; z-index: 10; max-width: 64vw; display: flex; flex-wrap: wrap; gap: .5vw 1vw; padding: 12px 16px; border: 1px solid #566174; border-radius: 10px; background: rgba(4,7,13,.96); color: #dae4f0; font: clamp(14px, .9vw, 24px) ui-monospace, monospace; }
+.diagnostics-summary { flex: 1 0 100%; line-height: 1.4; }
 .event-indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #758196; }
 .event-indicator.is-on { background: #75dcf4; }
+/* Preview-only profiles. An ordinary URL keeps the original tile rendering. */
+body[data-perf-profile="optimized"] .tile-icon {
+  transform: scale(1);
+  transition: transform 85ms ease-out;
+}
+body[data-perf-profile="optimized"] .app-tile.is-focused .tile-icon {
+  transform: scale(1.055);
+}
+body[data-perf-profile="optimized"] .app-tile.is-focused .tile-icon::after { content: none; }
+body[data-perf-profile="minimal"] .hero-art { display: none; }
+body[data-perf-profile="minimal"] .dock { background: #161b25; box-shadow: none; }
+body[data-perf-profile="minimal"] .tile-icon {
+  background: #202735 !important;
+  box-shadow: none !important;
+  transform: none !important;
+  transition: none;
+}
+body[data-perf-profile="minimal"] .app-tile.is-focused .tile-icon { border: 3px solid #fff; }
+body[data-perf-profile="minimal"] .app-tile.is-focused .tile-icon::after { content: none; }
+body[data-perf-profile="minimal"] .tile-label {
+  position: absolute; inset: 0; width: auto; height: auto; margin: 0; clip: auto;
+  display: grid; place-items: center; font-size: clamp(14px, 1.3vw, 30px);
+}
 body[data-accent="violet"] { --accent:#d2afff; --accent-rgb:210,175,255; }
 body[data-accent="ice"] { --accent:#a8d8ff; --accent-rgb:168,216,255; }
 @media (max-aspect-ratio: 4/3) {

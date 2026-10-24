@@ -14,7 +14,8 @@
   }
 
   window.addEventListener("keydown", (event) => {
-    const receivedAt = performance.now();
+    const receivedAt = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now() : Date.now();
     const key = keyName(event);
     diagnostics?.received(key, event, receivedAt);
     if (key === "Back" || key === "OK" || key.startsWith("Arrow")) event.preventDefault();

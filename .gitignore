@@ -38,6 +38,7 @@ site/
 *.plist
 *.pem
 *.key
+!controller/pico2w/cloud-root-isrg-x1.pem
 node_modules/
 .wrangler/
 .dev.vars*

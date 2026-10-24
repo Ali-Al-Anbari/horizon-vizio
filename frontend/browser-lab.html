@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src https:; frame-src 'self' https:; connect-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <title>Horizon Browser Lab</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="browser-lab.css" />
+    <script src="browser-lab-core.js" defer></script>
+    <script src="browser-lab-keyboard.js" defer></script>
+    <script src="browser-lab.js" defer></script>
+  </head>
+  <body>
+    <main class="lab-shell">
+      <header class="lab-header">
+        <div><span class="brand">HORIZON</span><span class="lab-tag">BROWSER LAB · PHASE 3</span></div>
+        <button id="back-home" class="home-button" type="button">Back to Horizon</button>
+      </header>
+      <nav class="toolbar" aria-label="Browser lab controls">
+        <button id="nav-back" type="button">← Back</button>
+        <button id="nav-forward" type="button">Forward →</button>
+        <button id="nav-refresh" type="button">Refresh</button>
+        <button id="show-local" type="button">Browser Home</button>
+        <input id="address" type="text" readonly inputmode="none" autocomplete="off" spellcheck="false" placeholder="Search Google or enter an HTTPS address" aria-label="Address or Google search" />
+        <button id="edit-address" type="button">Edit</button>
+        <button id="go-address" type="button">Go</button>
+        <button id="direct-open" type="button">Direct test</button>
+        <button id="focus-frame" type="button">Focus frame</button>
+        <button id="scroll-up" type="button">Scroll ↑</button>
+        <button id="scroll-down" type="button">Scroll ↓</button>
+        <button id="enter-cursor" type="button">Use cursor</button>
+      </nav>
+      <div class="status-row"><span id="loading-indicator" class="loading-indicator" hidden>Loading…</span><p id="lab-status" class="status" role="status" aria-live="polite">Local page ready. Select Edit to type, or Use cursor to test the page.</p></div>
+      <div class="viewer" id="viewer" aria-label="Browser test viewport" tabindex="-1">
+        <article id="local-page" class="local-page">
+          <div class="page-intro">
+            <span class="eyebrow">SAME-ORIGIN CONTROLLED PAGE</span>
+            <h1>Remote interaction test</h1>
+            <p>This page tests interaction we can control inside Conjure. External websites are a separate experiment.</p>
+          </div>
+          <div class="test-grid">
+            <a id="test-link" class="test-control" href="#lower-section">Jump to lower section ↘</a>
+            <button id="test-button" class="test-control" type="button">Press OK on this button <strong id="button-count">0</strong></button>
+            <label class="test-control field-control">Text input <input id="test-input" type="text" placeholder="Select to open TV keyboard" autocomplete="off" /></label>
+            <div class="test-control field-control"><span>Dropdown</span><button id="test-select" class="test-select" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="test-options">Movies ▾</button></div>
+          </div>
+          <div id="test-options" class="test-options" role="listbox" aria-label="Choose a category" hidden>
+            <button id="test-option-movies" type="button" role="option" aria-selected="true">Movies</button>
+            <button id="test-option-series" type="button" role="option" aria-selected="false">Series</button>
+            <button id="test-option-live" type="button" role="option" aria-selected="false">Live TV</button>
+          </div>
+          <div class="video-block">
+            <div><strong>Video playback probe</strong><p>Press OK on the video. Playback, codec, and policy support require TV verification.</p></div>
+            <video id="test-video" controls preload="none" playsinline src="https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4" aria-label="Public test video"></video>
+          </div>
+          <section class="scroll-block" id="lower-section"><h2>Scrolling section</h2><p>Move the cursor to the lower edge or use Scroll in the toolbar. This confirms whether the TV draws a moving viewport smoothly.</p></section>
+          <section class="scroll-block"><h2>More content</h2><p>Remote arrows keep moving the cursor. The page scrolls only when the cursor reaches an edge.</p></section>
+          <section class="scroll-block"><h2>End of test page</h2><p>Press Back or select Toolbar from cursor mode. Select Back to Horizon only when you want to leave the lab.</p></section>
+        </article>
+        <iframe id="external-frame" title="External website experiment" referrerpolicy="no-referrer" sandbox="allow-scripts allow-forms" allow="fullscreen" hidden></iframe>
+        <aside id="embedding-note" class="embedding-note" hidden><strong>Embedded result may be unavailable</strong><p id="embedding-message"></p><p>Use Direct test only if you are ready to leave this toolbar; the Vizio return path is not yet verified.</p></aside>
+        <button id="cursor-toolbar" class="cursor-toolbar" type="button" hidden>↑ Toolbar · Search</button>
+        <span id="remote-cursor" class="remote-cursor" aria-hidden="true" hidden></span>
+      </div>
+      <footer class="lab-footer"><span id="mode-label">Toolbar mode</span><span id="history-label">History 1/1 · Horizon-controlled pages only</span><span>Back exits a mode · Back to Horizon exits the lab</span></footer>
+    </main>
+    <section id="direct-confirm" class="direct-confirm" role="dialog" aria-modal="true" aria-label="Confirm direct website test" hidden>
+      <div class="direct-panel"><h2>Leave the browser lab?</h2><p>Direct navigation gives the website the full Conjure page. Horizon's toolbar and cursor will disappear. The TV's Back behavior is unverified; Home or the iHeartRadio shortcut can return you to Horizon.</p><div class="direct-actions"><button id="direct-cancel" type="button">Cancel</button><button id="direct-continue" type="button">Open website directly</button></div></div>
+    </section>
+    <section id="keyboard-panel" class="keyboard-panel" aria-label="TV keyboard" hidden>
+      <div class="keyboard-head"><strong>TV keyboard</strong><span>Arrows move · OK types · Back closes</span></div>
+      <div id="keyboard-preview" class="keyboard-preview" aria-live="polite"> </div>
+      <div id="keyboard-grid" class="keyboard-grid"></div>
+    </section>
+  </body>
+</html>

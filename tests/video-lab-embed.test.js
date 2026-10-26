@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { createEmbedHarness } from "./video-lab-embed-fake-dom.js";
 
 const html = readFileSync(new URL("../video-lab/embed-lab.html", import.meta.url), "utf8");
 const script = readFileSync(new URL("../video-lab/embed-lab.js", import.meta.url), "utf8");
@@ -10,66 +11,24 @@ const fixtureScript = readFileSync(new URL("../video-lab/embed-fixture.js", impo
 const CANDIDATE_URL = "https://player.vidlove.cc/embed/tv/2190/13/2";
 const ids = ["candidate", "placeholder", "status", "signals", "observation", "fixture-a",
   "fixture-b", "load", "stop", "observed-player", "observed-blocked", "observed-media-error",
-  "back-lab", "horizon"];
+  "matrix", "back-lab", "horizon"];
 
-function setup() {
-  const nodes = new Map();
-  const docEvents = {};
-  const winEvents = {};
-  const timers = new Map();
-  const navigation = [];
-  let nextTimer = 1;
-  const document = {
-    activeElement: null,
-    getElementById(id) { return nodes.get(id); },
-    addEventListener(name, fn) { (docEvents[name] ||= []).push(fn); },
-  };
-  function node(id) {
-    const events = {};
-    return {
-      id, textContent: "", hidden: id === "candidate", events,
-      addEventListener(name, fn) { (events[name] ||= []).push(fn); },
-      dispatch(name, detail = {}) { for (const fn of events[name] || []) fn(detail); },
-      focus() { document.activeElement = this; this.dispatch("focus"); },
-      click() { this.focus(); this.dispatch("click"); },
-    };
-  }
-  for (const id of ids) nodes.set(id, node(id));
-  const location = { replace(path) { navigation.push(path); } };
-  const window = {
-    addEventListener(name, fn) { (winEvents[name] ||= []).push(fn); },
-    setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; },
-    clearTimeout(id) { timers.delete(id); },
-  };
-  runInNewContext(script, { window, document, location });
-  const key = (name, repeat = false) => {
-    const event = { key: name, repeat, prevented: false,
-      preventDefault() { this.prevented = true; }, stopPropagation() {} };
-    for (const fn of docEvents.keydown || []) fn(event);
-    return event;
-  };
-  return { get: id => nodes.get(id), document, navigation, key, timers,
-    fireDocument(name, detail) { for (const fn of docEvents[name] || []) fn(detail); },
-    fireWindow(name) { for (const fn of winEvents[name] || []) fn(); },
-    fireTimer(delay) {
-      const entry = [...timers.entries()].find(([, value]) => value.delay === delay);
-      assert.ok(entry, `expected a ${delay}ms timer`);
-      timers.delete(entry[0]); entry[1].fn();
-    } };
-}
+const setup = () => createEmbedHarness({ html, script, ids });
 
 test("embed page permits only same-origin fixture and one fixed candidate in restrictive iframe", () => {
   assert.match(html, /frame-src 'self' https:\/\/player\.vidlove\.cc/);
   assert.match(html, /sandbox="allow-scripts allow-presentation"/);
   assert.match(html, /referrerpolicy="no-referrer"/);
-  assert.doesNotMatch(html, /allow-popups|allow-top-navigation|allow-same-origin|allow-downloads/);
+  assert.doesNotMatch(html, /allow-popups|allow-top-navigation|allow-same-origin|allow-downloads|allow-modals|allow-forms/);
   assert.doesNotMatch(html, /id="interact"/);
   assert.doesNotMatch(html, /<iframe[^>]*\ssrc=/);
   assert.match(script, /https:\/\/player\.vidlove\.cc\/embed\/tv\/2190\/13\/2/);
   assert.doesNotMatch(script, /contentDocument|contentWindow|postMessage|fetch\(|frame\.focus\(/);
+  assert.doesNotMatch(script, /allow-same-origin|allow-popups|allow-top-navigation/);
   assert.match(fixture, /AUTHORIZED SAME-ORIGIN IFRAME FIXTURE/);
   assert.match(fixtureScript, /Fixture B/);
   assert.doesNotMatch(fixture, /Content-Security-Policy/);
+  assert.match(html, /Concluded: the VidLove candidate failed/);
 });
 
 test("fixture B visibly changes its label and color without external requests", () => {
@@ -87,21 +46,22 @@ test("fixture B visibly changes its label and color without external requests", 
 
 test("remote loads candidate once and Back unloads before returning to Video Lab", () => {
   const app = setup();
-  assert.equal(app.get("candidate").src, undefined);
+  const frame = app.get("candidate");
+  assert.equal(frame.src, undefined);
   assert.equal(app.document.activeElement.id, "fixture-a");
   app.get("load").focus();
   app.key("Enter", true);
-  assert.equal(app.get("candidate").src, undefined);
+  assert.equal(frame.src, undefined);
   assert.equal(app.key("Enter").prevented, true);
-  assert.equal(app.get("candidate").src, CANDIDATE_URL);
-  assert.equal(app.get("candidate").hidden, false);
+  assert.equal(frame.src, CANDIDATE_URL);
+  assert.equal(frame.hidden, false);
   assert.equal(app.timers.size, 2);
   app.get("load").click();
   assert.equal(app.timers.size, 2);
+  assert.deepEqual(frame.navigations, [CANDIDATE_URL]);
   assert.match(app.get("status").textContent, /already loaded/);
   app.key("Backspace");
-  assert.equal(app.get("candidate").src, "about:blank");
-  assert.equal(app.get("candidate").hidden, true);
+  app.assertDiscarded(frame);
   assert.equal(app.timers.size, 0);
   assert.deepEqual(app.navigation, []);
   app.key("Backspace");
@@ -117,11 +77,32 @@ test("same-origin fixture A and B navigate the identical sandboxed frame without
   assert.match(app.get("status").textContent, /Confirm the fixture label is visible/);
   app.get("fixture-b").click();
   assert.equal(app.get("candidate"), frame);
-  assert.equal(frame.src, "embed-fixture.html?view=b");
+  assert.deepEqual(frame.navigations, ["embed-fixture.html?view=a", "embed-fixture.html?view=b"]);
   assert.equal(app.document.activeElement.id, "fixture-b");
   assert.equal(app.timers.size, 2);
   app.get("stop").click();
-  assert.equal(frame.src, "about:blank");
+  app.assertDiscarded(frame);
+});
+
+test("switching to or from the third-party candidate always starts a fresh browsing context", () => {
+  const app = setup();
+  const fixtureFrame = app.get("candidate");
+  app.get("fixture-a").click();
+  app.get("load").click();
+  const candidateFrame = app.get("candidate");
+  assert.equal(fixtureFrame.parentNode, null);
+  assert.deepEqual(candidateFrame.navigations, [CANDIDATE_URL]);
+  assert.equal(candidateFrame.hidden, false);
+  assert.equal(candidateFrame.attributes.sandbox, "allow-scripts allow-presentation");
+  assert.deepEqual(app.delays(), [12000, 30000]);
+  app.get("fixture-b").click();
+  const nextFrame = app.get("candidate");
+  assert.equal(candidateFrame.parentNode, null);
+  assert.deepEqual(nextFrame.navigations, ["embed-fixture.html?view=b"]);
+  assert.deepEqual(app.delays(), [12000, 30000]);
+  // Late events from the discarded candidate frame cannot touch the fixture state.
+  candidateFrame.dispatch("load");
+  assert.doesNotMatch(app.get("status").textContent, /navigation event received/);
 });
 
 test("iframe load event is explicitly inconclusive; manual outcomes are labeled as observations", () => {
@@ -157,15 +138,30 @@ test("timeout, iframe error, and parent CSP violation have distinct bounded diag
 test("unexpected iframe focus returns to parent; a 30-second timer unloads independently of keys", () => {
   const app = setup();
   app.get("load").click();
-  app.get("candidate").dispatch("load");
-  app.get("candidate").focus();
+  const frame = app.get("candidate");
+  frame.dispatch("load");
+  frame.focus();
   assert.equal(app.document.activeElement.id, "load");
   app.fireTimer(30000);
-  assert.equal(app.get("candidate").hidden, true);
+  app.assertDiscarded(frame);
   assert.equal(app.timers.size, 0);
   assert.match(app.get("status").textContent, /auto-unloaded after 30 seconds/);
+  assert.match(app.get("signals").textContent, /30-second safety unload → unloaded\.$/);
   app.get("horizon").click();
   assert.equal(app.navigation.at(-1), "https://horizon-vizio.ali-al-anbari.workers.dev/");
+});
+
+test("window blur with the iframe focused returns remote focus to the parent", () => {
+  const app = setup();
+  app.get("fixture-a").click();
+  app.document.activeElement = app.get("candidate");
+  app.fireWindow("blur");
+  app.fireTimer(0);
+  assert.equal(app.document.activeElement.id, "fixture-a");
+  assert.match(app.get("signals").textContent, /frame took focus; restored/);
+  app.get("stop").click();
+  app.fireWindow("blur");
+  assert.equal(app.timers.size, 0);
 });
 
 test("parent errors are categorized without exposing cross-origin contents", () => {
@@ -176,11 +172,21 @@ test("parent errors are categorized without exposing cross-origin contents", () 
   assert.match(app.get("status").textContent, /playback state remains unknown/);
 });
 
-test("pagehide unloads frame and cancels timer without navigation", () => {
+test("pagehide discards frame and cancels timer without navigation", () => {
   const app = setup();
   app.get("load").click();
+  const frame = app.get("candidate");
   app.fireWindow("pagehide");
-  assert.equal(app.get("candidate").src, "about:blank");
+  app.assertDiscarded(frame);
   assert.equal(app.timers.size, 0);
   assert.deepEqual(app.navigation, []);
+});
+
+test("matrix entry unloads fixture and stays in the isolated Video Lab", () => {
+  const app = setup();
+  app.get("fixture-a").click();
+  const frame = app.get("candidate");
+  app.get("matrix").click();
+  app.assertDiscarded(frame);
+  assert.equal(app.navigation.at(-1), "embed-matrix.html");
 });

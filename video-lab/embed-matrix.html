@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; frame-src https://player.vidlove.cc https://www.youtube.com; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <meta name="color-scheme" content="dark" />
+    <title>Horizon Video Lab · Candidate Sandbox Matrix</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="embed-lab.css" />
+    <script src="embed-matrix.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div><span class="brand">HORIZON VIDEO LAB</span><h1>Candidate sandbox matrix</h1></div>
+        <p>Experiment concluded · VidLove not compatible under Horizon's sandbox · reproduction only</p>
+      </header>
+      <nav aria-label="Sandbox comparison controls">
+        <button id="strict" type="button">VidLove · strict</button>
+        <button id="origin" type="button">VidLove · same-origin</button>
+        <button id="unsandboxed" type="button">VidLove · unsandboxed</button>
+        <button id="youtube" type="button">YouTube official sample · strict</button>
+        <button id="stop" type="button">Stop and unload</button>
+        <button id="observed-player" type="button">Observed player</button>
+        <button id="observed-blank" type="button">Observed blank</button>
+        <button id="observed-media-error" type="button">Observed media error</button>
+        <button id="back-lab" type="button">Back to fixture lab</button>
+        <button id="horizon" type="button">Back to Horizon</button>
+      </nav>
+      <section class="stage" aria-label="Sandboxed cross-origin iframe">
+        <iframe id="candidate" title="Sandboxed cross-origin comparison"
+          sandbox="allow-scripts allow-presentation" allow="autoplay; fullscreen"
+          referrerpolicy="no-referrer" tabindex="-1" hidden></iframe>
+        <p id="placeholder">Choose one mode. Stop and unload before selecting another.</p>
+      </section>
+      <p id="mode">Active mode: none.</p>
+      <p id="status" role="status" aria-live="polite">Ready. No external page has loaded.</p>
+      <p id="timing">Iframe navigation timing: no request.</p>
+      <p id="signals">Parent signals: none.</p>
+      <p id="observation">Visible TV observation: not recorded.</p>
+      <p id="results" class="hint">Recorded on the physical Vizio: VidLove strict — blank. VidLove same-origin — provider error page ("This site broke the player"; embedding configuration disables part of its functionality) plus a small ad or overlay inside the frame. YouTube official sample strict — black. Same-origin fixtures A and B (fixture lab) — rendered.</p>
+      <p class="hint">Strict uses scripts and presentation only. Same-origin also permits the external player to use its own origin and storage. Unsandboxed mode removes the sandbox attribute entirely, allowing popups/navigation from the frame; if Back is trapped, use TV Home to exit and relaunch. Forms mode is deferred: no form dependency has been observed. No mode transfers remote focus into the frame.</p>
+      <p class="hint">Back unloads first, then returns to the fixture lab. Every frame is discarded 30 seconds after it was requested, whether or not it rendered and even if remote input is lost. If that fails on the TV, press TV Home and relaunch this isolated preview using the authenticated TV controller.</p>
+      <p class="hint">A parent load event can occur for a blank or blocked frame. The parent cannot read cross-origin response status, media errors, redirects inside the frame, or playback state. The YouTube sample is an official embed example; under this strict sandbox it showed black on this Vizio, which is not a statement about YouTube's own app.</p>
+    </main>
+  </body>
+</html>

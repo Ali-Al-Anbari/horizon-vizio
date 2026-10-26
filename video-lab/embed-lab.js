@@ -1,15 +1,20 @@
 (function (root) {
   "use strict";
 
+  // Concluded experiment: the VidLove candidate failed on the physical Vizio
+  // (see docs/VIDEO_LAB_EMBED_COMPATIBILITY.md). It stays reachable only inside
+  // this isolated preview for reproduction, under the unchanged strict sandbox.
   var CANDIDATE = "https://player.vidlove.cc/embed/tv/2190/13/2";
   var HORIZON = "https://horizon-vizio.ali-al-anbari.workers.dev/";
+  var STRICT = "allow-scripts allow-presentation";
+  var SAFETY_MS = 30000;
   var SOURCES = {
     fixtureA: "embed-fixture.html?view=a",
     fixtureB: "embed-fixture.html?view=b",
     candidate: CANDIDATE,
   };
   var IDS = ["fixture-a", "fixture-b", "load", "stop", "observed-player", "observed-blocked",
-    "observed-media-error", "back-lab", "horizon"];
+    "observed-media-error", "matrix", "back-lab", "horizon"];
 
   function keyName(event) {
     var key = event && event.key;
@@ -34,6 +39,7 @@
     var parentBlocked = false;
     var navigationTimer = null;
     var safetyTimer = null;
+    var blurTimer = null;
     var disposed = false;
     var signals = [];
 
@@ -51,16 +57,35 @@
     function clearTimers() {
       if (navigationTimer !== null) { clock.clearTimeout(navigationTimer); navigationTimer = null; }
       if (safetyTimer !== null) { clock.clearTimeout(safetyTimer); safetyTimer = null; }
+      if (blurTimer !== null) { clock.clearTimeout(blurTimer); blurTimer = null; }
     }
-    function stop() {
+    // Replace the iframe with a never-navigated clone of the verified markup.
+    // Removing the element destroys its browsing context (document, media,
+    // network, timers, nested ad frames) and its session-history entries, so a
+    // platform-level Back cannot return into the third-party page after unload.
+    function discardFrame() {
+      var parent = frame.parentNode;
+      if (!parent || typeof frame.cloneNode !== "function") {
+        frame.hidden = true;
+        frame.src = "about:blank";
+        return;
+      }
+      var fresh = frame.cloneNode(false);
+      fresh.removeAttribute("src");
+      fresh.setAttribute("sandbox", STRICT);
+      fresh.hidden = true;
+      parent.replaceChild(fresh, frame);
+      frame = fresh;
+      bindFrame(fresh);
+    }
+    function stop(message) {
       clearTimers();
       activeSource = null;
       loadedSignal = false;
-      frame.hidden = true;
-      frame.src = "about:blank";
+      discardFrame();
       get("placeholder").hidden = false;
       note("unloaded");
-      say("Frame unloaded. Back returns to Video Lab.");
+      say(message || "Frame unloaded. Back returns to Video Lab.");
       focus(3);
     }
     function load(sourceName) {
@@ -68,6 +93,10 @@
       if (!SOURCES[sourceName]) return;
       if (activeSource === sourceName) { say("That frame is already loaded. Stop and unload before starting it again."); return; }
       clearTimers();
+      // Fixture A -> B deliberately re-navigates the same frame (the verified
+      // fixture B check). Any switch to or from the third-party candidate starts
+      // from a fresh browsing context so nothing from one source outlives it.
+      if (activeSource && (activeSource === "candidate" || sourceName === "candidate")) discardFrame();
       activeSource = sourceName;
       loadedSignal = false;
       parentBlocked = false;
@@ -86,14 +115,15 @@
           say("No iframe navigation signal after 12 seconds. It may be blocked, unavailable, or slow. Stop unloads it.");
         }
       }, 12000);
+      // Runs from the request time regardless of render state or remote input;
+      // this is why a frame that did render disappears about 30 s after OK.
       safetyTimer = clock.setTimeout(function () {
         safetyTimer = null;
         if (activeSource === sourceName && !disposed) {
-          stop();
           note("30-second safety unload");
-          say("Frame auto-unloaded after 30 seconds. Back returns to Video Lab.");
+          stop("Frame auto-unloaded after 30 seconds. Back returns to Video Lab.");
         }
-      }, 30000);
+      }, SAFETY_MS);
       focus(sourceName === "fixtureA" ? 0 : sourceName === "fixtureB" ? 1 : 2);
     }
     function observe(value) {
@@ -114,8 +144,9 @@
       else if (index === 4) observe("player visible");
       else if (index === 5) observe("blocked or blank frame");
       else if (index === 6) observe("media error shown by player");
-      else if (index === 7) exit("index.html");
-      else if (index === 8) exit(HORIZON);
+      else if (index === 7) exit("embed-matrix.html");
+      else if (index === 8) exit("index.html");
+      else if (index === 9) exit(HORIZON);
     }
     function onKey(event) {
       if (disposed) return;
@@ -133,11 +164,7 @@
       else focus(focused + 1);
     }
 
-    controls.forEach(function (control, index) {
-      control.addEventListener("focus", function () { focused = index; });
-      control.addEventListener("click", function () { activate(index); });
-    });
-    frame.addEventListener("load", function () {
+    function onFrameLoad() {
       if (!activeSource || disposed) return;
       loadedSignal = true;
       if (navigationTimer !== null) { clock.clearTimeout(navigationTimer); navigationTimer = null; }
@@ -145,19 +172,31 @@
       if (!parentBlocked) say(activeSource === "candidate"
         ? "Iframe navigation event received. It does not prove rendering, media support, or playback; check the TV."
         : "Fixture navigation event received. Confirm the fixture label is visible; the event alone does not prove rendering.");
-    });
-    frame.addEventListener("error", function () {
+    }
+    function onFrameError() {
       if (!activeSource || disposed) return;
       if (navigationTimer !== null) { clock.clearTimeout(navigationTimer); navigationTimer = null; }
       note("iframe error event");
       say("Iframe reported a navigation error. The parent cannot inspect the cross-origin response.");
-    });
-    frame.addEventListener("focus", function () {
+    }
+    function onFrameFocus() {
       if (activeSource && !disposed) {
         note("unexpected frame focus");
         focus(focused);
       }
+    }
+    function bindFrame(target) {
+      // Listeners on a discarded frame are ignored even if it fires late.
+      target.addEventListener("load", function () { if (target === frame) onFrameLoad(); });
+      target.addEventListener("error", function () { if (target === frame) onFrameError(); });
+      target.addEventListener("focus", function () { if (target === frame) onFrameFocus(); });
+    }
+
+    controls.forEach(function (control, index) {
+      control.addEventListener("focus", function () { focused = index; });
+      control.addEventListener("click", function () { activate(index); });
     });
+    bindFrame(frame);
     doc.addEventListener("securitypolicyviolation", function (event) {
       if (!activeSource || disposed || !event
         || (event.effectiveDirective !== "frame-src" && event.effectiveDirective !== "child-src")) return;
@@ -176,12 +215,25 @@
       note("parent promise rejection");
       say("Parent page reported a rejected operation. The iframe's playback state remains unknown.");
     });
+    // Second focus guard: the parent window blurs when focus moves into a
+    // child frame. If the iframe became the active element, pull focus back.
+    root.addEventListener("blur", function () {
+      if (!activeSource || disposed || blurTimer !== null) return;
+      blurTimer = clock.setTimeout(function () {
+        blurTimer = null;
+        if (activeSource && !disposed && doc.activeElement === frame) {
+          note("frame took focus; restored");
+          focus(focused);
+        }
+      }, 0);
+    });
     doc.addEventListener("keydown", onKey);
     root.addEventListener("pagehide", function () {
       if (disposed) return;
       clearTimers();
+      activeSource = null;
+      discardFrame();
       disposed = true;
-      frame.src = "about:blank";
     });
     focus(0);
     return { load: load, stop: stop, activate: activate, onKey: onKey };

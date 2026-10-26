@@ -20,6 +20,8 @@ GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_MESSAGE = 512
 LEASE_MS = 8000
 RECONNECT_MS = 3000
+SEEK_COUNTS = (1, 3, 6, 12, 30, 60)
+BATCH_LIFETIME_MS = 90000
 
 
 def _b64(value):
@@ -56,7 +58,7 @@ def _next_frame(buffer):
     if len(buffer) < offset + size:
         return None
     payload = bytes(buffer[offset:offset + size])
-    del buffer[:offset + size]
+    buffer[:offset + size] = b""
     return first & 15, payload
 
 
@@ -78,8 +80,10 @@ class PlayerBridgeClient:
         self.expires = None
         self.heartbeat = None
         self.retry_at = 0
+        self.batch = None
 
     def close_session(self):
+        self.batch = None
         if self.tv is not None:
             self.tv.close("player_session_closed")
         self.tv = None
@@ -217,6 +221,10 @@ class PlayerBridgeClient:
         command_id = value.get("id")
         if not isinstance(command_id, str) or len(command_id) != 36:
             return
+        if self.batch is not None:
+            self.send({"type": "command_ack", "session": self.session, "id": command_id,
+                       "sequence": sequence, "accepted": False, "code": "busy"})
+            return
         deadline = value.get("deadlineAt")
         epoch_offset = 946684800 if time.gmtime(0)[0] == 2000 else 0
         wall_ms = (time.time() + epoch_offset) * 1000
@@ -269,6 +277,116 @@ class PlayerBridgeClient:
                 self.send({"type": "session_ready", "session": self.session, "ready": False})
                 self.close_session()
 
+    def _batch(self, value):
+        if value.get("session") != self.session or self.tv is None:
+            return
+        command = value.get("command")
+        count = value.get("count")
+        sequence = value.get("sequence")
+        command_id = value.get("id")
+        if not isinstance(command_id, str) or len(command_id) != 36:
+            return
+        code = None
+        if self.batch is not None or self.dispatcher.pending:
+            code = "busy"
+        elif (command not in ("seek_forward", "seek_backward")
+              or type(count) is not int or count not in SEEK_COUNTS):
+            code = "invalid"
+        else:
+            deadline = value.get("deadlineAt")
+            epoch_offset = 946684800 if time.gmtime(0)[0] == 2000 else 0
+            wall_ms = (time.time() + epoch_offset) * 1000
+            if (type(deadline) is not int or wall_ms > deadline
+                    or deadline - wall_ms > 5000):
+                code = "expired"
+            elif (type(sequence) is not int or
+                  sequence != self.dispatcher.last_sequence + 1):
+                code = "sequence"
+        if code is not None:
+            self.send({"type": "batch_accepted", "session": self.session, "id": command_id,
+                       "sequence": sequence, "accepted": False, "code": code})
+            return
+        self.dispatcher.last_sequence = sequence
+        now = self.controller.ticks()
+        self.batch = {"id": command_id, "sequence": sequence, "command": command,
+                      "count": count, "ack": 0, "failures": 0, "started": now,
+                      "expires": time.ticks_add(now, BATCH_LIFETIME_MS),
+                      "min": None, "max": 0, "total": 0, "warm": 0, "new": 0}
+        self.send({"type": "batch_accepted", "session": self.session, "id": command_id,
+                   "sequence": sequence, "accepted": True})
+
+    def _batch_done(self, state, code):
+        batch = self.batch
+        if batch is None:
+            return
+        self.batch = None
+        ack = batch["ack"]
+        metrics = {"picoMs": time.ticks_diff(self.controller.ticks(), batch["started"]),
+                   "minMs": batch["min"], "avgMs": batch["total"] // ack if ack else None,
+                   "maxMs": batch["max"], "warm": batch["warm"], "new": batch["new"]}
+        print("Player batch %s: %s %d/%d, %d failures, %d ms, min/avg/max %s/%s/%s ms, warm/new %d/%d, code %s" %
+              (batch["command"], state, ack, batch["count"], batch["failures"],
+               metrics["picoMs"], metrics["minMs"], metrics["avgMs"],
+               metrics["maxMs"], metrics["warm"], metrics["new"], code))
+        self.send({"type": "batch_done", "session": self.session, "id": batch["id"],
+                   "sequence": batch["sequence"], "state": state, "code": code,
+                   "acknowledged": ack, "failures": batch["failures"], "metrics": metrics})
+
+    def _batch_step(self):
+        batch = self.batch
+        if batch is None or self.tv is None:
+            return
+        now = self.controller.ticks()
+        if time.ticks_diff(now, batch["expires"]) >= 0:
+            self._batch_done("failed", "lifetime")
+            return
+        if batch["ack"] >= batch["count"]:
+            self._batch_done("complete", "acknowledged")
+            return
+        timing = {}
+        # This read-only warmup may rotate the TV's eight-request socket.
+        # A failed keypress is never retried, even if delivery is uncertain.
+        try:
+            if (self.tv.wrapped is None or self.tv.last_used is None
+                    or time.ticks_diff(now, self.tv.last_used)
+                    >= self.controller.PLAYER_SESSION_STALE_MS):
+                if not self.tv.prewarm(self.tv_token) or self.tv.wrapped is None:
+                    raise RuntimeError("TV warmup rejected")
+            codeset, code = self.controller.PLAYER_KEYS[batch["command"]]
+            body = {"KEYLIST": [{"CODESET": codeset, "CODE": code, "ACTION": "KEYPRESS"}]}
+            result = self.tv.keypress(self.tv_token, body, timing)
+            status = result.get("STATUS") if isinstance(result, dict) else None
+            if not isinstance(status, dict) or status.get("RESULT") != "SUCCESS":
+                batch["failures"] = 1
+                print("Player batch TV rejection at key %d: STATUS %s; HTTP %s" %
+                      (batch["ack"] + 1, status, timing.get("http_status", "?")))
+                self._batch_done("failed", "tv_rejected")
+                return
+        except (OSError, ValueError, RuntimeError) as error:
+            batch["failures"] = 1
+            print("Player batch uncertain key %d: %s %s; phase %s; HTTP %s; socket %s" %
+                  (batch["ack"] + 1, type(error).__name__, str(error),
+                   timing.get("failed_phase", timing.get("phase", "warmup")),
+                   timing.get("http_status", "?"), timing.get("connection", "?")))
+            self._batch_done("unknown", "transport_" + type(error).__name__)
+            return
+        latency = timing.get("request_ms")
+        if type(latency) is int:
+            batch["min"] = latency if batch["min"] is None else min(batch["min"], latency)
+            batch["max"] = max(batch["max"], latency)
+            batch["total"] += latency
+        if timing.get("connection") == "warm":
+            batch["warm"] += 1
+        else:
+            batch["new"] += 1
+        batch["ack"] += 1
+        self.heartbeat = time.ticks_add(self.controller.ticks(),
+                                        self.controller.PLAYER_SESSION_HEARTBEAT_MS)
+        self.send({"type": "batch_progress", "session": self.session, "id": batch["id"],
+                   "sequence": batch["sequence"], "acknowledged": batch["ack"]})
+        if batch["ack"] == batch["count"]:
+            self._batch_done("complete", "acknowledged")
+
     def _message(self, payload):
         try:
             value = json.loads(payload.decode())
@@ -285,6 +403,11 @@ class PlayerBridgeClient:
             self.close_session()
         elif kind == "player_command":
             self._command(value)
+        elif kind == "player_batch":
+            self._batch(value)
+        elif kind == "player_batch_cancel" and self.batch is not None:
+            if value.get("session") == self.session and value.get("id") == self.batch["id"]:
+                self._batch_done("cancelled", "user_cancelled")
 
     def step(self):
         now = self.controller.ticks()
@@ -341,6 +464,8 @@ class PlayerBridgeClient:
                                                     self.controller.PLAYER_SESSION_HEARTBEAT_MS)
                 except (OSError, ValueError, RuntimeError):
                     self.close_session()
+            if self.batch is not None:
+                self._batch_step()
         except (OSError, ValueError, RuntimeError, TypeError, AttributeError, MemoryError) as error:
             print("Player bridge reconnect:", type(error).__name__)
             import sys

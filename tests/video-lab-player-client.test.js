@@ -97,3 +97,32 @@ test("command intent uses bridge time when TV wall clock differs", async () => {
   assert.ok(Math.abs(command.issuedAt - (Date.now() + offset)) < 1000);
   await f.adapter.close();
 });
+
+test("one seek batch POST carries count and uses separate status and cancellation routes", async () => {
+  const f = fixture(async path => ({ data: path.endsWith("/status") ? { state: "ready" }
+    : path.endsWith("/batch") ? { accepted: true, id: "batch-id", count: 30 }
+      : path.includes("/batch/status") ? { state: "running", acknowledged: 8 }
+        : { state: "cancelling" } }));
+  await f.adapter.open();
+  const result = await f.adapter.sendBatch("seek_forward", 30);
+  assert.equal(result.count, 30);
+  const commands = f.calls.filter(call => call.path.endsWith("/batch"));
+  assert.equal(commands.length, 1);
+  assert.equal(JSON.parse(commands[0].options.body).count, 30);
+  assert.equal(JSON.parse(commands[0].options.body).sequence, 1);
+  assert.equal((await f.adapter.batchStatus("batch-id")).acknowledged, 8);
+  await f.adapter.cancelBatch("batch-id");
+  assert.equal(f.calls.filter(call => call.path.endsWith("/batch/cancel")).length, 1);
+  await f.adapter.close();
+});
+
+test("uncertain batch acceptance is never resubmitted", async () => {
+  const f = fixture(async path => path.endsWith("/batch")
+    ? { ok: false, data: { error: "outcome_unknown" } }
+    : { data: path.endsWith("/status") ? { state: "ready" } : {} });
+  await f.adapter.open();
+  await assert.rejects(f.adapter.sendBatch("seek_forward", 60), /outcome_unknown/);
+  await flush();
+  assert.equal(f.calls.filter(call => call.path.endsWith("/batch")).length, 1);
+  assert.equal(f.calls.some(call => call.path.endsWith("/close")), true);
+});

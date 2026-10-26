@@ -120,10 +120,35 @@
         throw error;
       });
     }
+    function sendBatch(command, count) {
+      if (!visible || !openPromise) return Promise.reject(new Error("session_closed"));
+      return openPromise.then(function () {
+        if (!visible) throw new Error("session_closed");
+        var next = ++sequence;
+        return request("batch", { id: newId(), sequence: next, command: command,
+          count: count, issuedAt: Math.round(Date.now() + serverOffset) });
+      }).then(function (result) {
+        if (result.accepted !== true) throw new Error("batch_rejected");
+        return result;
+      }).catch(function (error) {
+        // A missing HTTP reply can follow accepted delivery. Never resubmit.
+        close();
+        throw error;
+      });
+    }
+    function batchStatus(id) {
+      if (!visible) return Promise.reject(new Error("session_closed"));
+      return request("batch/status?id=" + encodeURIComponent(id));
+    }
+    function cancelBatch(id) {
+      if (!visible) return Promise.reject(new Error("session_closed"));
+      return request("batch/cancel", { id: id });
+    }
     return { open: open, ready: function () {
       return visible ? openPromise : Promise.reject(new Error("session_closed"));
     },
-      send: send, close: close, dispose: close };
+      send: send, sendBatch: sendBatch, batchStatus: batchStatus,
+      cancelBatch: cancelBatch, close: close, dispose: close };
   }
   root.HorizonPlayerBridge = { create: create };
 })(typeof window !== "undefined" ? window : globalThis);

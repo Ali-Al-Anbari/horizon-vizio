@@ -18,6 +18,12 @@ connection. [MicroPython v1.29 `ssl` documentation](https://docs.micropython.org
 
 ### Isolated player-key engine (supervised only)
 
+For the separate, two-forward-key `KEYLIST` feasibility test and exact manual
+REPL steps, see [the Video Lab KEYLIST experiment](../../docs/VIDEO_LAB_KEYLIST_EXPERIMENT.md).
+The experiment does not change the player bridge or unattended command path.
+For the new Pico-local sequential 2/3/6/12/30/60-key trials and preview
+batch protocol, see [progressive seek validation](../../docs/VIDEO_LAB_PROGRESSIVE_SEEK.md).
+
 `main.py` exposes `supervised_player_command("pause_toggle")`,
 `supervised_player_command("seek_backward")`, and
 `supervised_player_command("seek_forward")` for an explicit Thonny REPL test.
@@ -26,8 +32,8 @@ not called by boot, the cloud queue, or the unattended loop. Stop the running
 controller in Thonny before testing, and make sure YapGrid has focus on the TV.
 Each call reports a local monotonic receipt tick, connection/TLS/request
 durations, and API acceptance. Acceptance does not prove YapGrid acted. The
-bounded `PlayerCommandDispatcher` is a future transport seam; no browser-to-Pico
-transport or automatic key delivery exists yet. Copy only the updated `main.py`
+bounded `PlayerCommandDispatcher` also gates the preview player transport.
+Copy only the updated `main.py`
 to `/main.py` for this test; keep private config and secrets unchanged.
 
 For a same-session cold/warm comparison, keep YapGrid focused and explicitly

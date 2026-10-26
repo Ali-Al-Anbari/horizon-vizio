@@ -4,6 +4,8 @@ const COMMANDS = new Set(["pause_toggle", "seek_backward", "seek_forward"]);
 const LEASE_MS = 8000;
 const ACK_MS = 2200;
 const MAX_QUEUE = 8;
+const SEEK_COUNTS = new Set([1, 3, 6, 12, 30, 60]);
+const BATCH_MAX_MS = 90000; // finite operation lifetime, not a key-count limit
 
 export class PlayerBridge extends DurableObject {
   constructor(ctx, env) {
@@ -12,6 +14,8 @@ export class PlayerBridge extends DurableObject {
     this.session = null;
     this.pending = [];
     this.active = null;
+    this.seekBatch = null;
+    this.batchAcceptance = null;
     this.lastIds = new Map();
     this.leaseTimer = null;
     const sockets = ctx.getWebSockets?.() || [];
@@ -31,6 +35,7 @@ export class PlayerBridge extends DurableObject {
         // metadata is restored; commands themselves are never replayed.
         this.controller = socket;
         this.session = saved.session;
+        this.seekBatch = saved.seekBatch || null;
         this.armLease();
       } else {
         socket.close(1012, "reconnect required");
@@ -42,7 +47,7 @@ export class PlayerBridge extends DurableObject {
 
   persistSession() {
     this.controller?.serializeAttachment?.(this.session
-      ? { kind: "player", session: this.session } : { kind: "idle" });
+      ? { kind: "player", session: this.session, seekBatch: this.seekBatch } : { kind: "idle" });
   }
 
   async fetch(request) {
@@ -77,6 +82,7 @@ export class PlayerBridge extends DurableObject {
     const id = crypto.randomUUID();
     this.session = { id, owner, expires: Date.now() + LEASE_MS, ready: false, sequence: 0 };
     this.lastIds.clear();
+    this.seekBatch = null;
     this.persistSession();
     this.armLease();
     if (!this.send({ type: "player_session_open", session: id })) {
@@ -112,6 +118,84 @@ export class PlayerBridge extends DurableObject {
       serverNow: Date.now() };
   }
 
+  async batchStatus(owner, id) {
+    const session = this.live();
+    if (!session || session.owner !== owner) return { error: "no_session" };
+    const batch = this.seekBatch;
+    if (!batch || batch.id !== id) return { error: "unknown_batch" };
+    if (batch.state === "running" || batch.state === "cancelling" || batch.state === "sent") {
+      if (Date.now() >= batch.expiresAt) this.failBatch("outcome_unknown");
+    }
+    return this.batchView();
+  }
+
+  batchView() {
+    const batch = this.seekBatch;
+    return { id: batch.id, state: batch.state, count: batch.count,
+      acknowledged: batch.acknowledged, failures: batch.failures,
+      code: batch.code || null, metrics: batch.metrics || null };
+  }
+
+  failBatch(code) {
+    if (!this.seekBatch || ["complete", "cancelled", "failed", "unknown"].includes(this.seekBatch.state)) return;
+    this.seekBatch.state = "unknown";
+    this.seekBatch.code = code;
+    this.persistSession();
+    if (this.batchAcceptance) {
+      clearTimeout(this.batchAcceptance.timer);
+      this.batchAcceptance.resolve({ error: code });
+      this.batchAcceptance = null;
+    }
+    // The Pico stops its batch when this authenticated socket disappears.
+    this.disconnect();
+  }
+
+  async batch(owner, id, sequence, command, count, issuedAt) {
+    const session = this.live();
+    if (!session || session.owner !== owner) return { error: "no_session" };
+    if (!this.controller || !session.ready) return { error: "controller_offline" };
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id || "")
+        || (command !== "seek_forward" && command !== "seek_backward")
+        || !SEEK_COUNTS.has(count) || !Number.isSafeInteger(sequence) || sequence < 1) return { error: "invalid_batch" };
+    if (!Number.isSafeInteger(issuedAt) || Date.now() - issuedAt > 1000
+        || issuedAt - Date.now() > 2000) return { error: "expired_intent" };
+    if (this.lastIds.size >= 256) return { error: "session_limit" };
+    if (this.lastIds.has(id)) return { error: "duplicate" };
+    if (sequence !== session.sequence + 1) return { error: "sequence_gap" };
+    if (this.active || this.pending.length || this.batchAcceptance
+        || (this.seekBatch && ["sent", "running", "cancelling"].includes(this.seekBatch.state))) return { error: "busy" };
+    session.sequence = sequence;
+    this.lastIds.set(id, true);
+    const deadlineAt = Math.min(issuedAt + 2500, Date.now() + 1200);
+    const serverQueuedAt = Date.now();
+    this.seekBatch = { id, sequence, command, count, queuedAt: serverQueuedAt,
+      state: "sent", acknowledged: 0,
+      failures: 0, expiresAt: Date.now() + BATCH_MAX_MS };
+    this.persistSession();
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        if (this.batchAcceptance?.id === id) this.failBatch("outcome_unknown");
+      }, ACK_MS);
+      this.batchAcceptance = { id, resolve, timer };
+      if (!this.send({ type: "player_batch", session: session.id, id, sequence,
+        command, count, deadlineAt })) this.failBatch("controller_offline");
+    });
+  }
+
+  async cancelBatch(owner, id) {
+    const session = this.live();
+    if (!session || session.owner !== owner) return { error: "no_session" };
+    const batch = this.seekBatch;
+    if (!batch || batch.id !== id) return { error: "unknown_batch" };
+    if (["complete", "cancelled", "failed", "unknown"].includes(batch.state)) return this.batchView();
+    batch.state = "cancelling";
+    this.persistSession();
+    if (!this.send({ type: "player_batch_cancel", session: session.id, id })) {
+      return { error: "outcome_unknown" };
+    }
+    return this.batchView();
+  }
+
   async command(owner, id, sequence, command, issuedAt) {
     const session = this.live();
     if (!session || session.owner !== owner) return { error: "no_session" };
@@ -123,6 +207,7 @@ export class PlayerBridge extends DurableObject {
     if (this.lastIds.size >= 256) return { error: "session_limit" };
     if (this.lastIds.has(id)) return { error: "duplicate" };
     if (sequence !== session.sequence + 1) return { error: "sequence_gap" };
+    if (this.seekBatch && ["sent", "running", "cancelling"].includes(this.seekBatch.state)) return { error: "busy" };
     if (this.pending.length + (this.active ? 1 : 0) >= MAX_QUEUE) return { error: "queue_full" };
     session.sequence = sequence;
     this.lastIds.set(id, true);
@@ -162,6 +247,15 @@ export class PlayerBridge extends DurableObject {
 
   end(reason) {
     const session = this.session;
+    if (this.batchAcceptance) {
+      clearTimeout(this.batchAcceptance.timer);
+      this.batchAcceptance.resolve({ error: "outcome_unknown" });
+      this.batchAcceptance = null;
+    }
+    if (this.seekBatch && ["sent", "running", "cancelling"].includes(this.seekBatch.state)) {
+      this.seekBatch.state = "unknown";
+      this.seekBatch.code = reason;
+    }
     this.session = null;
     this.persistSession();
     if (this.leaseTimer) { clearTimeout(this.leaseTimer); this.leaseTimer = null; }
@@ -216,6 +310,40 @@ export class PlayerBridge extends DurableObject {
       this.active = null;
       item.resolve({ accepted: value.accepted === true, code: value.code === "accepted" ? "accepted" : "rejected" });
       this.pump();
+    } else if (this.seekBatch && value.id === this.seekBatch.id
+        && value.sequence === this.seekBatch.sequence) {
+      const batch = this.seekBatch;
+      if (value.type === "batch_accepted" && this.batchAcceptance?.id === batch.id) {
+        clearTimeout(this.batchAcceptance.timer);
+        const resolve = this.batchAcceptance.resolve;
+        this.batchAcceptance = null;
+        if (value.accepted === true) {
+          batch.state = "running";
+          this.persistSession();
+          resolve({ accepted: true, id: batch.id, count: batch.count,
+            serverQueuedAt: batch.queuedAt, serverAcceptedAt: Date.now() });
+        } else {
+          batch.state = "failed";
+          batch.code = value.code || "rejected";
+          this.persistSession();
+          resolve({ error: batch.code });
+        }
+      } else if (value.type === "batch_progress" && ["running", "cancelling"].includes(batch.state)
+          && Number.isInteger(value.acknowledged) && value.acknowledged >= batch.acknowledged
+          && value.acknowledged <= batch.count) {
+        batch.acknowledged = value.acknowledged;
+        this.persistSession();
+      } else if (value.type === "batch_done" && ["running", "cancelling"].includes(batch.state)
+          && Number.isInteger(value.acknowledged) && value.acknowledged >= batch.acknowledged
+          && value.acknowledged <= batch.count
+          && ["complete", "cancelled", "failed", "unknown"].includes(value.state)) {
+        batch.acknowledged = value.acknowledged;
+        batch.failures = value.failures === 1 ? 1 : 0;
+        batch.state = value.state;
+        batch.code = typeof value.code === "string" ? value.code.slice(0, 48) : null;
+        batch.metrics = value.metrics && typeof value.metrics === "object" ? value.metrics : null;
+        this.persistSession();
+      }
     }
   }
 

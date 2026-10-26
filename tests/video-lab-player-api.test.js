@@ -23,6 +23,12 @@ function fixture() {
     async command(owner, id, sequence, command, issuedAt) {
       calls.push(["command", owner, id, sequence, command, issuedAt]); return { accepted: true };
     },
+    async batch(owner, id, sequence, command, count, issuedAt) {
+      calls.push(["batch", owner, id, sequence, command, count, issuedAt]);
+      return { accepted: true, id, count };
+    },
+    async batchStatus(owner, id) { calls.push(["batchStatus", owner, id]); return { state: "running" }; },
+    async cancelBatch(owner, id) { calls.push(["cancelBatch", owner, id]); return { state: "cancelling" }; },
     async fetch() { calls.push(["connect"]); return new Response("connected"); },
   };
   const env = {
@@ -59,6 +65,32 @@ test("player writes require paired cookie, same origin, action header and allowl
     headers: { ...headers, "Content-Length": "0" }, body: "x".repeat(300) });
   assert.equal((await context.playerApi(oversized, f.env)).status, 400);
   assert.equal(f.calls.length, before);
+});
+
+test("batch routes require pairing and exact allowlisted seek shape", async () => {
+  const f = fixture();
+  const headers = { Cookie: COOKIE, Origin: ORIGIN, "X-Horizon-Action": "player",
+    "Content-Type": "application/json" };
+  const id = "11111111-1111-4111-8111-111111111111";
+  for (const count of [1, 3, 6, 12, 30, 60]) {
+    const result = await context.playerApi(post("/api/player/batch", headers,
+      { id, sequence: 1, command: "seek_forward", count, issuedAt: Date.now() }), f.env);
+    assert.equal(result.status, 200);
+    assert.equal(f.calls.at(-1)[5], count);
+  }
+  const before = f.calls.length;
+  for (const invalid of [2, 0, 61, true, "3"]) {
+    assert.equal((await context.playerApi(post("/api/player/batch", headers,
+      { id, sequence: 1, command: "seek_forward", count: invalid, issuedAt: Date.now() }), f.env)).status, 400);
+  }
+  assert.equal((await context.playerApi(post("/api/player/batch", headers,
+    { id, sequence: 1, command: "pause_toggle", count: 3, issuedAt: Date.now() }), f.env)).status, 400);
+  assert.equal(f.calls.length, before);
+  assert.equal((await context.playerApi(post("/api/player/batch/cancel", {}, { id }), f.env)).status, 403);
+  assert.equal((await context.playerApi(post("/api/player/batch/cancel", headers, { id }), f.env)).status, 200);
+  const status = new Request(ORIGIN + "/api/player/batch/status?id=" + id, { headers: { Cookie: COOKIE } });
+  assert.equal((await context.playerApi(status, f.env)).status, 200);
+  assert.equal(f.calls.at(-1)[0], "batchStatus");
 });
 
 test("Pico socket upgrade requires controller bearer, not browser cookie or Origin", async () => {

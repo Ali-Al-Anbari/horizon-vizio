@@ -137,3 +137,99 @@ test("hibernation restores settled session metadata without replaying commands",
     assert.equal(socket.attachment.kind, "idle");
   } finally { restored.disconnect(); }
 });
+
+test("one authenticated batch instruction carries each allowed count and reports progress", async () => {
+  const f = fixture();
+  try {
+    await f.bridge.open("owner-a");
+    const session = f.sent[0].session;
+    await f.bridge.webSocketMessage(f.socket, JSON.stringify({ type: "session_ready", session, ready: true }));
+    let sequence = 0;
+    for (const count of [1, 3, 6, 12, 30, 60]) {
+      sequence += 1;
+      const id = `${String(sequence).repeat(8)}-${String(sequence).repeat(4)}-4${String(sequence).repeat(3)}-8${String(sequence).repeat(3)}-${String(sequence).repeat(12)}`;
+      const pending = f.bridge.batch("owner-a", id, sequence, "seek_forward", count, Date.now());
+      assert.equal(f.sent.at(-1).type, "player_batch");
+      assert.equal(f.sent.at(-1).count, count);
+      assert.equal(f.sent.filter(v => v.type === "player_batch" && v.id === id).length, 1);
+      assert.equal((await f.bridge.batch("owner-a", id, sequence, "seek_forward", count, Date.now())).error, "duplicate");
+      await f.bridge.webSocketMessage(f.socket, JSON.stringify({ type: "batch_accepted", session,
+        id, sequence, accepted: true }));
+      const acceptance = await pending;
+      assert.equal(acceptance.accepted, true);
+      assert.ok(acceptance.serverAcceptedAt >= acceptance.serverQueuedAt);
+      assert.equal((await f.bridge.batchStatus("owner-a", id)).state, "running");
+      await f.bridge.webSocketMessage(f.socket, JSON.stringify({ type: "batch_progress", session,
+        id, sequence, acknowledged: count }));
+      assert.equal((await f.bridge.batchStatus("owner-a", id)).acknowledged, count);
+      await f.bridge.webSocketMessage(f.socket, JSON.stringify({ type: "batch_done", session,
+        id, sequence, state: "complete", acknowledged: count, failures: 0,
+        metrics: { picoMs: 100 } }));
+      assert.equal((await f.bridge.batchStatus("owner-a", id)).state, "complete");
+    }
+  } finally { f.dispose(); }
+});
+
+test("batch rejects invalid, stale, overlapping and other-owner requests; cancellation is bounded", async () => {
+  const f = fixture();
+  try {
+    await f.bridge.open("owner-a");
+    const session = f.sent[0].session;
+    await f.bridge.webSocketMessage(f.socket, JSON.stringify({ type: "session_ready", session, ready: true }));
+    assert.equal((await f.bridge.batch("owner-b", ID1, 1, "seek_forward", 3, Date.now())).error, "no_session");
+    assert.equal((await f.bridge.batch("owner-a", ID1, 1, "pause_toggle", 3, Date.now())).error, "invalid_batch");
+    assert.equal((await f.bridge.batch("owner-a", ID1, 1, "seek_forward", 2, Date.now())).error, "invalid_batch");
+    assert.equal((await f.bridge.batch("owner-a", ID1, 1, "seek_forward", 3, Date.now() - 2000)).error, "expired_intent");
+    const pending = f.bridge.batch("owner-a", ID1, 1, "seek_backward", 6, Date.now());
+    assert.equal((await f.bridge.batch("owner-a", ID2, 2, "seek_forward", 3, Date.now())).error, "busy");
+    assert.equal((await f.bridge.command("owner-a", ID2, 2, "pause_toggle", Date.now())).error, "busy");
+    await f.bridge.webSocketMessage(f.socket, JSON.stringify({ type: "batch_accepted", session,
+      id: ID1, sequence: 1, accepted: true }));
+    await pending;
+    assert.equal((await f.bridge.cancelBatch("owner-b", ID1)).error, "no_session");
+    assert.equal((await f.bridge.cancelBatch("owner-a", ID1)).state, "cancelling");
+    assert.equal(f.sent.at(-1).type, "player_batch_cancel");
+    await f.bridge.webSocketMessage(f.socket, JSON.stringify({ type: "batch_done", session,
+      id: ID1, sequence: 1, state: "cancelled", acknowledged: 2, failures: 0 }));
+    assert.equal((await f.bridge.batchStatus("owner-a", ID1)).acknowledged, 2);
+    assert.equal((await f.bridge.batchStatus("owner-a", ID1)).state, "cancelled");
+  } finally { f.dispose(); }
+});
+
+test("running batch survives Durable Object wake without replay, and socket loss ends session", async () => {
+  const sent = [];
+  const socket = {
+    attachment: null,
+    send(raw) { sent.push(JSON.parse(raw)); }, close() {},
+    serializeAttachment(value) { this.attachment = structuredClone(value); },
+    deserializeAttachment() { return structuredClone(this.attachment); },
+  };
+  const first = new PlayerBridge({ getWebSockets: () => [] }, {});
+  first.controller = socket;
+  first.persistSession();
+  await first.open("owner-a");
+  const session = first.session.id;
+  await first.webSocketMessage(socket, JSON.stringify({ type: "session_ready", session, ready: true }));
+  const pending = first.batch("owner-a", ID1, 1, "seek_forward", 30, Date.now());
+  await first.webSocketMessage(socket, JSON.stringify({ type: "batch_accepted", session,
+    id: ID1, sequence: 1, accepted: true }));
+  await pending;
+  await first.webSocketMessage(socket, JSON.stringify({ type: "batch_progress", session,
+    id: ID1, sequence: 1, acknowledged: 8 }));
+  clearTimeout(first.leaseTimer);
+  const restored = new PlayerBridge({ getWebSockets: () => [socket] }, {});
+  try {
+    assert.equal((await restored.batchStatus("owner-a", ID1)).acknowledged, 8);
+    assert.equal(sent.filter(value => value.type === "player_batch").length, 1);
+    await restored.webSocketMessage(socket, JSON.stringify({ type: "batch_done", session,
+      id: ID1, sequence: 1, state: "complete", acknowledged: 30, failures: 0 }));
+    assert.equal((await restored.batchStatus("owner-a", ID1)).state, "complete");
+    const second = restored.batch("owner-a", ID2, 2, "seek_forward", 60, Date.now());
+    await restored.webSocketMessage(socket, JSON.stringify({ type: "batch_accepted", session,
+      id: ID2, sequence: 2, accepted: true }));
+    await second;
+    restored.disconnect();
+    assert.equal((await restored.batchStatus("owner-a", ID2)).error, "no_session");
+    assert.equal(sent.filter(value => value.type === "player_batch" && value.id === ID2).length, 1);
+  } finally { restored.disconnect(); }
+});

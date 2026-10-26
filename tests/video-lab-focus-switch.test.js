@@ -175,3 +175,15 @@ test("pagehide clears timers and parent event log stays bounded", () => {
   app.advance(15000);
   assert.equal(app.document.activeElement.id, "player");
 });
+
+test("manual sequential trial can arm a bounded 30-second iframe window", () => {
+  const app = setup();
+  app.get("window").click(); // 10 -> 15
+  app.get("window").click(); // 15 -> 30
+  assert.equal(app.get("window").textContent, "Window: 30 s");
+  app.get("arm").click();
+  app.advance(29999);
+  assert.equal(app.document.activeElement.id, "player");
+  app.advance(1);
+  assert.equal(app.document.activeElement.id, "focus-target");
+});

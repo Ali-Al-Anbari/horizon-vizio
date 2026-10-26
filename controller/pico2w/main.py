@@ -73,6 +73,7 @@ PLAYER_KEEPALIVE_MAX_REQUESTS = 8
 PLAYER_SESSION_HEARTBEAT_MS = 2500
 PLAYER_SESSION_STALE_MS = 3500
 PLAYER_CLOUD_MAX_DEFERRAL_MS = 8000
+PLAYER_BATCH_CLOUD_MAX_DEFERRAL_MS = 20000
 NETWORK_TIMING = {"tv_dns": 0, "tv_tcp": 0, "tv_tls": 0, "tv_gc": 0,
                   "cloud_dns": 0, "cloud_tcp": 0, "cloud_tls": 0, "cloud_gc": 0}
 
@@ -110,13 +111,13 @@ def next_periodic_due(previous_due, interval, completed_at):
             if time.ticks_diff(completed_at, next_due) >= 0 else next_due)
 
 
-def player_cloud_deferral(active, started_at, now_tick):
+def player_cloud_deferral(active, started_at, now_tick, limit_ms=PLAYER_CLOUD_MAX_DEFERRAL_MS):
     """Defer an empty claim only for a bounded visible-player window."""
     if not active:
         return None, False
     if started_at is None:
         started_at = now_tick
-    return started_at, time.ticks_diff(now_tick, started_at) < PLAYER_CLOUD_MAX_DEFERRAL_MS
+    return started_at, time.ticks_diff(now_tick, started_at) < limit_ms
 
 
 def perf_start():
@@ -1442,6 +1443,7 @@ class PlayerBridgeController:
     write_all = staticmethod(write_all)
     TVPlayerConnection = TVPlayerConnection
     PlayerCommandDispatcher = PlayerCommandDispatcher
+    PLAYER_KEYS = PLAYER_KEYS
     PLAYER_SESSION_HEARTBEAT_MS = PLAYER_SESSION_HEARTBEAT_MS
     PLAYER_SESSION_STALE_MS = PLAYER_SESSION_STALE_MS
 
@@ -1489,6 +1491,7 @@ def unattended_watch():
     power_poll_due = ticks()
     cloud_poll_due = ticks()
     player_cloud_deferral_at = None
+    player_batch_deferral_at = None
     shortcut_poll_due = ticks()
     shortcut_state = {"observed": False, "latched": False, "pending_at": None,
                       "cooldown_at": None, "detected_at": None}
@@ -1588,9 +1591,15 @@ def unattended_watch():
             if cloud_enabled and due(cloud_poll_due):
                 if player_bridge is not None:
                     player_bridge.step()
-                player_cloud_deferral_at, defer_claim = player_cloud_deferral(
-                    player_bridge is not None and player_bridge.session is not None,
-                    player_cloud_deferral_at, ticks())
+                if player_bridge is not None and getattr(player_bridge, "batch", None) is not None:
+                    player_batch_deferral_at, defer_claim = player_cloud_deferral(
+                        True, player_batch_deferral_at, ticks(),
+                        PLAYER_BATCH_CLOUD_MAX_DEFERRAL_MS)
+                else:
+                    player_batch_deferral_at = None
+                    player_cloud_deferral_at, defer_claim = player_cloud_deferral(
+                        player_bridge is not None and player_bridge.session is not None,
+                        player_cloud_deferral_at, ticks())
                 if defer_claim:
                     # Favor the short player-focus window. A held-visible
                     # overlay still permits a queue claim at least every 8 s.
@@ -1642,10 +1651,15 @@ def unattended_watch():
                     pending_at = time.ticks_add(ticks(), LAUNCH_RETRY_MS[-1])
                 else:
                     pending_at = time.ticks_add(ticks(), LAUNCH_RETRY_MS[launch_attempts])
-        time.sleep_ms(next_watch_sleep_ms(ticks(), power_poll_due, cloud_poll_due,
-                                         pending_at if pending_launch else None, cloud_enabled,
-                                         50 if player_bridge_enabled else getattr(config, "POLL_MS", POWER_POLL_MS),
-                                         shortcut_poll_due if shortcut_enabled else None))
+        if player_bridge is not None and getattr(player_bridge, "batch", None) is not None:
+            # The TV response already serializes keys. Yield to the runtime
+            # without inserting the normal polling sleep between batch keys.
+            time.sleep_ms(0)
+        else:
+            time.sleep_ms(next_watch_sleep_ms(ticks(), power_poll_due, cloud_poll_due,
+                                             pending_at if pending_launch else None, cloud_enabled,
+                                             50 if player_bridge_enabled else getattr(config, "POLL_MS", POWER_POLL_MS),
+                                             shortcut_poll_due if shortcut_enabled else None))
 
 
 def main():

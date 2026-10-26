@@ -6,6 +6,7 @@ export { LaunchQueue, PlayerBridge };
 
 const COOKIE = "__Host-horizon_session";
 const COMMANDS = new Set(["pause_toggle", "seek_backward", "seek_forward"]);
+const SEEK_COUNTS = new Set([1, 3, 6, 12, 30, 60]);
 
 function json(status, value) {
   return new Response(JSON.stringify(value), { status, headers: {
@@ -87,6 +88,9 @@ export async function playerApi(request, env) {
   if (path === "/api/player/status" && request.method === "GET") {
     return json(200, await bridge.status(owner));
   }
+  if (path === "/api/player/batch/status" && request.method === "GET") {
+    return json(200, await bridge.batchStatus(owner, url.searchParams.get("id")));
+  }
   if (request.method !== "POST" || request.headers.get("origin") !== url.origin
       || request.headers.get("x-horizon-action") !== "player") {
     return json(403, { code: "invalid_origin" });
@@ -99,6 +103,10 @@ export async function playerApi(request, env) {
   else if (path === "/api/player/close" && exact(data, [])) result = await bridge.close(owner);
   else if (path === "/api/player/command" && exact(data, ["id", "sequence", "command", "issuedAt"])
       && COMMANDS.has(data.command)) result = await bridge.command(owner, data.id, data.sequence, data.command, data.issuedAt);
+  else if (path === "/api/player/batch" && exact(data, ["id", "sequence", "command", "count", "issuedAt"])
+      && (data.command === "seek_forward" || data.command === "seek_backward")
+      && SEEK_COUNTS.has(data.count)) result = await bridge.batch(owner, data.id, data.sequence, data.command, data.count, data.issuedAt);
+  else if (path === "/api/player/batch/cancel" && exact(data, ["id"])) result = await bridge.cancelBatch(owner, data.id);
   else return json(400, { code: "invalid_request" });
   return json(result.error ? 409 : 200, result);
 }

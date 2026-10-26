@@ -2,7 +2,7 @@
   "use strict";
 
   var BUTTON_IDS = ["focus-parent", "focus-child", "arm", "restore", "window", "focus-target", "exit"];
-  var WINDOWS_MS = [5000, 10000, 15000];
+  var WINDOWS_MS = [5000, 10000, 15000, 30000];
 
   function keyName(event) {
     var key = event && event.key;

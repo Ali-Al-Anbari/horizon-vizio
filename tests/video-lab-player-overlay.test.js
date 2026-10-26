@@ -7,7 +7,7 @@ const html = readFileSync(new URL("../video-lab/player-overlay.html", import.met
 const css = readFileSync(new URL("../video-lab/player-overlay.css", import.meta.url), "utf8");
 const leaseScript = readFileSync(new URL("../video-lab/focus-lease.js", import.meta.url), "utf8");
 const playerScript = readFileSync(new URL("../video-lab/player-overlay.js", import.meta.url), "utf8");
-const ids = ["player-frame", "remote-capture", "overlay", "rewind", "play-pause", "forward", "subtitles",
+const ids = ["player-frame", "remote-capture", "overlay", "rewind", "rewind-label", "play-pause", "forward", "forward-label", "subtitles",
   "episodes", "subtitle-menu", "subtitle-mode", "menu-title", "menu-description", "menu-cancel", "menu-change",
   "command-status", "screen-reader-status"];
 const baseUrl = "https://yapgrid.com/embed/tv/2190/13/2";
@@ -81,6 +81,12 @@ function setup({ search = "?sub=on", adapter = null, animationFrame = true } = {
       emit(documentEvents, "keydown", event);
       return { delivered: true, prevented: event.prevented };
     },
+    keyup(name) {
+      const event = { key: name, prevented: false,
+        preventDefault() { this.prevented = true; }, stopPropagation() {} };
+      emit(documentEvents, "keyup", event);
+      return { delivered: true, prevented: event.prevented };
+    },
     advance(milliseconds) {
       const end = time + milliseconds;
       while (true) {
@@ -104,8 +110,8 @@ test("preview has no persistent overlay, fake progress, or browser credentials",
   assert.match(html, /frame-src https:\/\/yapgrid\.com/);
 });
 
-test("each first arrow or OK reveals controls without moving selection or sending a command", () => {
-  for (const key of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter"]) {
+test("each first arrow reveals controls without moving selection or sending a command", () => {
+  for (const key of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]) {
     const app = setup();
     const initial = app.get("player-frame").src;
     assert.equal(app.state(), "PLAYBACK_HIDDEN");
@@ -121,7 +127,36 @@ test("each first arrow or OK reveals controls without moving selection or sendin
   }
 });
 
-test("visible controls navigate by row and the idle timer resets on every direction", () => {
+test("one hidden OK reveals controls and dispatches one pause toggle, then restores Play/Pause focus", async () => {
+  const calls = [];
+  const app = setup({ adapter: { send(command) {
+    calls.push(command);
+    return Promise.resolve({ accepted: true });
+  } } });
+  app.key("Enter");
+  assert.equal(app.state(), "COMMAND_IN_PROGRESS");
+  assert.equal(app.get("overlay").classList.contains("is-visible"), true);
+  assert.equal(app.document.activeElement.id, "player-frame");
+  assert.deepEqual(calls, []);
+  app.keyup("Enter");
+  app.key("Enter", true);
+  app.advance(16);
+  await flush();
+  assert.deepEqual(calls, ["pause_toggle"]);
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  assert.equal(app.document.activeElement.id, "play-pause");
+  assert.match(app.get("command-status").textContent, /playback effect is unverified/);
+
+  app.player.onKey({ key: "Enter", repeat: true, preventDefault() {}, stopPropagation() {} });
+  assert.deepEqual(calls, ["pause_toggle"]);
+  app.key("Enter");
+  app.advance(16);
+  await flush();
+  assert.deepEqual(calls, ["pause_toggle", "pause_toggle"]);
+  assert.equal(app.document.activeElement.id, "play-pause");
+});
+
+test("visible controls keep normal navigation and hide only on the existing idle timeout", () => {
   const app = setup();
   app.key("ArrowLeft"); // reveal only
   app.advance(4000);
@@ -130,9 +165,9 @@ test("visible controls navigate by row and the idle timer resets on every direct
   app.advance(4000);
   assert.equal(app.state(), "CONTROLS_VISIBLE");
   app.key("ArrowDown");
-  assert.equal(app.document.activeElement.id, "episodes");
-  app.key("ArrowLeft");
   assert.equal(app.document.activeElement.id, "subtitles");
+  app.key("ArrowRight");
+  assert.equal(app.document.activeElement.id, "episodes");
   app.key("ArrowUp");
   assert.equal(app.document.activeElement.id, "play-pause");
   app.advance(4999);
@@ -146,7 +181,7 @@ test("visible controls navigate by row and the idle timer resets on every direct
 
 test("Back hides visible controls, then exits from hidden playback", () => {
   const app = setup();
-  app.key("Enter");
+  app.key("ArrowUp");
   app.key("Backspace");
   assert.equal(app.state(), "PLAYBACK_HIDDEN");
   assert.deepEqual(app.navigation, []);
@@ -156,7 +191,7 @@ test("Back hides visible controls, then exits from hidden playback", () => {
 
 test("without a secure bridge, playback controls never hand focus away or send a key", () => {
   const app = setup();
-  app.key("Enter"); // reveal
+  app.key("ArrowUp"); // reveal
   app.key("Enter"); // request Play/Pause
   assert.equal(app.state(), "CONTROLS_VISIBLE");
   assert.equal(app.document.activeElement.id, "play-pause");
@@ -167,9 +202,35 @@ test("without a secure bridge, playback controls never hand focus away or send a
   assert.equal(app.state(), "PLAYBACK_HIDDEN");
 });
 
+test("hidden OK with a disconnected bridge reveals controls without claiming a pause", () => {
+  const app = setup();
+  app.key("Enter");
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  assert.equal(app.get("overlay").classList.contains("is-visible"), true);
+  assert.equal(app.document.activeElement.id, "play-pause");
+  assert.match(app.get("command-status").textContent, /No secure Pico bridge.*No key was sent/);
+});
+
+test("uncertain hidden-OK delivery restores Play/Pause focus without replay", async () => {
+  const calls = [];
+  const app = setup({ adapter: { send(command) {
+    calls.push(command);
+    return Promise.reject(Error("connection lost after send"));
+  } } });
+  app.key("Enter");
+  app.advance(16);
+  await flush();
+  assert.deepEqual(calls, ["pause_toggle"]);
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  assert.equal(app.document.activeElement.id, "play-pause");
+  assert.match(app.get("command-status").textContent, /playback effect is unknown/);
+  app.player.onKey({ key: "Enter", repeat: true, preventDefault() {}, stopPropagation() {} });
+  assert.deepEqual(calls, ["pause_toggle"]);
+});
+
 test("handoff retries the selected visible control if focus slips back to the iframe", () => {
   const app = setup({ adapter: { send() { return new Promise(() => {}); } } });
-  app.key("Enter");
+  app.key("ArrowUp");
   app.key("ArrowLeft");
   assert.equal(app.document.activeElement.id, "rewind");
   app.key("Enter");
@@ -187,7 +248,7 @@ test("repeated seeks run sequentially when the adapter acknowledges delivery", a
     calls.push(command);
     return Promise.resolve({ accepted: true });
   } } });
-  app.key("Enter");
+  app.key("ArrowUp");
   app.key("ArrowRight");
   assert.equal(app.document.activeElement.id, "forward");
   app.key("Enter");
@@ -207,7 +268,7 @@ test("repeated seeks run sequentially when the adapter acknowledges delivery", a
 test("subtitle ON/OFF URLs match existing launch modes and switching requires confirmation", () => {
   const on = setup();
   assert.equal(on.get("player-frame").src, baseUrl + "?lang=en");
-  on.key("Enter");
+  on.key("ArrowUp");
   on.key("ArrowDown");
   on.key("Enter");
   assert.equal(on.state(), "SUBMENU_OPEN");
@@ -226,7 +287,7 @@ test("subtitle ON/OFF URLs match existing launch modes and switching requires co
   assert.equal(off.get("player-frame").src, baseUrl + "?sub_url="
     + encodeURIComponent(previewOrigin + "/empty.vtt") + "&sub_lang=en&sub_label=Off");
   assert.equal(off.get("subtitle-mode").textContent, "OFF");
-  off.key("Enter");
+  off.key("ArrowUp");
   off.key("ArrowDown");
   off.key("Enter");
   off.key("ArrowRight");
@@ -281,6 +342,8 @@ test("slow mock controller is not sent duplicate commands and late acceptance is
   app.advance(2984);
   assert.equal(app.state(), "CONTROLS_VISIBLE");
   assert.match(app.get("command-status").textContent, /outcome is unknown/);
+  assert.equal(app.document.activeElement.id, "play-pause");
+  assert.deepEqual(calls, ["pause_toggle"]);
   resolveCommand({ accepted: true });
   await new Promise(resolve => setImmediate(resolve));
   assert.doesNotMatch(app.get("command-status").textContent, /Controller accepted/);
@@ -362,31 +425,285 @@ test("failed cold preparation leaves Horizon focus and never sends a key", async
   assert.equal(sent, 0);
 });
 
-test("deliberate repeated seek presses during preparation queue in order", async () => {
-  let resolveReady;
-  let prepared = false;
+const flush = () => new Promise(resolve => setImmediate(resolve));
+
+async function startBatch(app, direction = "forward", steps = 0) {
+  app.key("ArrowUp"); // reveal controls without activating Play/Pause
+  app.key(direction === "forward" ? "ArrowRight" : "ArrowLeft");
+  for (let i = 0; i < steps; i++) app.key(direction === "forward" ? "ArrowRight" : "ArrowLeft");
+  app.key("Enter");
+  await flush();
+  app.advance(16);
+  await flush();
+}
+
+test("arrows immediately adjust seek labels without Up or issuing playback", () => {
+  const sent = [];
+  const app = setup({ adapter: { open: () => Promise.resolve(), send: command => sent.push(command),
+    sendBatch: (command, count) => sent.push([command, count]) } });
+  app.key("ArrowUp");
+  app.key("ArrowRight");
+  assert.equal(app.document.activeElement.id, "forward");
+  assert.equal(app.get("forward-label").textContent, "+10s");
+  app.key("ArrowRight"); app.key("ArrowRight");
+  assert.equal(app.get("forward-label").textContent, "+1m");
+  app.key("ArrowLeft");
+  assert.equal(app.get("forward-label").textContent, "+30s");
+  assert.deepEqual(sent, []);
+  app.key("ArrowDown");
+  assert.equal(app.document.activeElement.id, "subtitles");
+  app.key("ArrowRight");
+  assert.equal(app.document.activeElement.id, "episodes");
+  app.key("ArrowUp");
+  assert.equal(app.document.activeElement.id, "play-pause");
+  app.key("ArrowLeft");
+  assert.equal(app.document.activeElement.id, "rewind");
+  assert.equal(app.get("forward-label").textContent, "+30s");
+  app.key("ArrowLeft"); app.key("ArrowLeft"); app.key("ArrowRight");
+  assert.equal(app.get("rewind-label").textContent, "−30s");
+  assert.deepEqual(sent, []);
+});
+
+test("inward arrows decrease larger amounts and move from the minimum to Play/Pause", () => {
+  const sent = [];
+  const app = setup({ adapter: {
+    send(command) { sent.push(command); return Promise.resolve({ accepted: true }); },
+    sendBatch(command, count) { sent.push([command, count]); return Promise.resolve({ id: "unused" }); },
+  } });
+  app.key("ArrowUp");
+  app.key("ArrowRight"); // Focus Forward
+  app.key("ArrowLeft");
+  assert.equal(app.get("forward-label").textContent, "+10s");
+  assert.equal(app.document.activeElement.id, "play-pause");
+  app.key("ArrowLeft"); // Focus Rewind
+  app.key("ArrowRight");
+  assert.equal(app.get("rewind-label").textContent, "−10s");
+  assert.equal(app.document.activeElement.id, "play-pause");
+  assert.deepEqual(sent, []);
+});
+
+test("the displayed amount is the exact single batch sent by OK", async () => {
+  const sent = [];
+  const app = setup({ adapter: {
+    open: () => Promise.resolve(), ready: () => Promise.resolve(), send() {}, close() {},
+    sendBatch(command, count) { sent.push([command, count]); return Promise.resolve({ id: "batch-12" }); },
+    batchStatus() { return Promise.resolve({ id: "batch-12", state: "complete", acknowledged: 12 }); },
+  } });
+  app.key("ArrowUp"); app.key("ArrowRight");
+  app.key("ArrowRight"); app.key("ArrowRight"); app.key("ArrowRight");
+  assert.equal(app.get("forward-label").textContent, "+2m");
+  assert.deepEqual(sent, []);
+  app.key("Enter");
+  await flush(); app.advance(16); await flush();
+  assert.deepEqual(sent, [["seek_forward", 12]]);
+  assert.equal(app.get("forward-label").textContent, "+2m");
+});
+
+test("seek amount does not reset after four seconds while the control bar remains visible", () => {
+  const app = setup();
+  app.key("ArrowUp"); app.key("ArrowRight"); app.key("ArrowRight");
+  app.advance(4000);
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  assert.equal(app.get("forward-label").textContent, "+30s");
+  app.advance(1000);
+  assert.equal(app.state(), "PLAYBACK_HIDDEN");
+  assert.equal(app.get("forward-label").textContent, "+10s");
+  assert.equal(app.get("rewind-label").textContent, "−10s");
+});
+
+test("both seek amounts reset only when controls hide or the player exits", () => {
+  const app = setup();
+  app.key("ArrowUp"); app.key("ArrowRight"); app.key("ArrowRight"); // Forward +30s
+  app.key("ArrowUp"); app.key("ArrowLeft"); app.key("ArrowLeft"); // Rewind −30s
+  assert.equal(app.get("forward-label").textContent, "+30s");
+  assert.equal(app.get("rewind-label").textContent, "−30s");
+  app.key("Backspace");
+  assert.equal(app.state(), "PLAYBACK_HIDDEN");
+  assert.equal(app.get("forward-label").textContent, "+10s");
+  assert.equal(app.get("rewind-label").textContent, "−10s");
+  app.key("ArrowUp");
+  assert.equal(app.get("forward-label").textContent, "+10s");
+  app.key("ArrowRight"); app.key("ArrowRight");
+  app.player.dispose();
+  assert.equal(app.get("forward-label").textContent, "+10s");
+  assert.equal(app.get("rewind-label").textContent, "−10s");
+});
+
+test("OK dispatches exactly one batch at every selected count in either direction", async () => {
+  for (const direction of ["forward", "rewind"]) {
+    for (const [steps, count, label] of [[0, 1, "10s"], [1, 3, "30s"], [2, 6, "1m"],
+      [3, 12, "2m"], [4, 30, "5m"], [5, 60, "10m"]]) {
+      const sent = [];
+      const app = setup({ adapter: {
+        open: () => Promise.resolve(), ready: () => Promise.resolve(), close() {},
+        send() { throw Error("seek used the single command path"); },
+        sendBatch(command, requested) { sent.push([command, requested]); return Promise.resolve({ id: "batch-1" }); },
+        batchStatus() { return Promise.resolve({ id: "batch-1", state: "complete", acknowledged: count }); },
+      } });
+      await startBatch(app, direction, steps);
+      assert.deepEqual(sent, [[direction === "forward" ? "seek_forward" : "seek_backward", count]]);
+      assert.equal(app.document.activeElement.id, direction);
+      assert.equal(app.get(direction + "-label").textContent, (direction === "forward" ? "+" : "−") + label);
+      assert.match(app.get("command-status").textContent, new RegExp(count + "/" + count + " inputs"));
+      assert.match(app.get("command-status").textContent, /YapGrid position unverified/);
+      assert.equal(app.get("player-frame").sourceChanges, 1);
+    }
+  }
+});
+
+test("a 60-input batch holds iframe focus beyond three seconds until matching terminal completion", async () => {
+  let terminal = false;
+  const sent = [];
+  const app = setup({ adapter: {
+    open: () => Promise.resolve(), ready: () => Promise.resolve(), close() {}, send() {},
+    sendBatch(command, count) { sent.push([command, count]); return Promise.resolve({ id: "batch-60" }); },
+    batchStatus(id) { assert.equal(id, "batch-60"); return Promise.resolve({ id, state: terminal ? "complete" : "running",
+      acknowledged: terminal ? 60 : 8 }); },
+  } });
+  await startBatch(app, "forward", 5);
+  assert.deepEqual(sent, [["seek_forward", 60]]);
+  assert.equal(app.document.activeElement.id, "player-frame");
+  assert.match(app.get("command-status").textContent, /8\/60 SmartCast inputs acknowledged/);
+  assert.equal(app.key("Backspace").delivered, false);
+  app.advance(3001);
+  assert.equal(app.document.activeElement.id, "player-frame");
+  await flush();
+  app.advance(13000);
+  assert.equal(app.document.activeElement.id, "player-frame");
+  terminal = true;
+  await flush();
+  app.advance(250);
+  await flush();
+  assert.equal(app.document.activeElement.id, "forward");
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  assert.equal(app.get("forward-label").textContent, "+10m");
+});
+
+test("one-input seek keeps the original short focus lease", async () => {
+  const cancelled = [];
+  const app = setup({ adapter: {
+    open: () => Promise.resolve(), ready: () => Promise.resolve(), send() {}, close() {},
+    sendBatch() { return Promise.resolve({ id: "single" }); },
+    batchStatus() { return new Promise(() => {}); },
+    cancelBatch(id) { cancelled.push(id); return Promise.resolve({ state: "cancelling" }); },
+  } });
+  await startBatch(app);
+  app.advance(2983);
+  assert.equal(app.document.activeElement.id, "player-frame");
+  app.advance(1);
+  assert.equal(app.document.activeElement.id, "forward");
+  assert.deepEqual(cancelled, ["single"]);
+});
+
+test("rapid OK during an active batch cannot dispatch or queue another batch", async () => {
+  const sent = [];
+  const app = setup({ adapter: {
+    open: () => Promise.resolve(), ready: () => Promise.resolve(), close() {}, send() {},
+    sendBatch(command, count) { sent.push([command, count]); return Promise.resolve({ id: "active" }); },
+    batchStatus() { return new Promise(() => {}); },
+  } });
+  await startBatch(app, "forward", 2);
+  assert.equal(app.key("Enter").delivered, false);
+  app.player.onKey({ key: "Enter", repeat: false, preventDefault() {}, stopPropagation() {} });
+  app.player.onKey({ key: "Enter", repeat: true, preventDefault() {}, stopPropagation() {} });
+  assert.deepEqual(sent, [["seek_forward", 6]]);
+  assert.equal(app.document.activeElement.id, "player-frame");
+});
+
+test("failure, cancellation, and status disconnect restore Horizon focus without replay", async () => {
+  for (const outcome of ["failed", "cancelled", "disconnect"]) {
+    const sent = [];
+    const app = setup({ adapter: {
+      open: () => Promise.resolve(), ready: () => Promise.resolve(), close() {}, send() {},
+      sendBatch(command, count) { sent.push([command, count]); return Promise.resolve({ id: outcome }); },
+      batchStatus() { return outcome === "disconnect" ? Promise.reject(Error("offline"))
+        : Promise.resolve({ id: outcome, state: outcome, acknowledged: 2 }); },
+    } });
+    await startBatch(app, "forward", 1);
+    assert.deepEqual(sent, [["seek_forward", 3]]);
+    assert.equal(app.document.activeElement.id, "forward");
+    assert.equal(app.state(), "CONTROLS_VISIBLE");
+    assert.equal(app.get("forward-label").textContent, "+30s");
+    assert.match(app.get("command-status").textContent, new RegExp(outcome === "disconnect" ? "unknown" : outcome));
+  }
+});
+
+test("a partial terminal acknowledgment is unknown, never reported as a completed seek", async () => {
+  const sent = [];
+  const app = setup({ adapter: {
+    open: () => Promise.resolve(), ready: () => Promise.resolve(), send() {}, close() {},
+    sendBatch(command, count) { sent.push([command, count]); return Promise.resolve({ id: "partial" }); },
+    batchStatus() { return Promise.resolve({ id: "partial", state: "complete", acknowledged: 2 }); },
+  } });
+  await startBatch(app, "forward", 1);
+  assert.deepEqual(sent, [["seek_forward", 3]]);
+  assert.equal(app.document.activeElement.id, "forward");
+  assert.equal(app.get("forward-label").textContent, "+30s");
+  assert.match(app.get("command-status").textContent, /SmartCast unknown: 2\/3 inputs/);
+});
+
+test("30-second watchdog restores focus, requests cancellation, and bounds uncertain completion", async () => {
   const calls = [];
   const app = setup({ adapter: {
-    open() { return Promise.resolve(); },
-    ready() { return prepared ? Promise.resolve() : new Promise(resolve => { resolveReady = resolve; }); },
-    send(command) { calls.push(command); return Promise.resolve({ accepted: true }); },
-    close() {},
+    open: () => Promise.resolve(), ready: () => Promise.resolve(), send() {},
+    close() { calls.push("close"); },
+    sendBatch() { return Promise.resolve({ id: "long-batch" }); },
+    batchStatus() { return new Promise(() => {}); },
+    cancelBatch(id) { calls.push(["cancel", id]); return Promise.resolve({ state: "cancelling" }); },
   } });
-  app.key("Enter");
-  app.key("ArrowRight");
-  app.key("Enter");
-  app.key("Enter");
-  app.key("Enter");
+  await startBatch(app, "forward", 5);
+  app.advance(29983);
+  assert.equal(app.document.activeElement.id, "player-frame");
+  app.advance(1);
   assert.equal(app.document.activeElement.id, "forward");
-  assert.equal(calls.length, 0);
-  prepared = true;
+  assert.deepEqual(calls, [["cancel", "long-batch"]]);
+  assert.match(app.get("command-status").textContent, /Focus timeout; stopping/);
+  app.advance(5000);
+  assert.ok(calls.includes("close"));
+  assert.match(app.get("command-status").textContent, /unknown/);
+  assert.equal(app.get("forward-label").textContent, "+10m");
+});
+
+test("stale status from timed-out batch cannot finish a later batch", async () => {
+  let resolveOld;
+  let sends = 0;
+  let wrongResponse = true;
+  const app = setup({ adapter: {
+    open: () => Promise.resolve(), ready: () => Promise.resolve(), send() {}, close() {},
+    sendBatch() { sends += 1; return Promise.resolve({ id: "batch-" + sends }); },
+    batchStatus(id) { return id === "batch-1" ? new Promise(resolve => { resolveOld = resolve; })
+      : Promise.resolve(wrongResponse ? { id: "batch-1", state: "complete", acknowledged: 6 }
+        : { id, state: "running", acknowledged: 1 }); },
+    cancelBatch() { return Promise.resolve({ state: "cancelling" }); },
+  } });
+  await startBatch(app, "forward", 2);
+  app.advance(35000);
+  assert.equal(app.document.activeElement.id, "forward");
+  app.key("Enter");
+  await flush(); app.advance(16); await flush();
+  assert.equal(sends, 2);
+  assert.equal(app.document.activeElement.id, "player-frame");
+  wrongResponse = false;
+  resolveOld({ state: "complete", acknowledged: 6 });
+  await flush();
+  assert.equal(app.document.activeElement.id, "player-frame");
+  assert.equal(app.state(), "COMMAND_IN_PROGRESS");
+});
+
+test("Back during batch preparation cancels before dispatch and rapid OK cannot overlap", async () => {
+  let resolveReady;
+  const batches = [];
+  const app = setup({ adapter: {
+    open: () => Promise.resolve(), ready: () => new Promise(resolve => { resolveReady = resolve; }),
+    send() {}, sendBatch(command, count) { batches.push([command, count]); }, close() {},
+  } });
+  app.key("ArrowUp"); app.key("ArrowRight"); app.key("ArrowRight"); app.key("Enter");
+  app.key("Enter"); app.key("Enter");
+  assert.equal(batches.length, 0);
+  app.key("Backspace");
   resolveReady();
-  for (let i = 0; i < 3; i++) {
-    await new Promise(resolve => setImmediate(resolve));
-    app.advance(16);
-    await new Promise(resolve => setImmediate(resolve));
-    app.advance(0);
-  }
-  assert.deepEqual(calls, ["seek_forward", "seek_forward", "seek_forward"]);
-  assert.equal(app.get("player-frame").sourceChanges, 1);
+  await flush(); app.advance(20);
+  assert.deepEqual(batches, []);
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  assert.equal(app.get("forward-label").textContent, "+30s");
 });

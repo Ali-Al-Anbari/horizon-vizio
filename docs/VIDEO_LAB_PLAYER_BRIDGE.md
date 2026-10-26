@@ -5,6 +5,10 @@ Pico app launcher, TV firmware, and subtitle modes are unchanged. SmartCast
 `SUCCESS` means the TV accepted a key request; YapGrid playback must be checked
 visually on the physical Vizio.
 
+The progressive batch seek implementation and staged physical test procedure
+are in [VIDEO_LAB_PROGRESSIVE_SEEK.md](VIDEO_LAB_PROGRESSIVE_SEEK.md). The
+single-key description below documents the original verified command path.
+
 ## Architecture and trust
 
 The Video Lab browser uses its preview-origin, owner-approved pairing cookie.
@@ -36,6 +40,8 @@ TLS socket open. The Pico's outbound cloud WebSocket can remain connected.
 
 The Pico is still a single-loop controller. While a player session is active,
 an otherwise due native-app queue claim is deferred for at most eight seconds.
+An active progressive seek batch uses a separate 20-second maximum deferral;
+see the linked validation guide.
 Power and iHeartRadio monitoring continue. Their blocking TV requests and any
 claim after the deferral cap can still delay a player command. No sub-500-ms
 claim is made from local tests.
@@ -118,10 +124,11 @@ still require validation on the physical Pico.
 3. Reveal again. Press OK on Play/Pause once. Verify picture pauses, Horizon
    regains button focus, and the Pico reports exactly one `pause_toggle`.
    Repeat once to resume. Do not infer the video state from HTTP 200 alone.
-4. Select Forward and press OK three deliberate times. Confirm three distinct
-   Pico `seek_forward` lines, three visible seeks, and no extra seek. Repeat
-   Backward. Measure focus-to-result time from the browser message and the
-   Pico's per-command timing; do not subtract their unsynchronized clocks.
+4. Select Forward and press OK once. Verify one `seek_forward` input and one
+   visible seek. Follow the staged progressive trials in the linked document
+   before trying larger jumps. Measure focus-to-result time from the browser
+   message and the Pico's per-command timing; do not subtract their
+   unsynchronized clocks.
 5. Test Back while visible (hide), Back while hidden (return to selector),
    subtitle ON/OFF reload confirmation, Home, and a Wi-Fi disconnect/reconnect.
    If focus gets trapped, use physical TV Home, then relaunch the preview.

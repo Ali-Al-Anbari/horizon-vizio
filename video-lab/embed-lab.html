@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; frame-src 'self' https://player.vidlove.cc; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <meta name="color-scheme" content="dark" />
+    <title>Horizon Video Lab · Experimental Embed</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="embed-lab.css" />
+    <script src="embed-lab.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div><span class="brand">HORIZON VIDEO LAB</span><h1>Experimental embed · South Park S13E2</h1></div>
+        <p>Candidate VidLove player. Playback and rights are unverified.</p>
+      </header>
+      <nav aria-label="Embed controls">
+        <button id="fixture-a" type="button">Load fixture A</button>
+        <button id="fixture-b" type="button">Load fixture B</button>
+        <button id="load" type="button">Load candidate embed</button>
+        <button id="stop" type="button">Stop and unload</button>
+        <button id="observed-player" type="button">Observed player</button>
+        <button id="observed-blocked" type="button">Observed blocked</button>
+        <button id="observed-media-error" type="button">Observed media error</button>
+        <button id="back-lab" type="button">Back to Video Lab</button>
+        <button id="horizon" type="button">Back to Horizon</button>
+      </nav>
+      <section class="stage" aria-label="Untrusted player experiment">
+        <iframe id="candidate" title="Sandboxed video embed experiment"
+          sandbox="allow-scripts allow-presentation" allow="autoplay; fullscreen"
+          referrerpolicy="no-referrer" tabindex="-1" hidden></iframe>
+        <p id="placeholder">The iframe stays unloaded until you choose a fixture or the candidate embed.</p>
+      </section>
+      <p id="status" role="status" aria-live="polite">Ready. No third-party page has loaded.</p>
+      <p id="signals">Parent signals: none.</p>
+      <p id="observation">Visible TV observation: not recorded.</p>
+      <p class="hint">Test fixture A, then B, before the candidate. Arrows choose controls · OK activates · Back first unloads the iframe, then returns to Video Lab. Iframe focus is disabled; every frame auto-unloads after 30 seconds. If the remote still becomes trapped, press TV Home and relaunch this preview through the authenticated TV controller.</p>
+      <p class="hint">Popups and top-level navigation are not permitted by this sandbox. A load event does not prove rendering or playback. The parent cannot inspect the candidate's cross-origin media errors, redirects within the frame, or playback state.</p>
+    </main>
+  </body>
+</html>

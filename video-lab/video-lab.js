@@ -42,7 +42,7 @@
   };
   var SOURCE_KEYS = ["original", "mp4", "relay", "flowerRelay", "local", "faststart", "compat", "long", "hls"];
   var BUTTONS = SOURCE_KEYS.map(function (name) { return "source-" + name; })
-    .concat(["seek-back", "play", "seek-forward", "checkpoint", "fullscreen", "exit"]);
+    .concat(["seek-back", "play", "seek-forward", "checkpoint", "fullscreen", "exit", "embed-lab"]);
   var CHECKPOINTS = [300, 600, 900, 1200, 1440];
 
   // Match the tested Browser Lab key names, including embedded-TV keyCode fallbacks.
@@ -243,6 +243,7 @@
       else if (index === SOURCE_KEYS.length + 3) nextCheckpoint();
       else if (index === SOURCE_KEYS.length + 4) toggleFullscreen();
       else if (index === SOURCE_KEYS.length + 5) exit();
+      else if (index === SOURCE_KEYS.length + 6) { cleanup(); nav.replace("embed-lab.html"); }
     }
     function focus(index) {
       focused = Math.max(0, Math.min(buttons.length - 1, index));

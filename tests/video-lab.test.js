@@ -39,7 +39,7 @@ function setup(search = "", canPlayType, fetchImpl) {
   for (const id of ["video", "player", "status", "progress", "time", "source-label", "capabilities",
     "diagnostics", "media-hints", "relay-http", "media-state", "media-events", "source-original", "source-mp4", "source-relay", "source-flowerRelay",
     "source-local", "source-faststart", "source-compat", "source-long", "source-hls",
-    "seek-back", "play", "seek-forward", "checkpoint", "fullscreen", "exit"]) nodes.set(id, node(id));
+    "seek-back", "play", "seek-forward", "checkpoint", "fullscreen", "exit", "embed-lab"]) nodes.set(id, node(id));
   const video = nodes.get("video");
   video.paused = true;
   video.currentTime = 0;
@@ -81,7 +81,16 @@ test("preview package contains only the isolated Video Lab assets", () => {
   assert.match(html, /connect-src 'self'/);
   assert.match(html, /id="source-relay"/);
   assert.match(html, /id="source-flowerRelay"/);
+  assert.match(html, /id="embed-lab"/);
   assert.doesNotMatch(html, /<iframe|hls\.js|artplayer|browser-run/i);
+});
+
+test("experimental embed entry unloads video and stays within isolated preview", () => {
+  const app = setup();
+  app.get("embed-lab").click();
+  assert.equal(app.navigation.at(-1), "embed-lab.html");
+  assert.equal(app.video.pauseCount > 0, true);
+  assert.equal(app.video.src, "");
 });
 
 test("the existing external samples remain available and loading never autoplays", () => {

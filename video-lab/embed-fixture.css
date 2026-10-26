@@ -1,0 +1,7 @@
+:root { font-family: Arial, Helvetica, sans-serif; color: #fff; background: #184d78; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { min-height: 100vh; padding: 10vh 5vw; text-align: center; background: #184d78; }
+body.view-b main { background: #674489; }
+p { font-size: clamp(18px, 2vw, 30px); }
+h1 { font-size: clamp(54px, 7vw, 110px); margin: .3em 0; }

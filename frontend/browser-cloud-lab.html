@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Horizon Cloud Browser Lab</title><link rel="stylesheet" href="/browser-cloud-lab.css"></head>
+<body>
+<main class="shell">
+  <header><h1>Horizon Cloud Browser <small>Preview</small></h1><a class="exit" href="/index.html">Back to Horizon</a></header>
+  <section id="pair-panel" class="gate" hidden><h2>Pair this screen</h2><p>Only an approved device can start a cloud browser.</p><p id="pair-code" class="code"></p><p id="pair-url"></p><button id="pair-start" type="button">Show pairing code</button></section>
+  <section id="browser-panel" hidden>
+    <nav id="toolbar" aria-label="Browser controls">
+      <button data-action="back">Back</button><button data-action="forward">Forward</button><button data-action="refresh">Refresh</button><button data-action="home">Browser Home</button>
+      <input id="address" type="text" readonly aria-label="Address or Google search" placeholder="Address or Google search"><button data-action="edit">Edit</button><button data-action="go">Go</button>
+      <button data-action="cursor">Use cursor</button><button data-action="scroll">Scroll mode</button><button data-action="type">Type in page</button><button data-action="end">End session</button>
+    </nav>
+    <div class="state"><span id="status" role="status">Checking session…</span><span id="mode">Toolbar mode</span></div>
+    <div id="viewport" class="viewport" aria-label="Remote webpage screenshot"><img id="frame" alt="Cloud browser screenshot"><div id="cursor" class="cursor" hidden></div><div id="placeholder" class="placeholder">Start a browser session to load the interaction fixture.</div></div>
+    <div class="footer"><button id="start" type="button">Start browser session</button><button id="diagnostics" type="button">Timing summary</button><span id="timing" aria-live="off"></span></div>
+  </section>
+  <section id="keyboard" class="keyboard" hidden><h2>TV keyboard</h2><p id="keyboard-preview"></p><div id="keyboard-grid"></div><p>Back cancels. Enter submits once.</p></section>
+</main>
+<script src="/browser-lab-core.js"></script><script src="/browser-lab-keyboard.js"></script><script src="/browser-cloud-core.js"></script><script src="/browser-cloud-lab.js"></script>
+</body></html>

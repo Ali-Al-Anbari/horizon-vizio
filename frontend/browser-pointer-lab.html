@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; frame-src 'self' https:; connect-src 'none'; img-src 'self' data:; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <title>Horizon Pointer Ownership Lab</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="browser-pointer-lab.css" />
+    <script src="browser-lab-core.js" defer></script>
+    <script src="browser-input-core.js" defer></script>
+    <script src="browser-pointer-core.js" defer></script>
+    <script src="browser-pointer-lab.js" defer></script>
+  </head>
+  <body>
+    <main class="lab">
+      <header>
+        <div><strong>HORIZON</strong><span>POINTER OWNERSHIP LAB</span></div>
+        <a id="return-lab" href="browser-lab.html">Back to Browser Lab</a>
+      </header>
+      <nav id="controls" aria-label="Pointer experiment controls">
+        <button id="show-local" type="button">Same-origin fixture</button>
+        <button id="show-links" type="button">External links</button>
+        <button id="show-form" type="button">External form</button>
+        <button id="show-google" type="button">Google framing check</button>
+        <button id="enter-cursor" type="button">Overlay cursor</button>
+        <button id="focus-frame" type="button">Native frame focus</button>
+        <button id="restore-toolbar" type="button">Restore toolbar</button>
+      </nav>
+      <p id="status" role="status" aria-live="polite">Same-origin fixture ready. Choose Overlay cursor. Back returns to toolbar if this page receives it.</p>
+      <section class="viewport" id="viewport" tabindex="0" aria-label="Web page viewport">
+        <iframe id="local-frame" title="Same-origin pointer fixture" src="browser-input-child.html" tabindex="-1"></iframe>
+        <iframe id="external-frame" title="External website pointer experiment" sandbox="allow-scripts allow-forms" referrerpolicy="no-referrer" tabindex="-1" hidden></iframe>
+        <div id="cursor" class="cursor" aria-hidden="true"></div>
+        <div class="viewport-note" id="viewport-note">Cursor overlay belongs to Horizon. OK on an external frame cannot create a browser-level click.</div>
+      </section>
+      <section class="readout" aria-label="Local capability readout">
+        <div><span id="mode">Mode: toolbar</span><span id="surface">Surface: same-origin fixture</span><span id="focus">Focus: parent</span></div>
+        <div><span id="visible">A Cursor visible: yes</span><span id="keys">B Parent remote keys: 0</span><span id="activation">C External activation: unverified</span></div>
+        <ol id="events" aria-label="Recent fixed diagnostic events"></ol>
+      </section>
+      <p class="help">Overlay cursor: arrows move, OK tests activation, Back restores toolbar. Native frame focus is a separate test and may capture the remote. A frame load signal never proves that a page rendered. Enter no private data.</p>
+      <p class="recovery">If Back cannot restore the toolbar, use TV Home or the verified iHeartRadio return shortcut, then relaunch this isolated preview with the approved Conjure launcher.</p>
+    </main>
+  </body>
+</html>

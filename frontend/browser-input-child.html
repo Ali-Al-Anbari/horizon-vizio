@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'" />
+    <title>Same-origin input child</title>
+    <link rel="stylesheet" href="browser-input-lab.css" />
+    <script src="browser-lab-core.js" defer></script>
+    <script src="browser-input-core.js" defer></script>
+    <script src="browser-input-child.js" defer></script>
+  </head>
+  <body class="child-page">
+    <h1>Same-origin iframe</h1>
+    <p>This cooperating page reports only remote navigation keys and fixed action names to its parent. It never reports text.</p>
+    <button id="child-button" type="button">Press OK <strong id="child-count">0</strong></button>
+    <a id="child-link" href="#lower">Follow a local link</a>
+    <p><label>Focus test input <input id="child-input" type="text" autocomplete="off" placeholder="Do not enter private text" /></label></p>
+    <p id="child-status" aria-live="polite">Focus the frame, then press arrows, OK, and Back.</p>
+    <section id="lower"><h2>Local anchor reached</h2><p>Back from this cooperating frame asks the parent to focus its toolbar.</p></section>
+  </body>
+</html>

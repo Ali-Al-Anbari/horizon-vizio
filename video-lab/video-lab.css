@@ -1,0 +1,29 @@
+:root { color-scheme: dark; font-family: Arial, Helvetica, sans-serif; background: #101723; color: #f2f5fa; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.shell { height: 100vh; max-width: 1600px; margin: auto; padding: 1.5vh 3vw; display: flex; flex-direction: column; }
+.header { display: flex; align-items: end; justify-content: space-between; gap: 1rem; }
+.brand { color: #a8c9ff; font-size: clamp(18px, 1.7vw, 28px); font-weight: bold; letter-spacing: .22em; }
+h1 { font-size: clamp(30px, 3vw, 52px); margin: .25rem 0 0; }
+.header p, .hint, .credit { color: #b9c5d5; }
+.sources, .controls { display: flex; flex-wrap: wrap; gap: .7rem; }
+.sources { margin: .7rem 0; }
+button { min-height: 3.5rem; padding: .55rem 1.2rem; border: 2px solid #50617a; border-radius: .65rem; background: #223047; color: inherit; font: inherit; font-size: clamp(17px, 1.5vw, 25px); cursor: pointer; }
+button[aria-pressed="true"] { border-color: #a8c9ff; }
+button:focus { outline: 4px solid #fff; outline-offset: 3px; background: #345783; }
+.player { flex: 1; min-height: 0; display: flex; flex-direction: column; background: #000; border: 1px solid #46556c; }
+video { display: block; flex: 1; min-height: 0; width: 100%; background: #000; object-fit: contain; }
+.controls { justify-content: center; padding: .8rem; background: #172233; }
+.readout { font-size: clamp(16px, 1.35vw, 22px); line-height: 1.35; }
+.readout p { margin: .55rem 0; }
+.diagnostics { font-size: .8em; color: #d8e4f3; overflow-wrap: anywhere; }
+.diagnostics p { margin: .25rem 0; }
+.progress-row { display: flex; align-items: center; gap: 1rem; }
+progress { flex: 1; height: 1rem; }
+.hint, .credit { font-size: .84em; }
+body.video-fullscreen { overflow: hidden; }
+body.video-fullscreen .header, body.video-fullscreen .sources, body.video-fullscreen .readout { display: none; }
+.player.viewport-fullscreen { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 100; width: 100%; height: 100%; border: 0; }
+.player.viewport-fullscreen video { flex: 1; min-height: 0; width: 100%; height: auto; object-fit: contain; }
+.player.viewport-fullscreen .controls { flex: 0 0 auto; }
+@media (max-width: 700px) { .shell { height: auto; min-height: 100vh; } .header { display: block; } video { flex: none; height: 42vh; } .controls button { flex: 1 1 42%; } }

@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cloud browser interaction fixture</title>
+<style>body{font:32px system-ui;background:#eef4fa;color:#142233;margin:40px}button,input,select,a{font:inherit;padding:14px;margin:12px}button{background:#174d95;color:white;border:0;border-radius:10px}.box{background:white;padding:22px;border-radius:12px;margin-bottom:20px}.spacer{height:900px}</style>
+<h1>Browser Run fixture · Page one</h1>
+<div class="box"><button id="counter" type="button">Click me: 0</button><strong id="count-result">No click yet</strong></div>
+<div class="box"><label>Text field <input id="entry" type="text" autocomplete="off" maxlength="100"></label><button id="submit" type="button">Show text</button><p id="text-result">No text submitted</p></div>
+<div class="box"><label>Choice <select id="choice"><option>First</option><option>Second</option><option>Third</option></select></label><a href="/browser-cloud-fixture-next.html">Go to page two</a></div>
+<div class="spacer">Scroll down to see the lower marker.</div><h2>Lower marker: scrolling worked</h2>
+<script>
+  let clicks=0;
+  document.getElementById('counter').onclick=()=>{clicks++;document.getElementById('counter').textContent='Click me: '+clicks;document.getElementById('count-result').textContent='Button changed';};
+  document.getElementById('submit').onclick=()=>{document.getElementById('text-result').textContent='Submitted: '+document.getElementById('entry').value;};
+</script>
+</html>

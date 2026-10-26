@@ -1,0 +1,39 @@
+:root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #eef4fb; background: #080c15; }
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; height: 100%; }
+body { overflow: hidden; }
+[hidden] { display: none !important; }
+button, input, a { font: inherit; }
+button, a { color: inherit; }
+button:focus, a:focus, input:focus, .keyboard-key.is-selected { outline: 3px solid #e8f5ff; outline-offset: 2px; }
+.input-shell { height: 100vh; display: flex; flex-direction: column; gap: 1vh; padding: 2.2vh 2.5vw; }
+.input-shell header { display: flex; align-items: center; justify-content: space-between; }
+.brand { font-size: clamp(26px, 2.5vw, 48px); letter-spacing: .17em; }
+.tag { margin-left: 2vw; color: #9fb5cb; font-size: clamp(16px, 1.2vw, 24px); }
+.input-shell header a, #input-controls button { border: 1px solid #7794ae; border-radius: 10px; background: #203a53; padding: 1vh 1vw; text-decoration: none; cursor: pointer; }
+.intro, .recovery { margin: .5vh 0; font-size: clamp(15px, 1.05vw, 21px); color: #b9cbdc; }
+#input-controls { display: flex; flex-wrap: wrap; gap: .6vw; }
+#input-controls button { min-height: 5vh; font-size: clamp(16px, 1.05vw, 22px); }
+.input-status { min-height: 3vh; color: #d4e8fa; font-size: clamp(17px, 1.2vw, 24px); }
+.frame-shell { flex: 1; min-height: 24vh; border: 1px solid #8caac5; border-radius: 12px; overflow: hidden; background: #fff; }
+.frame-shell iframe { width: 100%; height: 100%; border: 0; }
+.diagnostics { border: 1px solid #526f8b; border-radius: 11px; padding: 1vh 1vw; background: #13243a; font-size: clamp(15px, 1vw, 20px); }
+.diagnostics > div { display: flex; gap: 2vw; margin: .5vh 0; }
+.diagnostics p { margin: .5vh 0; color: #b2c8da; }
+#event-list { display: flex; flex-wrap: wrap; gap: .3vw 1vw; max-height: 10vh; overflow: hidden; margin: .5vh 0; padding-left: 1.5vw; color: #a9d4f2; }
+#event-list li { min-width: 15%; }
+.recovery { color: #e2d5a6; }
+.keyboard-panel { position: fixed; inset: auto 8vw 4vh; z-index: 20; padding: 2vh 2vw; border: 2px solid #b6dcfb; border-radius: 17px; background: #0b1422; box-shadow: 0 0 0 100vmax rgba(0,0,0,.7); }
+.keyboard-head { display: flex; justify-content: space-between; font-size: clamp(16px, 1.3vw, 28px); }
+#local-input, .keyboard-preview { display: block; width: 100%; min-height: 5vh; margin: 1vh 0; padding: .5vh 1vw; border: 1px solid #657e94; border-radius: 8px; background: #15253a; color: white; font-size: clamp(20px, 1.8vw, 36px); }
+.keyboard-preview { white-space: nowrap; overflow: hidden; }
+.keyboard-grid { display: flex; flex-direction: column; gap: .7vh; }
+.keyboard-row { display: flex; justify-content: center; gap: .5vw; }
+.keyboard-key { min-width: 5.5vw; min-height: 5.5vh; border: 1px solid #637a92; border-radius: 8px; background: #23364d; color: white; font-size: clamp(17px, 1.4vw, 30px); }
+.keyboard-row:last-child .keyboard-key { min-width: 10vw; }
+.keyboard-key.is-shifted { background: #527da1; }
+.child-page { overflow-y: auto; padding: 3vw; font: 22px sans-serif; background: #14263a; color: #eef6ff; }
+.child-page a, .child-page button { display: inline-block; margin: 1vh; padding: 1vh 2vw; background: #345a7a; color: white; border: 2px solid #a3cae8; border-radius: 9px; }
+.child-page input { padding: 1vh; background: #fff; color: #111; }
+.child-page p { max-width: 75ch; }
+.child-page #lower { margin-top: 70vh; padding: 3vh; background: #29435c; }

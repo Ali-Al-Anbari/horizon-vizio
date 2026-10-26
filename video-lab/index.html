@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self' https://interactive-examples.mdn.mozilla.net https://media.w3.org https://devstreaming-cdn.apple.com; connect-src 'self'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <title>Horizon Video Lab</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="video-lab.css" />
+    <script src="video-lab.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="header">
+        <div><span class="brand">HORIZON</span><h1>Video Lab</h1></div>
+        <p>Native playback test · remote only</p>
+      </header>
+
+      <nav class="sources" aria-label="Test media">
+        <button id="source-original" type="button">Original · MDN flower</button>
+        <button id="source-mp4" type="button">Sintel · W3C external</button>
+        <button id="source-relay" type="button">Sintel · Cloudflare relay</button>
+        <button id="source-flowerRelay" type="button">Flower · Cloudflare relay</button>
+        <button id="source-local" type="button">Sintel · preview original</button>
+        <button id="source-faststart" type="button">Sintel · preview faststart</button>
+        <button id="source-compat" type="button">Sintel · preview Baseline</button>
+        <button id="source-long" type="button">25-minute test</button>
+        <button id="source-hls" type="button">HLS · Apple Bip Bop</button>
+      </nav>
+
+      <section id="player" class="player" aria-label="Video player">
+        <video id="video" playsinline preload="metadata" loop aria-label="Selected public test video"></video>
+        <div class="controls" aria-label="Playback controls">
+          <button id="seek-back" type="button">−10 seconds</button>
+          <button id="play" type="button">Play</button>
+          <button id="seek-forward" type="button">+10 seconds</button>
+          <button id="checkpoint" type="button">Next checkpoint</button>
+          <button id="fullscreen" type="button">Fullscreen</button>
+          <button id="exit" type="button">Back to Horizon</button>
+        </div>
+      </section>
+
+      <div class="readout">
+        <p id="status" role="status" aria-live="polite">Choose a sample, then press Play.</p>
+        <div class="progress-row"><progress id="progress" max="1" value="0"></progress><span id="time">0:00 / --:--</span></div>
+        <p id="source-label">Selected: Sintel · W3C external</p>
+        <p id="capabilities">Checking media APIs…</p>
+        <div id="diagnostics" class="diagnostics" hidden>
+          <p id="media-hints"></p>
+          <p id="relay-http"></p>
+          <p id="media-state"></p>
+          <p id="media-events"></p>
+          <p>HTTP status is not exposed by this video element; a media error alone cannot distinguish codec, response, and network failures.</p>
+        </div>
+        <p class="hint">Arrows move focus · OK activates · Back exits viewport fullscreen first, then returns to Horizon. The 25-minute test has a single continuous timeline and a Next checkpoint control for 5, 10, 15, 20, and 24 minutes.</p>
+        <p class="credit">Sintel © Blender Foundation · durian.blender.org · CC BY 3.0. HLS: Apple developer test stream.</p>
+      </div>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; frame-src 'self' https:; connect-src 'none'; img-src 'self' data:; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <title>Horizon Browser Input Lab</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="browser-input-lab.css" />
+    <script src="browser-lab-core.js" defer></script>
+    <script src="browser-lab-keyboard.js" defer></script>
+    <script src="browser-input-core.js" defer></script>
+    <script src="browser-input-lab.js" defer></script>
+  </head>
+  <body class="input-lab">
+    <main class="input-shell">
+      <header><div><span class="brand">HORIZON</span><span class="tag">REMOTE INPUT LAB</span></div><a id="back-lab" href="browser-lab.html">Back to Browser Lab</a></header>
+      <p class="intro">Compare where remote keys go while Horizon owns this page. External frame interaction must be judged by what the TV visibly does.</p>
+      <nav id="input-controls" aria-label="Input lab controls">
+        <button id="focus-toolbar" type="button">Focus toolbar</button>
+        <button id="show-local" type="button">Same-origin page</button>
+        <button id="show-example" type="button">example.com</button>
+        <button id="show-links" type="button">External links</button>
+        <button id="show-form" type="button">External form</button>
+        <button id="show-google" type="button">Google Search</button>
+        <button id="focus-page" type="button">Focus page</button>
+        <button id="open-keyboard" type="button">Local keyboard</button>
+        <button id="clear-events" type="button">Clear counts</button>
+      </nav>
+      <div class="input-status" id="input-status" role="status" aria-live="polite">Same-origin frame ready. Press Down or select Focus page.</div>
+      <div class="frame-shell">
+        <iframe id="local-frame" title="Same-origin input test page" src="browser-input-child.html" tabindex="0"></iframe>
+        <iframe id="external-frame" title="External website input test" sandbox="allow-scripts allow-forms" referrerpolicy="no-referrer" tabindex="0" hidden></iframe>
+      </div>
+      <section class="diagnostics" aria-label="Local input diagnostics">
+        <div><strong id="surface-label">Same-origin page</strong><span id="focus-label">Parent toolbar focused</span></div>
+        <div><span id="parent-count">Parent keys: 0</span><span id="child-count">Child keys: 0</span></div>
+        <p>Counts cover arrows, OK, and Back only. Parent counts cannot observe keys inside an external frame. A frame load event does not prove visible rendering.</p>
+        <ol id="event-list" aria-label="Recent safe events"></ol>
+      </section>
+      <p class="recovery">If an external frame captures the remote and Back fails, use TV Home or the verified iHeartRadio shortcut; the authenticated Conjure launcher can reopen this lab. Never enter credentials in this test.</p>
+    </main>
+    <section id="keyboard-panel" class="keyboard-panel" aria-label="Parent-owned TV keyboard" hidden>
+      <div class="keyboard-head"><strong>Parent-owned keyboard</strong><span>Arrows move · OK types · Back closes</span></div>
+      <input id="local-input" type="text" readonly inputmode="none" aria-label="Local keyboard test value" placeholder="Test text stays in this page" />
+      <div id="keyboard-preview" class="keyboard-preview" aria-live="polite"> </div>
+      <div id="keyboard-grid" class="keyboard-grid"></div>
+    </section>
+  </body>
+</html>

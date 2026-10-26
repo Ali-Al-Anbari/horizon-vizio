@@ -1,0 +1,16 @@
+{
+  // Local prototype only. The existing production Worker has no checked-in config.
+  "name": "horizon-vizio",
+  "main": "./cloud/bridge-worker.js",
+  "compatibility_date": "2026-10-19",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./frontend",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "LAUNCH_QUEUE", "class_name": "LaunchQueue" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LaunchQueue"] }]
+}

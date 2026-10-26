@@ -1,0 +1,11 @@
+{
+  "name": "horizon-video-lab-preview",
+  "compatibility_date": "2026-10-25",
+  "workers_dev": true,
+  "main": "./video-lab-media-worker.js",
+  "assets": {
+    "directory": "./video-lab",
+    "binding": "ASSETS",
+    "run_worker_first": ["/media/*"]
+  }
+}

@@ -1,0 +1,42 @@
+:root { font-family: system-ui, -apple-system, sans-serif; color: #f7f9ff; background: #101722; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.shell { max-width: 1500px; margin: auto; padding: 18px 26px; }
+header, .state, .footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+h1 { font-size: 26px; margin: 0 0 14px; }
+h1 small { font-size: 14px; color: #a9bbd9; }
+.exit, button {
+  background: #263955; color: white; border: 1px solid #6780a6;
+  border-radius: 8px; padding: 10px 13px; font: inherit; text-decoration: none;
+}
+.exit:focus, button:focus, input:focus, .is-selected { outline: 3px solid #8fd1ff; outline-offset: 2px; }
+button { cursor: pointer; }
+button:disabled { opacity: .5; }
+nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+#address { min-width: 250px; flex: 1; background: #f7f9ff; color: #15243b;
+  padding: 10px; border: 0; border-radius: 7px; font: inherit; }
+.state { font-size: 17px; color: #c7d8ef; min-height: 38px; }
+.viewport { position: relative; width: 100%; min-height: 520px; aspect-ratio: 16/9;
+  background: #e9eef4; overflow: hidden; border: 2px solid #59718f; border-radius: 7px; }
+.viewport img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.placeholder { position: absolute; inset: 0; display: grid; place-items: center;
+  color: #1c2c44; font-size: 24px; text-align: center; padding: 35px; }
+.cursor { position: absolute; left: 0; top: 0; width: 20px; height: 20px;
+  border: 3px solid #0b315c; background: #fff9a0; border-radius: 50%;
+  box-shadow: 0 0 0 2px white; pointer-events: none;
+  transform: translate3d(0,0,0); z-index: 5; }
+.footer { padding-top: 12px; }
+.gate { padding: 30px; background: #20314a; border-radius: 12px; }
+.code { font-size: 38px; letter-spacing: .15em; font-weight: 700; }
+.keyboard { position: fixed; z-index: 10; left: 6%; right: 6%; bottom: 4%;
+  padding: 18px; background: #17273f; border: 2px solid #83acdc;
+  border-radius: 14px; box-shadow: 0 0 0 100vmax #0009; }
+.keyboard h2 { margin: 0; }
+.keyboard-row { display: flex; justify-content: center; gap: 5px; margin: 5px; }
+.keyboard-key { min-width: 5%; padding: 8px; }
+.keyboard-key.is-selected { background: #477bac; }
+.keyboard p { margin: 7px 0; text-align: center; }
+#keyboard-preview { background: #eaf3fc; color: #13233c; min-height: 38px;
+  padding: 6px 12px; border-radius: 6px; word-break: break-word; }
+#timing { font-size: 13px; color: #bed1ed; }
+[hidden] { display: none !important; }

@@ -1,0 +1,24 @@
+{
+  "name": "horizon-cloud-browser-preview",
+  "main": "cloud/browser-preview-worker.js",
+  "compatibility_date": "2026-10-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "browser": { "binding": "BROWSER" },
+  "durable_objects": {
+    "bindings": [
+      { "name": "BROWSER_COORDINATOR", "class_name": "BrowserCoordinator" }
+    ]
+  },
+  "migrations": [
+    { "tag": "browser-preview-v1", "new_sqlite_classes": ["BrowserCoordinator"] }
+  ],
+  "assets": {
+    "directory": "./frontend",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/owner", "/", "/browser-cloud-lab.html"]
+  },
+  "vars": {
+    "BROWSER_PREVIEW_ORIGIN": "https://horizon-cloud-browser-preview.ali-al-anbari.workers.dev/"
+  }
+}

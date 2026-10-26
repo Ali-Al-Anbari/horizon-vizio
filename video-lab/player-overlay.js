@@ -6,10 +6,10 @@
     CONTROLS_VISIBLE: "CONTROLS_VISIBLE",
     SUBMENU_OPEN: "SUBMENU_OPEN",
     COMMAND_IN_PROGRESS: "COMMAND_IN_PROGRESS",
+    UP_NEXT: "UP_NEXT",
   };
-  var PLAYER_URL = "https://yapgrid.com/embed/tv/2190/13/2";
   var PREVIEW_ORIGIN = "https://horizon-video-lab-preview.ali-al-anbari.workers.dev";
-  var CONTROL_IDS = ["rewind", "play-pause", "forward", "subtitles", "episodes"];
+  var CONTROL_IDS = ["rewind", "play-pause", "forward", "previous-episode", "subtitles", "episodes", "next-episode", "manual-end"];
   var COMMANDS = { rewind: "seek_backward", "play-pause": "pause_toggle", forward: "seek_forward" };
   var IDLE_MS = 5000;
   // A watchdog for a future acknowledged adapter, not a delay before sending.
@@ -40,9 +40,15 @@
     var overlay = get("overlay");
     var controls = CONTROL_IDS.map(get);
     var menuButtons = [get("menu-cancel"), get("menu-change")];
+    var upNextButtons = [get("up-next-play"), get("up-next-cancel")];
+    var catalog = root.HorizonEpisodes;
+    var route = catalog.parse(nav.search);
+    var currentEpisode = route.current;
+    var manualEndEnabled = route.testEnd && nav.origin === PREVIEW_ORIGIN;
+    var resolver = options && options.episodeResolver || catalog.createResolver({ clock: clock });
     var adapter = options && options.commandAdapter;
     if (!adapter && root.HorizonPlayerBridge) adapter = root.HorizonPlayerBridge.create(clock);
-    var subtitleMode = /(?:^|[?&])sub=off(?:&|$)/.test(nav.search || "") ? "off" : "on";
+    var subtitleMode = route.subtitle;
     var selected = 1;
     var menuSelected = 0;
     var menuConfirm = false;
@@ -60,8 +66,32 @@
     var batchPollTimer = null;
     var batchStopTimer = null;
     var seekLevels = { rewind: 0, forward: 0 };
+    var upNextTimer = null;
+    var upNextDeadline = null;
+    var upNextSelected = 0;
+    var upNextTarget = null;
+    var transitionStarted = false;
+    var episodeLookup = 0;
+    var episodeLookupPending = false;
+    var pendingEpisode = null;
+    var pauseTrace = null;
+    var lastPauseTiming = null;
 
     function now() { return clock.performance && clock.performance.now ? clock.performance.now() : Date.now(); }
+    function markPause(stage) { if (pauseTrace) pauseTrace[stage] = now(); }
+    function finishPauseTiming() {
+      if (!pauseTrace) return;
+      pauseTrace.restoredAt = now();
+      lastPauseTiming = pauseTrace;
+      if (pauseTrace.hidden) {
+        var summary = " Quick Pause: bar " + Math.round(pauseTrace.overlayAt - pauseTrace.inputAt)
+          + " ms; ready " + (pauseTrace.readyAt === undefined ? "?" : Math.round(pauseTrace.readyAt - pauseTrace.inputAt))
+          + " ms; reply " + (pauseTrace.replyAt === undefined ? "?" : Math.round(pauseTrace.replyAt - pauseTrace.inputAt))
+          + " ms; focus " + Math.round(pauseTrace.restoredAt - pauseTrace.inputAt) + " ms.";
+        get("command-status").textContent += summary;
+      }
+      pauseTrace = null;
+    }
     function renderSeekLabels() {
       get("rewind-label").textContent = "−" + SEEK_LABELS[seekLevels.rewind];
       get("forward-label").textContent = "+" + SEEK_LABELS[seekLevels.forward];
@@ -76,7 +106,8 @@
       var label = id === "forward" ? "Forward " + get("forward-label").textContent
         : "Rewind " + get("rewind-label").textContent;
       var arrows = id === "forward" ? "Right more · Left less" : "Left more · Right less";
-      return label + " · " + arrows + " · OK seeks · Up Play/Pause · Down Subtitles";
+      return label + " · " + arrows + " · OK seeks · Up Play/Pause · Down "
+        + (id === "forward" ? "Next Episode" : "Previous Episode");
     }
     function adjustSeek(id, key) {
       var increase = id === "forward" ? key === "ArrowRight" : key === "ArrowLeft";
@@ -110,9 +141,14 @@
       if (visible) overlay.classList.add("is-visible");
       else overlay.classList.remove("is-visible");
       overlay.setAttribute("aria-hidden", visible ? "false" : "true");
-      controls.forEach(function (button) { button.tabIndex = visible ? 0 : -1; });
+      controls.forEach(function (button) { button.tabIndex = visible && !button.hidden ? 0 : -1; });
     }
     function focusControl(index) {
+      if (selected !== index) {
+        pendingEpisode = null;
+        episodeLookup += 1;
+        episodeLookupPending = false;
+      }
       selected = Math.max(0, Math.min(controls.length - 1, index));
       var id = CONTROL_IDS[selected];
       focus(controls[selected]);
@@ -127,16 +163,19 @@
       selected = 1;
       setOverlayVisible(true);
       focusControl(selected);
+      markPause("overlayAt");
       get("command-status").textContent = adapter && typeof adapter.send === "function"
         ? "Preparing secure player connection…"
         : "Playback commands unavailable until the secure Pico bridge is connected.";
       if (adapter && typeof adapter.open === "function") {
         adapter.open().then(function () {
-          if (!disposed && state === STATES.CONTROLS_VISIBLE) {
+          if (!disposed && state === STATES.CONTROLS_VISIBLE
+              && get("command-status").textContent === "Preparing secure player connection…") {
             get("command-status").textContent = "Player connection ready; playback effect remains unverified.";
           }
         }, function (error) {
-          if (!disposed && state === STATES.CONTROLS_VISIBLE) {
+          if (!disposed && state === STATES.CONTROLS_VISIBLE
+              && get("command-status").textContent === "Preparing secure player connection…") {
             get("command-status").textContent =
               "Bridge error: " + (error && error.message ? error.message : "unknown");
           }
@@ -148,9 +187,13 @@
     function hideControls() {
       if (disposed || state !== STATES.CONTROLS_VISIBLE) return;
       clearIdle();
+      episodeLookup += 1;
+      episodeLookupPending = false;
+      pendingEpisode = null;
       resetSeekSelection();
       state = STATES.PLAYBACK_HIDDEN;
       setOverlayVisible(false);
+      overlay.classList.remove("is-quick-pause");
       get("command-status").textContent = "";
       if (adapter && typeof adapter.close === "function") adapter.close();
       focus(capture);
@@ -159,13 +202,16 @@
     function navigate(key) {
       var next = selected;
       if (key === "ArrowLeft") {
-        if (selected === 1 || selected === 2 || selected === 4) next -= 1;
+        if (selected === 1 || selected === 2 || (selected >= 4 && selected <= 6)) next -= 1;
       } else if (key === "ArrowRight") {
-        if (selected === 0 || selected === 1 || selected === 3) next += 1;
+        if (selected === 0 || selected === 1 || (selected >= 3 && selected <= 5)) next += 1;
       } else if (key === "ArrowDown") {
-        if (selected <= 2) next = 3;
+        if (selected <= 2) next = [3, 4, 6][selected];
+        else if (selected <= 6 && manualEndEnabled) next = 7;
       } else if (key === "ArrowUp") {
-        if (selected === 0 || selected === 2 || selected >= 3) next = 1;
+        if (selected === 0 || selected === 2) next = 1;
+        else if (selected >= 3 && selected <= 6) next = selected === 3 ? 0 : selected === 6 ? 2 : 1;
+        else if (selected === 7) next = 5;
       }
       if (next !== selected) focusControl(next);
     }
@@ -175,7 +221,7 @@
       menuButtons.forEach(function (button) { button.tabIndex = -1; });
       menuConfirm = false;
       state = STATES.CONTROLS_VISIBLE;
-      focusControl(3);
+      focusControl(4);
       resetIdle();
     }
     function openMenu() {
@@ -204,8 +250,7 @@
         focus(menuButtons[0]);
         return;
       }
-      dispose();
-      nav.replace("player-overlay.html?sub=" + (subtitleMode === "on" ? "off" : "on"));
+      transitionTo(catalog.pageUrl(currentEpisode, subtitleMode === "on" ? "off" : "on", manualEndEnabled));
     }
     function restoreFromCommand(reason, late, parentFocused) {
       if (disposed || state !== STATES.COMMAND_IN_PROGRESS) return;
@@ -229,6 +274,7 @@
         : "Horizon focus was requested; remote response must be checked on the TV.";
       activeCommand = null;
       commandStartedAt = null;
+      finishPauseTiming();
       if (activeBatch) {
         activeBatch.focusRestoreMs = Math.round(now() - activeBatch.startedAt);
         if (reason === "timeout") {
@@ -374,8 +420,10 @@
           });
           return;
         }
+        markPause("dispatchedAt");
         Promise.resolve(adapter.send(command)).then(function (result) {
           if (disposed || sequence !== commandNumber || state !== STATES.COMMAND_IN_PROGRESS) return;
+          markPause("replyAt");
           var elapsed = clock.performance && clock.performance.now
             ? Math.round(clock.performance.now() - commandStartedAt) : null;
           commandMessage = result && result.accepted === true
@@ -384,6 +432,7 @@
           lease.restore("adapter_result");
         }, function () {
           if (disposed || sequence !== commandNumber || state !== STATES.COMMAND_IN_PROGRESS) return;
+          markPause("replyAt");
           commandMessage = "Controller command failed or timed out; playback effect is unknown.";
           lease.restore("adapter_error");
         });
@@ -398,8 +447,11 @@
     }
     function requestCommand(id) {
       if (disposed || state !== STATES.CONTROLS_VISIBLE || !COMMANDS[id]) return;
+      if (id === "play-pause" && !pauseTrace) pauseTrace = { inputAt: now(), hidden: false };
+      if (id !== "play-pause") pauseTrace = null;
       if (!adapter || typeof adapter.send !== "function") {
         get("command-status").textContent = "No secure Pico bridge is connected. No key was sent or focus transferred.";
+        finishPauseTiming();
         resetIdle();
         return;
       }
@@ -433,6 +485,7 @@
           if (activeBatch) finishBatch({ state: "failed", acknowledged: 0 });
           return;
         }
+        markPause("focusedAt");
         if (typeof clock.requestAnimationFrame === "function") {
           dispatchFrame = clock.requestAnimationFrame(function () {
             dispatchFrame = null;
@@ -447,13 +500,17 @@
       }
       if (typeof adapter.ready === "function") {
         get("command-status").textContent = "Waiting for secure TV connection…";
-        Promise.resolve(adapter.ready()).then(beginHandoff, function () {
+        Promise.resolve(adapter.ready()).then(function () {
+          markPause("readyAt");
+          beginHandoff();
+        }, function () {
           if (disposed || sequence !== commandNumber || state !== STATES.COMMAND_IN_PROGRESS) return;
           if (activeBatch) activeBatch = null;
           commandMessage = "Player connection failed; no key was sent.";
           state = STATES.CONTROLS_VISIBLE;
           get("command-status").textContent = commandMessage;
           activeCommand = null;
+          finishPauseTiming();
           resetIdle();
         });
         return;
@@ -462,6 +519,118 @@
       // not a fixed millisecond delay or a claim of physical TV readiness.
       beginHandoff();
     }
+    function clearUpNext() {
+      if (upNextTimer !== null) { clock.clearTimeout(upNextTimer); upNextTimer = null; }
+      upNextDeadline = null;
+      upNextTarget = null;
+      get("up-next").hidden = true;
+      overlay.classList.remove("is-up-next");
+      upNextButtons.forEach(function (button) { button.tabIndex = -1; });
+    }
+    function transitionTo(url) {
+      if (disposed || transitionStarted || !url) return;
+      transitionStarted = true;
+      dispose();
+      nav.replace(url);
+    }
+    function episodeListUrl() {
+      return catalog.pageUrl(currentEpisode, subtitleMode, manualEndEnabled, "list");
+    }
+    function launchEpisode(target) {
+      transitionTo(catalog.pageUrl(target, subtitleMode, manualEndEnabled));
+    }
+    function transitionEpisode(direction) {
+      if (pendingEpisode && pendingEpisode.direction === direction) {
+        launchEpisode(pendingEpisode.target);
+        return;
+      }
+      if (episodeLookupPending) return;
+      episodeLookupPending = true;
+      var lookup = ++episodeLookup;
+      get("command-status").textContent = "Checking episode metadata…";
+      Promise.resolve().then(function () { return resolver.resolve(currentEpisode, direction); }).then(function (result) {
+        if (disposed || lookup !== episodeLookup || state !== STATES.CONTROLS_VISIBLE) return;
+        episodeLookupPending = false;
+        if (result && result.kind === "catalogued") {
+          pendingEpisode = { direction: direction, target: result.target };
+          get("command-status").textContent = "S" + result.target.season + " E" + result.target.episode
+            + " · " + result.target.title + " is listed by TVmaze. YapGrid playback unknown; press OK again to try.";
+        } else if (result && result.kind === "none_known") {
+          get(direction < 0 ? "previous-episode" : "next-episode").setAttribute("aria-disabled", "true");
+          get("command-status").textContent = direction < 0
+            ? "No earlier aired episode in metadata; YapGrid availability unknown."
+            : "No later aired episode in metadata; series status and YapGrid availability unknown.";
+        } else {
+          get("command-status").textContent = result && result.reason === "timeout"
+            ? "Episode metadata timed out; availability unknown. Press OK to retry."
+            : "Episode metadata unavailable; availability unknown. Press OK to retry.";
+        }
+        get("screen-reader-status").textContent = get("command-status").textContent;
+      }, function () {
+        if (disposed || lookup !== episodeLookup || state !== STATES.CONTROLS_VISIBLE) return;
+        episodeLookupPending = false;
+        get("command-status").textContent = "Episode metadata unavailable; availability unknown. Press OK to retry.";
+      });
+    }
+    function renderUpNext() {
+      var remaining = Math.max(0, Math.ceil((upNextDeadline - now()) / 1000));
+      get("up-next-countdown").textContent = "Playing next episode in " + remaining
+        + (remaining === 1 ? " second" : " seconds");
+      get("screen-reader-status").textContent = "Up Next: " + get("up-next-title").textContent
+        + ". " + remaining + " seconds. Choose Play now or Cancel.";
+    }
+    function tickUpNext() {
+      upNextTimer = null;
+      if (disposed || state !== STATES.UP_NEXT || upNextDeadline === null) return;
+      if (now() >= upNextDeadline) {
+        launchEpisode(upNextTarget);
+        return;
+      }
+      renderUpNext();
+      upNextTimer = clock.setTimeout(tickUpNext, Math.min(1000, upNextDeadline - now()));
+    }
+    function startUpNext() {
+      if (!manualEndEnabled || disposed || state !== STATES.CONTROLS_VISIBLE
+          || transitionStarted || episodeLookupPending) return;
+      episodeLookupPending = true;
+      var lookup = ++episodeLookup;
+      get("command-status").textContent = "Checking next episode metadata…";
+      Promise.resolve().then(function () { return resolver.resolve(currentEpisode, 1); }).then(function (result) {
+        if (disposed || lookup !== episodeLookup || state !== STATES.CONTROLS_VISIBLE) return;
+        episodeLookupPending = false;
+        if (!result || result.kind !== "catalogued") {
+          get("command-status").textContent = result && result.kind === "none_known"
+            ? "No later aired episode in metadata; series status and YapGrid availability unknown."
+            : "Next episode metadata unavailable; autoplay cannot start safely.";
+          return;
+        }
+        beginUpNext(result.target);
+      }, function () {
+        if (disposed || lookup !== episodeLookup || state !== STATES.CONTROLS_VISIBLE) return;
+        episodeLookupPending = false;
+        get("command-status").textContent = "Next episode metadata unavailable; autoplay cannot start safely.";
+      });
+    }
+    function beginUpNext(next) {
+      clearIdle();
+      state = STATES.UP_NEXT;
+      upNextTarget = next;
+      upNextDeadline = now() + 10000;
+      upNextSelected = 0;
+      get("up-next-title").textContent = "S" + next.season + " E" + next.episode + " · " + next.title;
+      get("up-next").hidden = false;
+      overlay.classList.add("is-up-next");
+      upNextButtons.forEach(function (button) { button.tabIndex = 0; });
+      controls.forEach(function (button) { button.tabIndex = -1; });
+      renderUpNext();
+      focus(upNextButtons[0]);
+      upNextTimer = clock.setTimeout(tickUpNext, 1000);
+    }
+    function chooseUpNext() {
+      if (state !== STATES.UP_NEXT) return;
+      if (upNextSelected === 0) launchEpisode(upNextTarget);
+      else transitionTo(episodeListUrl());
+    }
     function activateControl() {
       var id = CONTROL_IDS[selected];
       if (activeBatch) {
@@ -469,8 +638,11 @@
         return;
       }
       if (COMMANDS[id]) requestCommand(id);
+      else if (id === "previous-episode") transitionEpisode(-1);
+      else if (id === "next-episode") transitionEpisode(1);
       else if (id === "subtitles") openMenu();
-      else if (id === "episodes") { dispose(); nav.replace("embed-matrix.html"); }
+      else if (id === "episodes") transitionTo(episodeListUrl());
+      else if (id === "manual-end") startUpNext();
     }
     function onKey(event) {
       if (disposed) return;
@@ -493,6 +665,8 @@
       if (state === STATES.PLAYBACK_HIDDEN) {
         if (key === "Back") { if (!event.repeat) { dispose(); nav.replace("embed-matrix.html"); } }
         else if (key === "OK" && !event.repeat) {
+          pauseTrace = { inputAt: now(), hidden: true };
+          overlay.classList.add("is-quick-pause");
           showControls();
           requestCommand("play-pause");
         } else if (!event.repeat || key.indexOf("Arrow") === 0) showControls();
@@ -506,6 +680,14 @@
         } else if (!event.repeat) chooseMenu();
         return;
       }
+      if (state === STATES.UP_NEXT) {
+        if (key === "Back") { if (!event.repeat) transitionTo(episodeListUrl()); }
+        else if (key.indexOf("Arrow") === 0) {
+          upNextSelected = key === "ArrowLeft" || key === "ArrowUp" ? 0 : 1;
+          focus(upNextButtons[upNextSelected]);
+        } else if (!event.repeat) chooseUpNext();
+        return;
+      }
       resetIdle();
       if (key === "Back") { if (!event.repeat) { if (activeBatch) cancelActiveBatch(); else hideControls(); } }
       else if (key === "OK") { if (!event.repeat) activateControl(); }
@@ -515,8 +697,12 @@
       } else navigate(key);
     }
     function dispose() {
+      if (disposed) return;
       disposed = true;
+      overlay.classList.remove("is-quick-pause");
+      episodeLookup += 1;
       clearIdle();
+      clearUpNext();
       if (batchPollTimer !== null) { clock.clearTimeout(batchPollTimer); batchPollTimer = null; }
       if (batchStopTimer !== null) { clock.clearTimeout(batchStopTimer); batchStopTimer = null; }
       if (dispatchTimer !== null) { clock.clearTimeout(dispatchTimer); dispatchTimer = null; }
@@ -530,17 +716,45 @@
       if (adapter && typeof adapter.dispose === "function") adapter.dispose();
     }
 
-    var subtitleUrl = PLAYER_URL + "?lang=en";
+    var playerUrl = catalog.embedUrl(currentEpisode);
+    var subtitleUrl = playerUrl + "?lang=en";
     if (subtitleMode === "off") {
       var origin = nav.origin && nav.origin !== "null" ? nav.origin : PREVIEW_ORIGIN;
-      subtitleUrl = PLAYER_URL + "?sub_url=" + encodeURIComponent(origin + "/empty.vtt")
+      subtitleUrl = playerUrl + "?sub_url=" + encodeURIComponent(origin + "/empty.vtt")
         + "&sub_lang=en&sub_label=Off";
     }
     frame.src = subtitleUrl; // One initial navigation; focus and overlay never reset it.
+    get("episode-caption").textContent = "Season " + currentEpisode.season + " · Episode "
+      + currentEpisode.episode;
+    get("previous-episode").setAttribute("aria-disabled", "false");
+    get("next-episode").setAttribute("aria-disabled", "false");
+    get("manual-end").hidden = !manualEndEnabled;
+    resolver.current(currentEpisode).then(function (found) {
+      if (!disposed && found && found.title) {
+        currentEpisode.title = found.title;
+        get("episode-caption").textContent += " · " + found.title;
+      }
+    });
+    [-1, 1].forEach(function (direction) {
+      resolver.resolve(currentEpisode, direction).then(function (result) {
+        if (disposed) return;
+        get(direction < 0 ? "previous-episode" : "next-episode")
+          .setAttribute("aria-disabled", result.kind === "none_known" ? "true" : "false");
+        if (direction === 1 && result.kind === "none_known" && manualEndEnabled) {
+          get("manual-end").hidden = true;
+          get("manual-end").tabIndex = -1;
+        }
+      });
+    });
     get("subtitle-mode").textContent = subtitleMode.toUpperCase();
     controls.forEach(function (button, index) {
       button.addEventListener("click", function () {
         if (disposed || state !== STATES.CONTROLS_VISIBLE) return;
+        if (selected !== index) {
+          pendingEpisode = null;
+          episodeLookup += 1;
+          episodeLookupPending = false;
+        }
         selected = index;
         resetIdle();
         activateControl();
@@ -553,12 +767,25 @@
         chooseMenu();
       });
     });
+    upNextButtons.forEach(function (button, index) {
+      button.addEventListener("click", function () {
+        if (state !== STATES.UP_NEXT) return;
+        upNextSelected = index;
+        chooseUpNext();
+      });
+    });
     doc.addEventListener("keydown", onKey);
     clock.addEventListener("pagehide", dispose);
     setOverlayVisible(false);
     renderSeekLabels();
     focus(capture);
-    return { onKey: onKey, getState: function () { return state; }, dispose: dispose };
+    return { onKey: onKey, getState: function () { return state; },
+      getLastPauseTiming: function () {
+        if (!lastPauseTiming) return null;
+        var snapshot = {};
+        Object.keys(lastPauseTiming).forEach(function (key) { snapshot[key] = lastPauseTiming[key]; });
+        return snapshot;
+      }, dispose: dispose };
   }
 
   root.HorizonPlayerOverlay = { createPlayer: createPlayer, keyName: keyName, STATES: STATES };

@@ -3,13 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src https://yapgrid.com; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.tvmaze.com; frame-src https://yapgrid.com; object-src 'none'; form-action 'none'; base-uri 'none'" />
     <meta name="color-scheme" content="dark" />
     <title>Horizon Video Lab · Player Overlay</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="player-overlay.css" />
     <script src="focus-lease.js" defer></script>
     <script src="player-bridge-client.js" defer></script>
+    <script src="episode-catalog.js" defer></script>
     <script src="player-overlay.js" defer></script>
   </head>
   <body>
@@ -21,7 +22,8 @@
         <div class="overlay-content">
           <p class="brand">HORIZON VIDEO</p>
           <h1>South Park</h1>
-          <p class="episode">Season 13 · Episode 2</p>
+          <p id="episode-caption" class="episode">Season 13 · Episode 2</p>
+          <p class="metadata-credit">Episode metadata: <a href="https://www.tvmaze.com/shows/112/south-park" tabindex="-1">TVmaze</a> · YapGrid playback availability is unverified</p>
           <p class="telemetry">Playback time and progress are unavailable from this embedded player.</p>
           <div class="control-row primary" aria-label="Playback actions">
             <button id="rewind" type="button" tabindex="-1"><span aria-hidden="true">↶</span><small id="rewind-label">−10s</small></button>
@@ -29,9 +31,22 @@
             <button id="forward" type="button" tabindex="-1"><span aria-hidden="true">↷</span><small id="forward-label">+10s</small></button>
           </div>
           <div class="control-row secondary" aria-label="More playback options">
+            <button id="previous-episode" type="button" tabindex="-1">Previous Episode</button>
             <button id="subtitles" type="button" tabindex="-1">Subtitles: <span id="subtitle-mode">ON</span></button>
-            <button id="episodes" type="button" tabindex="-1">Episodes / Video Lab</button>
+            <button id="episodes" type="button" tabindex="-1">Episode List</button>
+            <button id="next-episode" type="button" tabindex="-1">Next Episode</button>
           </div>
+          <div class="control-row test-row"><button id="manual-end" type="button" tabindex="-1" hidden>Test: episode ended</button></div>
+          <section id="up-next" class="up-next" aria-label="Up Next" hidden>
+            <p class="brand">UP NEXT</p>
+            <h2 id="up-next-title"></h2>
+            <p class="up-next-availability">YapGrid playback availability is unverified.</p>
+            <p id="up-next-countdown"></p>
+            <div class="menu-actions">
+              <button id="up-next-play" type="button" tabindex="-1">Play now</button>
+              <button id="up-next-cancel" type="button" tabindex="-1">Cancel · Episode List</button>
+            </div>
+          </section>
           <section id="subtitle-menu" class="subtitle-menu" aria-label="Subtitle settings" hidden>
             <h2 id="menu-title">Subtitle mode</h2>
             <p id="menu-description">Changing subtitles reloads YapGrid and may lose your position.</p>

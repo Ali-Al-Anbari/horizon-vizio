@@ -8,10 +8,13 @@ html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .overlay { position: absolute; inset: 0; z-index: 2; display: flex; align-items: flex-end; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .16s ease, visibility 0s linear .16s; }
 .overlay::before { content: ""; position: absolute; inset: 48% 0 0; background: linear-gradient(transparent, rgba(2, 7, 16, .58) 55%, rgba(2, 7, 16, .9)); }
 .overlay.is-visible { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity .16s ease; }
+.overlay.is-visible.is-quick-pause { transition: none; }
 .overlay-content { position: relative; width: 100%; padding: 0 4vw 3vh; }
 .brand { margin: 0 0 .35rem; color: #9db7d8; font-size: clamp(12px, .85vw, 16px); font-weight: bold; letter-spacing: .13em; }
 h1 { margin: 0; font-size: clamp(24px, 2.1vw, 40px); line-height: 1.1; }
 .episode { margin: .2rem 0 .5rem; font-size: clamp(16px, 1.1vw, 22px); color: #d1ddec; }
+.metadata-credit { margin: 0 0 .4rem; font-size: clamp(11px, .7vw, 14px); color: #b6c9df; }
+.metadata-credit a { color: #d8e8ff; }
 .telemetry { display: none; }
 .control-row { display: flex; justify-content: center; align-items: center; gap: .65rem; }
 .control-row button, .menu-actions button { border: 1px solid rgba(218, 232, 250, .46); border-radius: .65rem; background: rgba(15, 33, 53, .72); color: inherit; font: inherit; cursor: pointer; }
@@ -21,6 +24,14 @@ h1 { margin: 0; font-size: clamp(24px, 2.1vw, 40px); line-height: 1.1; }
 .primary #play-pause { width: clamp(112px, 9vw, 168px); border-color: #8bbbea; background: rgba(25, 72, 122, .88); }
 .secondary { margin-top: .55rem; }
 .secondary button { min-width: clamp(155px, 13vw, 235px); min-height: 2.8rem; padding: .35rem .75rem; font-size: clamp(14px, .95vw, 18px); }
+button[aria-disabled="true"] { opacity: .5; }
+.test-row { margin-top: .35rem; }
+.test-row button { min-height: 2rem; padding: .2rem .7rem; font-size: .8rem; }
+.test-row [hidden], .up-next[hidden] { display: none; }
+.up-next { position: absolute; right: 4vw; bottom: 2vh; width: min(35vw, 560px); padding: 1rem; border: 1px solid #8abaff; border-radius: .8rem; background: #0b192a; box-shadow: 0 10px 30px rgba(0, 0, 0, .45); }
+.up-next h2 { margin: .2rem 0; font-size: clamp(20px, 1.6vw, 30px); }
+.up-next p { margin: .3rem 0 .7rem; }
+.overlay.is-up-next .control-row, .overlay.is-up-next .command-status { visibility: hidden; }
 button:focus { outline: 3px solid #fff; outline-offset: 3px; background: #316ba6; transform: scale(1.025); }
 .subtitle-menu { position: absolute; right: 4vw; bottom: 2vh; width: min(38vw, 620px); padding: 1.15rem; border: 1px solid #8abaff; border-radius: .8rem; background: #0b192a; box-shadow: 0 10px 30px rgba(0, 0, 0, .45); }
 .subtitle-menu[hidden] { display: none; }
@@ -30,4 +41,9 @@ button:focus { outline: 3px solid #fff; outline-offset: 3px; background: #316ba6
 .menu-actions button { flex: 1; min-height: 3.5rem; padding: .5rem; font-size: clamp(17px, 1.1vw, 21px); }
 .command-status { min-height: 1.2rem; margin: .45rem 0 0; text-align: center; font-size: clamp(13px, .9vw, 17px); color: #d8e8ff; }
 .screen-reader-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.episode-list-placeholder { background: #071321; }
+.episode-list-placeholder main { max-width: 46rem; margin: 15vh auto; padding: 2rem; }
+.episode-list-placeholder p { color: #d1ddec; font-size: 1.2rem; }
+.episode-list-placeholder a { display: inline-block; margin-top: 1rem; padding: .85rem 1.2rem; border: 1px solid #8bbbea; border-radius: .65rem; color: #fff; background: #19487a; font-size: 1.2rem; }
+.episode-list-placeholder a:focus { outline: 3px solid #fff; outline-offset: 3px; }
 @media (prefers-reduced-motion: reduce) { .overlay { transition: none; } button:focus { transform: none; } }

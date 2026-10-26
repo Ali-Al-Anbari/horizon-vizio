@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; frame-src https://yapgrid.com; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <meta name="color-scheme" content="dark" />
+    <title>Horizon Video Lab · Focus Switch</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="focus-switch.css" />
+    <script src="focus-switch.js" defer></script>
+  </head>
+  <body>
+    <main class="stage">
+      <iframe id="player" title="YapGrid focus-switch experiment"
+        src="https://yapgrid.com/embed/tv/2190/13/2"
+        allow="autoplay; fullscreen" referrerpolicy="no-referrer" tabindex="-1"></iframe>
+      <header class="heading">
+        <div><span class="brand">HORIZON VIDEO LAB</span><h1>Focus-switch experiment</h1></div>
+        <p>Parent focus is the starting state. The iframe stays loaded during every focus test.</p>
+      </header>
+      <section class="panel" aria-label="Remote focus experiment controls">
+        <div class="controls">
+          <button id="focus-parent" type="button">Focus Horizon</button>
+          <button id="focus-child" type="button">Focus YapGrid · 3 s</button>
+          <button id="arm" type="button">Arm Focus Transfer</button>
+          <button id="restore" type="button">Restore Horizon Focus</button>
+          <button id="window" type="button">Window: 10 s</button>
+          <button id="focus-target" class="focus-target" type="button">HORIZON FOCUS TARGET · OK TEST</button>
+          <button id="exit" type="button">Back to Video Lab</button>
+        </div>
+        <div class="readout">
+          <p id="state" role="status" aria-live="polite">Initializing parent focus…</p>
+          <p id="countdown">Automatic restoration: idle</p>
+          <p id="focus-report">Browser focus report: waiting</p>
+          <p id="ok-count">Horizon target OK activations: 0</p>
+          <p class="note">Arrows move between Horizon buttons. OK activates the highlighted button. Back cancels a transfer when Horizon receives it; otherwise Back returns to Video Lab. If the iframe traps input, wait for automatic restoration. TV Home and an external Conjure relaunch are the fallback.</p>
+          <p class="note">SmartCast Space/Right must be sent manually from the Mac during the countdown. This page cannot read YapGrid playback state or events inside the cross-origin iframe.</p>
+          <p id="events" aria-label="Recent parent browser events">Parent events: none.</p>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

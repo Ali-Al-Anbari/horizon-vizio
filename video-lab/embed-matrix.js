@@ -6,19 +6,37 @@
   // tested so the matrix stays reproducible. Do not add sandbox tokens to make
   // a provider play.
   var VIDLOVE = "https://player.vidlove.cc/embed/tv/2190/13/2";
+  var VIDLINK = "https://vidlink.pro/tv/2190/13/2";
+  var EMBEDWAVE = "https://embedwave.cc/embed/tv/2190/13/2";
+  var PREVIEW_ORIGIN = (typeof location !== "undefined" && location.origin && location.origin !== "null")
+    ? location.origin
+    : "https://horizon-video-lab-preview.ali-al-anbari.workers.dev";
+  var EMPTY_VTT_URL = PREVIEW_ORIGIN + "/empty.vtt";
+  var YAPGRID = "https://yapgrid.com/embed/tv/2190/13/2";
+  var YAPGRID_SUB = "https://yapgrid.com/embed/tv/2190/13/2?lang=en";
+  var YAPGRID_OFF = "https://yapgrid.com/embed/tv/2190/13/2?sub_url="
+    + encodeURIComponent(EMPTY_VTT_URL)
+    + "&sub_lang=en&sub_label=Off";
   var YOUTUBE = "https://www.youtube.com/embed/M7lc1UVf-VE";
   var HORIZON = "https://horizon-vizio.ali-al-anbari.workers.dev/";
   var STRICT = "allow-scripts allow-presentation";
-  var SAFETY_MS = 30000;
   var MODES = {
-    strict: { label: "VidLove · strict", url: VIDLOVE, sandbox: STRICT },
+    strict: { label: "VidLove · strict", url: VIDLOVE, sandbox: STRICT, allow: "autoplay; fullscreen" },
     origin: { label: "VidLove · same-origin", url: VIDLOVE,
-      sandbox: "allow-scripts allow-same-origin allow-presentation" },
-    unsandboxed: { label: "VidLove · unsandboxed", url: VIDLOVE, sandbox: null },
-    youtube: { label: "YouTube official sample · strict", url: YOUTUBE, sandbox: STRICT },
+      sandbox: "allow-scripts allow-same-origin allow-presentation", allow: "autoplay; fullscreen" },
+    unsandboxed: { label: "VidLove · unsandboxed (autoplay)", url: VIDLOVE, sandbox: null, allow: "autoplay; fullscreen" },
+    "user-play": { label: "VidLove · unsandboxed (user-init)", url: VIDLOVE, sandbox: null, allow: "fullscreen" },
+    vidlink: { label: "VidLink", url: VIDLINK, sandbox: null, allow: "autoplay; fullscreen" },
+    embedwave: { label: "EmbedWave", url: EMBEDWAVE, sandbox: null, allow: "autoplay; fullscreen; picture-in-picture; encrypted-media" },
+    yapgrid: { label: "YapGrid", url: YAPGRID, sandbox: null, allow: "autoplay; fullscreen" },
+    "yapgrid-sub": { label: "YapGrid (en sub)", url: YAPGRID_SUB, sandbox: null, allow: "autoplay; fullscreen" },
+    "yapgrid-off": { label: "YapGrid (sub off)", url: YAPGRID_OFF, sandbox: null, allow: "autoplay; fullscreen" },
+    youtube: { label: "YouTube official sample · strict", url: YOUTUBE, sandbox: STRICT, allow: "autoplay; fullscreen" },
   };
-  var IDS = ["strict", "origin", "unsandboxed", "youtube", "stop", "observed-player",
-    "observed-blank", "observed-media-error", "back-lab", "horizon"];
+  var IDS = ["strict", "origin", "unsandboxed", "user-play", "vidlink", "embedwave", "yapgrid", "yapgrid-sub", "yapgrid-off", "youtube",
+    "ctl-play", "ctl-seek-back", "ctl-seek-fwd", "ctl-sub", "control-player",
+    "fullscreen-api", "fullscreen-css", "stop",
+    "observed-player", "observed-blank", "observed-media-error", "back-lab", "horizon"];
 
   function keyName(event) {
     var key = event && event.key;
@@ -39,13 +57,13 @@
     var controls = IDS.map(get);
     var focused = 0;
     var mode = null;
+    var isControllingPlayer = false;
     var startedAt = 0;
     var loadSeen = false;
     var observed = false;
     var parentBlocked = false;
     var navigationTimer = null;
     var observationTimer = null;
-    var safetyTimer = null;
     var blurTimer = null;
     var disposed = false;
     var signals = [];
@@ -66,7 +84,6 @@
     function clearTimers() {
       if (navigationTimer !== null) { clock.clearTimeout(navigationTimer); navigationTimer = null; }
       if (observationTimer !== null) { clock.clearTimeout(observationTimer); observationTimer = null; }
-      if (safetyTimer !== null) { clock.clearTimeout(safetyTimer); safetyTimer = null; }
       if (blurTimer !== null) { clock.clearTimeout(blurTimer); blurTimer = null; }
     }
     // Replace the iframe with a never-navigated clone of the verified markup.
@@ -76,6 +93,7 @@
     // into the third-party page after unload. The clone's first navigation
     // replaces its initial about:blank entry instead of adding history.
     function discardFrame() {
+      isControllingPlayer = false;
       var parent = frame.parentNode;
       if (!parent || typeof frame.cloneNode !== "function") {
         frame.hidden = true;
@@ -91,8 +109,65 @@
       frame = fresh;
       bindFrame(fresh);
     }
+    var stage = frame.parentNode;
+    var isCssFullscreen = false;
+
+    function leaveCssFullscreen() {
+      if (!isCssFullscreen) return;
+      isCssFullscreen = false;
+      if (stage) stage.classList.remove("viewport-fullscreen");
+      doc.body.classList.remove("stage-fullscreen");
+      get("fullscreen-css").textContent = "Test CSS Fullscreen";
+      say("Exited CSS fullscreen.");
+      focus(IDS.indexOf("fullscreen-css"));
+    }
+
+    function toggleCssFullscreen() {
+      if (!mode) { say("Load an embed before testing fullscreen."); return; }
+      if (isCssFullscreen) {
+        leaveCssFullscreen();
+        return;
+      }
+      isCssFullscreen = true;
+      if (stage) stage.classList.add("viewport-fullscreen");
+      doc.body.classList.add("stage-fullscreen");
+      get("fullscreen-css").textContent = "Exit CSS Fullscreen";
+      say("Entered CSS fullscreen. Note: this enlarges the iframe container, not the inner video element directly. Press Back to exit.");
+    }
+
+    function requestApiFullscreen() {
+      if (!mode) { say("Load an embed before testing fullscreen."); return; }
+      say("Requesting API fullscreen on the iframe container...");
+      var req = frame.requestFullscreen || frame.webkitRequestFullscreen || frame.mozRequestFullScreen || frame.msRequestFullscreen;
+      if (typeof req !== "function") {
+        say("Fullscreen API is not supported on this iframe element.");
+        note("fullscreen API unsupported");
+        return;
+      }
+      try {
+        var p = req.call(frame);
+        if (p && typeof p.then === "function") {
+          p.then(function () {
+            say("Iframe requestFullscreen succeeded. Inspect TV to see if inner video or container filled screen.");
+            note("fullscreen API resolved");
+          }).catch(function (err) {
+            say("Iframe requestFullscreen rejected: " + ((err && err.message) || "permission or engine error") + ".");
+            note("fullscreen API rejected");
+          });
+        } else {
+          say("Iframe requestFullscreen invoked (legacy synchronous). Inspect TV.");
+          note("fullscreen API invoked");
+        }
+      } catch (err) {
+        say("Iframe requestFullscreen threw: " + ((err && err.message) || err) + ".");
+        note("fullscreen API threw");
+      }
+    }
+
     function stop(message) {
       clearTimers();
+      isControllingPlayer = false;
+      leaveCssFullscreen();
       mode = null;
       discardFrame();
       get("placeholder").hidden = false;
@@ -104,6 +179,7 @@
     function load(name) {
       if (disposed || !MODES[name]) return;
       if (mode) { say("Stop and unload before switching modes."); return; }
+      isControllingPlayer = false;
       var selected = MODES[name];
       mode = name;
       loadSeen = false;
@@ -118,6 +194,9 @@
       } else {
         frame.setAttribute("sandbox", selected.sandbox);
       }
+      if (selected.allow) {
+        frame.setAttribute("allow", selected.allow);
+      }
       frame.hidden = false;
       get("placeholder").hidden = true;
       startedAt = now();
@@ -131,16 +210,42 @@
           say("No parent iframe load event after 12 seconds. Network, embedding policy, and browser behavior remain indistinguishable.");
         }
       }, 12000);
-      // Runs from the request time regardless of render state or remote input;
-      // this is why a frame that did render disappears about 30 s after OK.
-      safetyTimer = clock.setTimeout(function () {
-        safetyTimer = null;
-        if (mode === name && !disposed) {
-          note("30-second safety unload");
-          stop("Frame auto-unloaded after 30 seconds. Back returns to the fixture lab.");
-        }
-      }, SAFETY_MS);
       focus(IDS.indexOf(name));
+    }
+    function controlAction(action) {
+      if (!mode) {
+        say("Load a provider before using playback controls.");
+        return;
+      }
+      // Report verified facts: cross-origin players cannot be controlled without a verified external messaging API
+      if (action === "play") {
+        say("Play/Pause requested. Note: YapGrid and cross-origin providers have no public messaging API; use their on-screen player controls.");
+        note("ctl-play requested");
+      } else if (action === "seek-back") {
+        say("Seek -10s requested. Note: YapGrid does not expose a parent seek API; use on-screen scrub controls.");
+        note("ctl-seek-back requested");
+      } else if (action === "seek-fwd") {
+        say("Seek +10s requested. Note: YapGrid does not expose a parent seek API; use on-screen scrub controls.");
+        note("ctl-seek-fwd requested");
+      } else if (action === "sub") {
+        say("Subtitles requested. Use 'YapGrid (en sub)' for ?lang=en, or 'YapGrid (sub off)' for empty VTT suppression, or use YapGrid's in-player CC menu.");
+        note("ctl-sub requested");
+      }
+    }
+    function enterPlayerControl() {
+      if (!mode) {
+        say("Load a provider before transferring remote control.");
+        return;
+      }
+      isControllingPlayer = true;
+      frame.tabIndex = 0;
+      try {
+        frame.focus({ preventScroll: true });
+      } catch (_e) {
+        try { frame.focus(); } catch (_e2) {}
+      }
+      note("transferred focus to player");
+      say("Remote focus transferred to player. Use Vizio remote (OK, arrows) to operate in-player controls. If Back is trapped, use TV Home to exit and relaunch.");
     }
     function observe(value) {
       if (!mode) { say("Load a mode before recording a TV observation."); return; }
@@ -156,26 +261,47 @@
       nav.replace(url);
     }
     function activate(index) {
-      if (index === 0) load("strict");
-      else if (index === 1) load("origin");
-      else if (index === 2) load("unsandboxed");
-      else if (index === 3) load("youtube");
-      else if (index === 4) stop();
-      else if (index === 5) observe("player visible");
-      else if (index === 6) observe("blank after flash or load");
-      else if (index === 7) observe("media error shown inside frame");
-      else if (index === 8) exit("embed-lab.html");
-      else if (index === 9) exit(HORIZON);
+      var id = IDS[index];
+      if (!id) return;
+      if (MODES[id]) load(id);
+      else if (id === "ctl-play") controlAction("play");
+      else if (id === "ctl-seek-back") controlAction("seek-back");
+      else if (id === "ctl-seek-fwd") controlAction("seek-fwd");
+      else if (id === "ctl-sub") controlAction("sub");
+      else if (id === "control-player") enterPlayerControl();
+      else if (id === "fullscreen-api") requestApiFullscreen();
+      else if (id === "fullscreen-css") toggleCssFullscreen();
+      else if (id === "stop") stop();
+      else if (id === "observed-player") observe("player visible");
+      else if (id === "observed-blank") observe("blank after flash or load");
+      else if (id === "observed-media-error") observe("media error shown inside frame");
+      else if (id === "back-lab") exit("embed-lab.html");
+      else if (id === "horizon") exit(HORIZON);
     }
     function onKey(event) {
       if (disposed) return;
       var key = keyName(event);
       if (key !== "OK" && key !== "Back" && key.indexOf("Arrow") !== 0) return;
+      if (isControllingPlayer) {
+        if (key === "Back") {
+          event.preventDefault();
+          if (typeof event.stopPropagation === "function") event.stopPropagation();
+          isControllingPlayer = false;
+          if (isCssFullscreen) {
+            leaveCssFullscreen();
+          } else {
+            say("Returned focus to Horizon controls.");
+            focus(IDS.indexOf("control-player"));
+          }
+        }
+        return;
+      }
       event.preventDefault();
       if (typeof event.stopPropagation === "function") event.stopPropagation();
       if (key === "Back") {
         if (event.repeat) return;
-        if (mode) stop();
+        if (isCssFullscreen) leaveCssFullscreen();
+        else if (mode) stop();
         else exit("embed-lab.html");
       } else if (key === "OK") {
         if (!event.repeat) activate(focused);
@@ -208,7 +334,14 @@
       if (!parentBlocked) say("Parent received an iframe error signal. Cross-origin response details remain unavailable.");
     }
     function onFrameFocus() {
-      if (mode && !disposed) { note("unexpected frame focus"); focus(focused); }
+      if (mode && !disposed) {
+        if (isControllingPlayer) {
+          note("player iframe focused");
+        } else {
+          note("unexpected frame focus");
+          focus(focused);
+        }
+      }
     }
     function bindFrame(target) {
       // Listeners on a discarded frame are ignored even if it fires late.
@@ -244,6 +377,7 @@
       blurTimer = clock.setTimeout(function () {
         blurTimer = null;
         if (mode && !disposed && doc.activeElement === frame) {
+          if (isControllingPlayer) return;
           note("frame took focus; restored");
           focus(focused);
         }

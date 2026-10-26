@@ -73,9 +73,13 @@ test("preview package contains only the isolated Video Lab assets", () => {
   const html = readFileSync(new URL("../video-lab/index.html", import.meta.url), "utf8");
   assert.equal(config.name, "horizon-video-lab-preview");
   assert.equal(config.assets.directory, "./video-lab");
-  assert.equal(config.main, "./video-lab-media-worker.js");
+  assert.equal(config.main, "./video-lab-preview-worker.js");
   assert.equal(config.assets.binding, "ASSETS");
-  assert.deepEqual(config.assets.run_worker_first, ["/media/*"]);
+  assert.deepEqual(config.assets.run_worker_first, ["/media/*", "/api/*"]);
+  assert.deepEqual(config.durable_objects.bindings.map(binding => binding.name),
+    ["LAUNCH_QUEUE", "PLAYER_BRIDGE"]);
+  assert.deepEqual(config.secrets.required,
+    ["TEAM_DOMAIN", "ACCESS_AUD", "OWNER_EMAIL", "PLAYER_BRIDGE_TOKEN"]);
   assert.equal(config.browser, undefined);
   assert.match(html, /media-src 'self' https:\/\/interactive-examples\.mdn\.mozilla\.net https:\/\/media\.w3\.org https:\/\/devstreaming-cdn\.apple\.com/);
   assert.match(html, /connect-src 'self'/);

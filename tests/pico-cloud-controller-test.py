@@ -39,6 +39,7 @@ sys.modules["secrets"] = types.SimpleNamespace(
 spec = importlib.util.spec_from_file_location("horizon_pico_main", PICO / "main.py")
 pico = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pico)
+import player_bridge
 
 
 def response(status, body=None, extra_headers=""):
@@ -85,6 +86,60 @@ class StreamSocket(FakeSocket):
         return part
 
 
+class ScriptedTVSocket:
+    """Framed replies appear only after each complete request is written."""
+    def __init__(self, replies, max_write=11):
+        self.replies = list(replies)
+        self.max_write = max_write
+        self.sent = bytearray()
+        self.ready = bytearray()
+        self.requests = []
+        self.closed = False
+        self.fail_writes = False
+
+    def write(self, data):
+        if self.closed or self.fail_writes:
+            raise OSError("stale TV socket")
+        part = data[:self.max_write]
+        self.sent.extend(part)
+        while True:
+            marker = self.sent.find(b"\r\n\r\n")
+            if marker < 0:
+                break
+            headers = bytes(self.sent[:marker]).lower()
+            length_line = next((line for line in headers.split(b"\r\n")
+                                if line.startswith(b"content-length:")), None)
+            # Read-only GET has no body; key PUT must carry Content-Length.
+            if length_line is None and not headers.startswith(b"get "):
+                raise AssertionError("player request must be framed")
+            length = int(length_line.split(b":", 1)[1].strip()) if length_line else 0
+            end = marker + 4 + length
+            if len(self.sent) < end:
+                break
+            self.requests.append(bytes(self.sent[:end]))
+            del self.sent[:end]
+            self.ready.extend(self.replies.pop(0))
+        return len(part)
+
+    def read(self, size):
+        if self.closed or not self.ready:
+            raise OSError("TV kept the socket open without more response bytes")
+        part = bytes(self.ready[:size])
+        del self.ready[:size]
+        return part
+
+    def close(self):
+        self.closed = True
+
+
+class ExactReadTVSocket(ScriptedTVSocket):
+    """Model a TLS stream whose read(n) waits for n bytes while kept open."""
+    def read(self, size):
+        if len(self.ready) < size:
+            raise OSError("read blocked waiting for requested byte count")
+        return super().read(size)
+
+
 class PicoCloudTests(unittest.TestCase):
     def setUp(self):
         for name, value in (("ticks_ms", lambda: int(time.monotonic() * 1000)),
@@ -93,6 +148,277 @@ class PicoCloudTests(unittest.TestCase):
             clock_patch = patch.object(pico.time, name, side_effect=value, create=True)
             clock_patch.start()
             self.addCleanup(clock_patch.stop)
+
+    def test_player_keys_are_exact_allowlist_and_never_retry(self):
+        for name, (codeset, code) in pico.PLAYER_KEYS.items():
+            with self.subTest(name=name), patch.object(pico, "tv_request", return_value={
+                    "STATUS": {"RESULT": "SUCCESS"}}) as request:
+                self.assertTrue(pico.send_player_command(object(), "test-token", name))
+                request.assert_called_once_with(request.call_args.args[0], "test-token", "PUT",
+                    "/key_command/", {"KEYLIST": [{"CODESET": codeset, "CODE": code,
+                                                     "ACTION": "KEYPRESS"}]}, timing=request.call_args.kwargs["timing"])
+        with patch.object(pico, "tv_request") as request:
+            with self.assertRaises(ValueError):
+                pico.send_player_command(object(), "test-token", "arbitrary_key")
+            with self.assertRaises(RuntimeError):
+                pico.send_player_command(object(), "", "pause_toggle")
+            request.assert_not_called()
+
+    def test_player_rejection_and_ambiguous_transport_failure_are_not_success(self):
+        with patch.object(pico, "tv_request", return_value={"STATUS": {"RESULT": "FAILURE"}}) as request:
+            self.assertFalse(pico.send_player_command(object(), "test-token", "pause_toggle"))
+            request.assert_called_once()
+        with patch.object(pico, "tv_request", side_effect=OSError("lost response")) as request:
+            self.assertFalse(pico.send_player_command(object(), "test-token", "seek_forward"))
+            request.assert_called_once()  # An ambiguous keypress is never replayed.
+
+    def test_player_request_uses_pinned_socket_and_framed_response(self):
+        body = {"STATUS": {"RESULT": "SUCCESS"}}
+        fake = FakeSocket(response(200, body), max_write=7)
+        with patch.object(pico, "open_pinned_socket", return_value=fake) as connect:
+            self.assertTrue(pico.send_player_command(object(), "test-token", "seek_backward"))
+        connect.assert_called_once()
+        sent = b"".join(fake.writes)
+        self.assertIn(b"PUT /key_command/ HTTP/1.1\r\n", sent)
+        self.assertIn(b"AUTH: test-token\r\n", sent)
+        self.assertIn(b'"CODESET": 3', sent)
+        self.assertIn(b'"CODE": 1', sent)
+        self.assertTrue(fake.closed)
+
+    def test_player_dispatcher_preserves_order_and_rejects_duplicates_and_overflow(self):
+        dispatcher = pico.PlayerCommandDispatcher()
+        self.assertEqual(dispatcher.offer(1, "seek_forward"), "queued")
+        self.assertEqual(dispatcher.offer(1, "seek_forward"), "duplicate")
+        self.assertEqual(dispatcher.offer(3, "pause_toggle"), "gap")
+        self.assertEqual(dispatcher.offer(2, "seek_backward"), "queued")
+        self.assertEqual(dispatcher.offer(3, "arbitrary"), "invalid")
+        with patch.object(pico, "send_player_command", side_effect=[True, False]) as send:
+            self.assertEqual(dispatcher.run_next(object(), "test-token"), (1, True))
+            self.assertEqual(dispatcher.run_next(object(), "test-token"), (2, False))
+            self.assertIsNone(dispatcher.run_next(object(), "test-token"))
+            self.assertEqual([call.args[2] for call in send.call_args_list],
+                             ["seek_forward", "seek_backward"])
+        full = pico.PlayerCommandDispatcher()
+        for sequence in range(1, pico.PLAYER_QUEUE_LIMIT + 1):
+            self.assertEqual(full.offer(sequence, "seek_forward"), "queued")
+        self.assertEqual(full.offer(pico.PLAYER_QUEUE_LIMIT + 1, "seek_forward"), "full")
+        self.assertEqual(len(full.pending), pico.PLAYER_QUEUE_LIMIT)
+
+    def test_supervised_player_action_requires_explicit_call_and_pinned_context(self):
+        with patch.object(pico, "connect_wifi", return_value=True), \
+             patch.object(pico, "synchronize_time"), \
+             patch.object(pico, "tls_context", return_value="pinned-context") as context, \
+             patch.object(pico, "send_player_command", return_value=True) as send:
+            self.assertTrue(pico.supervised_player_command("pause_toggle"))
+        context.assert_called_once()
+        send.assert_called_once_with("pinned-context", "private-tv-test-token", "pause_toggle")
+        with patch.object(pico, "send_player_command") as send:
+            with self.assertRaises(ValueError):
+                pico.supervised_player_command("back")
+            send.assert_not_called()
+
+    def test_prepared_player_session_does_not_send_or_connect_before_explicit_action(self):
+        with patch.object(pico, "connect_wifi", return_value=True), \
+             patch.object(pico, "synchronize_time"), \
+             patch.object(pico, "tls_context", return_value="pinned-context"), \
+             patch.object(pico, "open_pinned_socket") as connect, \
+             patch.object(pico, "send_player_command", return_value=True) as send:
+            prepared = pico.prepare_supervised_player_session()
+            connect.assert_not_called()
+            send.assert_not_called()
+            self.assertTrue(prepared.send("seek_forward"))
+            send.assert_called_once_with("pinned-context", "private-tv-test-token",
+                                         "seek_forward", prepared.connection)
+            prepared.close()
+            with self.assertRaises(RuntimeError):
+                prepared.send("seek_forward")
+
+    def test_player_keepalive_reuses_one_pinned_tls_socket_with_partial_writes(self):
+        ack = response(200, {"STATUS": {"RESULT": "SUCCESS"}})
+        fake = ExactReadTVSocket([ack, ack])
+        session = pico.TVPlayerConnection(object())
+        with patch.object(pico, "open_pinned_socket", return_value=fake) as connect:
+            self.assertTrue(pico.send_player_command(session.context, "test-token", "seek_forward", session))
+            self.assertTrue(pico.send_player_command(session.context, "test-token", "seek_forward", session))
+        connect.assert_called_once()
+        self.assertEqual(len(fake.requests), 2)
+        self.assertEqual(session.requests, 2)
+        self.assertFalse(fake.closed)
+        for request in fake.requests:
+            self.assertIn(b"Connection: keep-alive\r\n", request)
+            self.assertIn(b"AUTH: test-token\r\n", request)
+            self.assertIn(b'"CODESET": 3', request)
+            self.assertIn(b'"CODE": 7', request)
+        session.close()
+        self.assertTrue(fake.closed)
+
+    def test_player_keepalive_request_differs_from_one_shot_only_in_connection_header(self):
+        ack = response(200, {"STATUS": {"RESULT": "SUCCESS"}})
+        one_shot = FakeSocket(ack)
+        with patch.object(pico, "open_pinned_socket", return_value=one_shot):
+            self.assertTrue(pico.send_player_command(object(), "test-token", "seek_forward"))
+        keepalive = ExactReadTVSocket([ack])
+        session = pico.TVPlayerConnection(object())
+        with patch.object(pico, "open_pinned_socket", return_value=keepalive):
+            self.assertTrue(pico.send_player_command(session.context, "test-token", "seek_forward", session))
+        self.assertEqual(bytes(keepalive.requests[0]),
+                         b"".join(one_shot.writes).replace(b"Connection: close\r\n",
+                                                         b"Connection: keep-alive\r\n"))
+        session.close()
+
+    def test_player_keepalive_reads_exact_body_without_waiting_for_eof(self):
+        ack = response(200, {"STATUS": {"RESULT": "SUCCESS"}})
+        legacy = ExactReadTVSocket([])
+        legacy.ready.extend(ack)
+        with self.assertRaises(OSError):
+            pico.read_http_response(legacy, pico.MAX_RESPONSE, pico.MAX_RESPONSE,
+                                    pico.MAX_CLOUD_HEADERS, require_framing=True, strict=True)
+        fake = ExactReadTVSocket([ack])
+        session = pico.TVPlayerConnection(object())
+        timing = {"connection": "new"}
+        body = {"KEYLIST": [{"CODESET": 0, "CODE": 32, "ACTION": "KEYPRESS"}]}
+        with patch.object(pico, "open_pinned_socket", return_value=fake):
+            result = session.keypress("test-token", body, timing)
+        self.assertEqual(result["STATUS"]["RESULT"], "SUCCESS")
+        self.assertEqual(timing["framing"], "content_length")
+        self.assertEqual(timing["phase"], "complete")
+        self.assertIn("headers_ms", timing)
+        self.assertIn("body_ms", timing)
+        self.assertFalse(fake.closed)  # The server remains open after complete response.
+        self.assertEqual(fake.ready, b"")
+        session.close()
+
+    def test_player_keepalive_fully_consumes_chunked_reply_before_next_key(self):
+        payload = json.dumps({"STATUS": {"RESULT": "SUCCESS"}}).encode()
+        chunked = (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                   + (b"%X\r\n" % len(payload)) + payload + b"\r\n0\r\n\r\n")
+        fake = ExactReadTVSocket([chunked, response(200, {"STATUS": {"RESULT": "SUCCESS"}})])
+        session = pico.TVPlayerConnection(object())
+        with patch.object(pico, "open_pinned_socket", return_value=fake) as connect:
+            self.assertTrue(pico.send_player_command(session.context, "test-token", "pause_toggle", session))
+            self.assertTrue(pico.send_player_command(session.context, "test-token", "seek_backward", session))
+        connect.assert_called_once()
+        self.assertEqual(len(fake.requests), 2)
+        self.assertEqual(fake.ready, b"")
+        session.close()
+
+    def test_player_keepalive_honors_close_and_idle_expiry(self):
+        ack_close = response(200, {"STATUS": {"RESULT": "SUCCESS"}}, "Connection: close\r\n")
+        ack = response(200, {"STATUS": {"RESULT": "SUCCESS"}})
+        first = ScriptedTVSocket([ack_close])
+        second = ScriptedTVSocket([ack])
+        session = pico.TVPlayerConnection(object())
+        with patch.object(pico, "open_pinned_socket", side_effect=[first, second]) as connect:
+            self.assertTrue(pico.send_player_command(session.context, "test-token", "pause_toggle", session))
+            self.assertTrue(first.closed)
+            self.assertTrue(pico.send_player_command(session.context, "test-token", "pause_toggle", session))
+        self.assertEqual(connect.call_count, 2)
+        session.close()
+        clock = {"now": 100}
+        third = ScriptedTVSocket([ack])
+        fourth = ScriptedTVSocket([ack])
+        session = pico.TVPlayerConnection(object())
+        with patch.object(pico.time, "ticks_ms", side_effect=lambda: clock["now"], create=True), \
+             patch.object(pico, "open_pinned_socket", side_effect=[third, fourth]) as connect:
+            self.assertTrue(pico.send_player_command(session.context, "test-token", "seek_forward", session))
+            clock["now"] += pico.PLAYER_KEEPALIVE_IDLE_MS
+            self.assertTrue(pico.send_player_command(session.context, "test-token", "seek_forward", session))
+        self.assertEqual(connect.call_count, 2)
+        self.assertTrue(third.closed)
+        session.close()
+
+    def test_player_stale_socket_failure_is_not_replayed_and_next_key_reconnects(self):
+        ack = response(200, {"STATUS": {"RESULT": "SUCCESS"}})
+        stale = ScriptedTVSocket([ack])
+        fresh = ScriptedTVSocket([ack])
+        session = pico.TVPlayerConnection(object())
+        with patch.object(pico, "open_pinned_socket", side_effect=[stale, fresh]) as connect:
+            self.assertTrue(pico.send_player_command(session.context, "test-token", "seek_forward", session))
+            stale.fail_writes = True
+            self.assertFalse(pico.send_player_command(session.context, "test-token", "seek_forward", session))
+            self.assertEqual(len(stale.requests), 1)
+            self.assertTrue(stale.closed)
+            self.assertTrue(pico.send_player_command(session.context, "test-token", "seek_backward", session))
+        self.assertEqual(connect.call_count, 2)  # No retry of the ambiguous second key.
+        self.assertEqual(len(fresh.requests), 1)
+        session.close()
+
+    def test_player_tls_failure_and_partial_reply_close_without_replay(self):
+        session = pico.TVPlayerConnection(object())
+        with patch.object(pico, "open_pinned_socket", side_effect=OSError("pin mismatch")) as connect:
+            self.assertFalse(pico.send_player_command(session.context, "test-token", "pause_toggle", session))
+        connect.assert_called_once()
+        self.assertIsNone(session.wrapped)
+        partial = ScriptedTVSocket([b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{}"])
+        session = pico.TVPlayerConnection(object())
+        with patch.object(pico, "open_pinned_socket", return_value=partial) as connect, \
+             patch("builtins.print") as log:
+            self.assertFalse(pico.send_player_command(session.context, "test-token", "seek_forward", session))
+        connect.assert_called_once()
+        self.assertEqual(len(partial.requests), 1)
+        self.assertTrue(partial.closed)
+        self.assertIn("phase read_body", log.call_args.args[0])
+        self.assertNotIn("test-token", log.call_args.args[0])
+
+    def test_player_header_timeout_reports_header_phase_without_private_data(self):
+        partial = ScriptedTVSocket([b"HTTP/1.1 200 OK\r\nContent-Len"])
+        session = pico.TVPlayerConnection(object())
+        with patch.object(pico, "open_pinned_socket", return_value=partial), \
+             patch("builtins.print") as log:
+            self.assertFalse(pico.send_player_command(session.context, "test-token", "pause_toggle", session))
+        self.assertIn("phase read_headers", log.call_args.args[0])
+        self.assertNotIn("test-token", log.call_args.args[0])
+        self.assertTrue(partial.closed)
+
+    def test_player_keepalive_request_cap_forces_new_pinned_connection(self):
+        ack = response(200, {"STATUS": {"RESULT": "SUCCESS"}})
+        first = ScriptedTVSocket([ack] * pico.PLAYER_KEEPALIVE_MAX_REQUESTS)
+        second = ScriptedTVSocket([ack])
+        session = pico.TVPlayerConnection(object())
+        with patch.object(pico, "open_pinned_socket", side_effect=[first, second]) as connect:
+            for _ in range(pico.PLAYER_KEEPALIVE_MAX_REQUESTS + 1):
+                self.assertTrue(pico.send_player_command(session.context, "test-token", "seek_forward", session))
+        self.assertEqual(connect.call_count, 2)
+        self.assertTrue(first.closed)
+        self.assertEqual(len(first.requests), pico.PLAYER_KEEPALIVE_MAX_REQUESTS)
+        self.assertEqual(len(second.requests), 1)
+        session.close()
+
+    def test_player_malformed_or_rejected_reply_closes_before_reuse(self):
+        bad_replies = (
+            b"HTTP/1.1 200 OK\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 99999\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZ\r\n",
+            response(500, {"STATUS": {"RESULT": "FAILURE"}}),
+            response(200, {"STATUS": {"RESULT": "FAILURE"}}),
+        )
+        for reply in bad_replies:
+            with self.subTest(reply=reply[:20]):
+                fake = ScriptedTVSocket([reply])
+                session = pico.TVPlayerConnection(object())
+                with patch.object(pico, "open_pinned_socket", return_value=fake) as connect:
+                    self.assertFalse(pico.send_player_command(session.context, "test-token", "pause_toggle", session))
+                connect.assert_called_once()
+                self.assertTrue(fake.closed)
+                self.assertIsNone(session.wrapped)
+
+    def test_player_supervised_sequence_reuses_only_when_explicitly_requested(self):
+        ack = response(200, {"STATUS": {"RESULT": "SUCCESS"}})
+        fake = ScriptedTVSocket([ack, ack])
+        with patch.object(pico, "connect_wifi", return_value=True), \
+             patch.object(pico, "synchronize_time"), \
+             patch.object(pico, "tls_context", return_value=object()), \
+             patch.object(pico, "open_pinned_socket", return_value=fake) as connect:
+            self.assertEqual(pico.supervised_player_sequence(("seek_forward", "seek_forward"), reuse=True),
+                             [True, True])
+        connect.assert_called_once()
+        self.assertTrue(fake.closed)
+        with patch.object(pico, "connect_wifi", return_value=True), \
+             patch.object(pico, "synchronize_time"), \
+             patch.object(pico, "tls_context", return_value=object()), \
+             patch.object(pico, "send_player_command", side_effect=[False, True]) as send:
+            self.assertEqual(pico.supervised_player_sequence(("seek_forward", "seek_forward")), [False])
+        send.assert_called_once()
 
     def test_http_statuses_and_chunked_json(self):
         for status in (200, 403, 429, 500, 503):
@@ -1208,6 +1534,218 @@ class PicoCloudTests(unittest.TestCase):
             self.assertEqual(output.call_count, 2)
             self.assertIn("Timing slow power watch read: 1000 ms", output.call_args_list[0].args[0])
             self.assertIn("DNS", output.call_args_list[1].args[0])
+
+
+class PlayerBridgeTests(unittest.TestCase):
+    def test_main_script_starts_bridge_without_sys_modules_main_entry(self):
+        class BridgeReached(Exception):
+            pass
+
+        captured = []
+
+        def construct(*args):
+            captured.append(args)
+            raise BridgeReached()
+
+        with patch.dict(sys.modules):
+            sys.modules.pop("__main__", None)
+            with self.assertRaises(KeyError):
+                sys.modules["__main__"]  # The previous startup lookup failed here.
+            with patch.object(pico, "__name__", "__main__"), \
+                 patch.object(sys.modules["config"], "PLAYER_BRIDGE_ENABLED", True, create=True), \
+                 patch.object(sys.modules["secrets"], "PLAYER_BRIDGE_TOKEN", "x" * 32, create=True), \
+                 patch.object(pico.time, "ticks_ms", return_value=100, create=True), \
+                 patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+                 patch.object(pico, "load_power", return_value=1), \
+                 patch.object(pico, "connect_wifi", return_value=True), \
+                 patch.object(pico, "synchronize_time"), \
+                 patch.object(pico, "tls_context", return_value="tv-context"), \
+                 patch.object(pico, "cloud_tls_context", return_value="cloud-context"), \
+                 patch.object(player_bridge, "PlayerBridgeClient", side_effect=construct):
+                with self.assertRaises(BridgeReached):
+                    pico.unattended_watch()
+        self.assertEqual(len(captured), 1)
+        self.assertIs(captured[0][0], pico.PlayerBridgeController)
+        self.assertEqual(captured[0][1], "cloud-context")
+        self.assertEqual(captured[0][3], "tv-context")
+        self.assertIs(pico.PlayerBridgeController.TVPlayerConnection, pico.TVPlayerConnection)
+        self.assertIs(pico.PlayerBridgeController.PlayerCommandDispatcher, pico.PlayerCommandDispatcher)
+
+    def test_startup_error_uses_micropython_traceback(self):
+        failure = RuntimeError("test startup failure")
+        with patch.object(pico.sys, "print_exception", create=True) as traceback, \
+             patch("builtins.print") as output:
+            pico.report_startup_error(failure)
+        traceback.assert_called_once_with(failure)
+        output.assert_called_once_with("Controller stopped:", "RuntimeError")
+
+    def test_visible_player_defers_cloud_claim_for_at_most_eight_seconds(self):
+        with patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True):
+            started, defer = pico.player_cloud_deferral(True, None, 100)
+            self.assertEqual((started, defer), (100, True))
+            self.assertEqual(pico.player_cloud_deferral(True, started, 8099), (100, True))
+            self.assertEqual(pico.player_cloud_deferral(True, started, 8100), (100, False))
+            self.assertEqual(pico.player_cloud_deferral(False, started, 150), (None, False))
+
+    def test_bridge_handshake_uses_verified_context_and_raw_socket_timeout(self):
+        import base64
+        import hashlib
+
+        class Raw:
+            def __init__(self):
+                self.timeouts = []
+                self.closed = False
+
+            def settimeout(self, value):
+                self.timeouts.append(value)
+
+            def connect(self, _address):
+                pass
+
+            def close(self):
+                self.closed = True
+
+        class TLS:
+            def __init__(self):
+                self.reply = b""
+                self.closed = False
+
+            def write(self, request):
+                key = request.split(b"Sec-WebSocket-Key: ", 1)[1].split(b"\r\n", 1)[0]
+                accept = base64.b64encode(hashlib.sha1(key + player_bridge.GUID).digest())
+                self.reply = (b"HTTP/1.1 101 Switching Protocols\r\n"
+                              b"Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                              b"Sec-WebSocket-Accept: " + accept + b"\r\n\r\n")
+                return len(request)
+
+            def read(self, count):
+                part, self.reply = self.reply[:count], self.reply[count:]
+                return part
+
+            def close(self):
+                self.closed = True
+
+        class Poll:
+            def __init__(self):
+                self.target = None
+
+            def register(self, target, _event):
+                if target is tls:
+                    raise TypeError("SSL stream cannot be polled")
+                self.target = target
+
+        raw = Raw()
+        tls = TLS()  # Deliberately has no settimeout method.
+        poll = Poll()
+        context = types.SimpleNamespace(wrap_socket=lambda _raw, server_hostname: tls)
+        controller = types.SimpleNamespace(write_all=pico.write_all, ticks=lambda: 100)
+        client = player_bridge.PlayerBridgeClient(controller, context, "dummy-token", object(), "tv")
+        with patch.object(player_bridge.socket, "getaddrinfo", return_value=[(0, 0, 0, "", ("127.0.0.1", 443))]), \
+             patch.object(player_bridge.socket, "socket", return_value=raw), \
+             patch.object(player_bridge.select, "poll", return_value=poll), \
+             patch.object(player_bridge.time, "ticks_add", side_effect=lambda a, b: a + b, create=True):
+            client.connect()
+            self.assertIs(client.socket, tls)
+            self.assertIs(client.raw, raw)
+            self.assertIs(poll.target, raw)
+            self.assertTrue(client.poll_raw)
+            self.assertEqual(raw.timeouts[-1], 0)
+            client.close()
+        self.assertTrue(tls.closed)
+
+    def test_warmup_is_read_only_and_reuses_framed_socket(self):
+        ack = response(200, {"STATUS": {"RESULT": "SUCCESS"}})
+        fake = ScriptedTVSocket([ack, ack])
+        session = pico.TVPlayerConnection(object())
+        with patch.object(pico.time, "ticks_ms", return_value=100, create=True), \
+             patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
+             patch.object(pico, "open_pinned_socket", return_value=fake) as connect:
+            self.assertTrue(session.prewarm("test-token"))
+            self.assertTrue(pico.send_player_command(session.context, "test-token",
+                                                     "seek_forward", session))
+        connect.assert_called_once()
+        self.assertTrue(fake.requests[0].startswith(b"GET /app/current HTTP/1.1\r\n"))
+        self.assertNotIn(b"KEYLIST", fake.requests[0])
+        self.assertTrue(fake.requests[1].startswith(b"PUT /key_command/ HTTP/1.1\r\n"))
+        session.close()
+
+    def test_websocket_frame_incremental_and_client_masked(self):
+        payload = b'{"type":"player_session_open"}'
+        encoded = player_bridge._frame(payload)
+        self.assertEqual(encoded[1] & 128, 128)
+        self.assertNotIn(payload, encoded)
+        frame = bytearray(bytes((0x81, len(payload))) + payload[:4])
+        self.assertIsNone(player_bridge._next_frame(frame))
+        frame.extend(payload[4:])
+        self.assertEqual(player_bridge._next_frame(frame), (1, payload))
+        self.assertEqual(frame, b"")
+        with self.assertRaises(ValueError):
+            player_bridge._next_frame(bytearray(b"\x81\xff"))
+
+    def test_expired_player_command_is_acknowledged_without_sending_key(self):
+        controller = types.SimpleNamespace(ticks=lambda: 100,
+            PlayerCommandDispatcher=pico.PlayerCommandDispatcher)
+        client = player_bridge.PlayerBridgeClient(controller, object(), "cloud", object(), "tv")
+        client.session = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        client.tv = object()
+        client.dispatcher = pico.PlayerCommandDispatcher()
+        sent = []
+        client.send = sent.append
+        with patch.object(pico, "send_player_command") as key:
+            client._command({"session": client.session, "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                             "sequence": 1, "command": "seek_forward", "deadlineAt": 1})
+        key.assert_not_called()
+        self.assertEqual(sent[-1]["code"], "expired")
+        self.assertEqual(client.dispatcher.last_sequence, 0)
+
+    def test_session_prepares_without_key_and_repeated_seeks_are_ordered_once(self):
+        class FakeTV:
+            instances = []
+
+            def __init__(self, _context):
+                self.last_used = 100
+                self.wrapped = object()
+                self.prewarms = 0
+                self.closed = False
+                FakeTV.instances.append(self)
+
+            def prewarm(self, _token):
+                self.prewarms += 1
+                return True
+
+            def close(self, _reason="closed"):
+                self.closed = True
+
+        controller = types.SimpleNamespace(ticks=lambda: 100,
+            TVPlayerConnection=FakeTV, PlayerCommandDispatcher=pico.PlayerCommandDispatcher,
+            PLAYER_SESSION_HEARTBEAT_MS=2500, PLAYER_SESSION_STALE_MS=3500)
+        client = player_bridge.PlayerBridgeClient(controller, object(), "cloud-token",
+                                                  object(), "tv-token")
+        sent = []
+        client.send = sent.append
+        with patch.object(player_bridge.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(player_bridge.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
+             patch.object(pico, "send_player_command", return_value=True) as key:
+            client._message(b'{"type":"player_session_open","session":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}')
+            self.assertEqual(FakeTV.instances[-1].prewarms, 1)
+            self.assertEqual(sent[-1]["type"], "session_ready")
+            self.assertEqual(key.call_count, 0)
+            for number in (1, 2, 3):
+                client._message(json.dumps({"type": "player_command", "session": client.session,
+                    "id": "bbbbbbbb-bbbb-4bbb-8bbb-%012d" % number,
+                    "sequence": number, "command": "seek_forward",
+                    "deadlineAt": int(time.time() * 1000) + 1200}).encode())
+            self.assertEqual(key.call_count, 3)
+            client._message(json.dumps({"type": "player_command", "session": client.session,
+                "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                "sequence": 3, "command": "seek_forward",
+                "deadlineAt": int(time.time() * 1000) + 1200}).encode())
+            self.assertEqual(key.call_count, 3)
+            self.assertEqual(sent[-1]["code"], "duplicate")
+            client._message(json.dumps({"type": "player_session_close",
+                "session": client.session}).encode())
+            self.assertTrue(FakeTV.instances[-1].closed)
+            self.assertIsNone(client.tv)
 
 
 if __name__ == "__main__":

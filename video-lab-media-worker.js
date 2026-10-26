@@ -250,6 +250,16 @@ export async function serveMedia(request, assets, size) {
 export default {
   fetch(request, env) {
     const path = new URL(request.url).pathname;
+    if (path === "/empty.vtt") {
+      return new Response("WEBVTT\n\n99:00:00.000 --> 99:00:01.000\n.\n", {
+        status: 200,
+        headers: {
+          "Content-Type": "text/vtt; charset=utf-8",
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "public, max-age=3600",
+        },
+      });
+    }
     if (RELAY_SOURCES.has(path)) return relayMedia(request);
     const size = MEDIA.get(path);
     if (!size) return new Response("Not found", { status: 404 });

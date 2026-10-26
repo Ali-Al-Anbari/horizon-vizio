@@ -62,7 +62,18 @@ export function createEmbedHarness({ html, script, ids }) {
     if (name !== "id" && name !== "hidden") initial.attributes[name] = value;
   }
   initial.hidden = "hidden" in markup;
+  function classListMock() {
+    const classes = new Set();
+    return {
+      add(c) { classes.add(c); },
+      remove(c) { classes.delete(c); },
+      contains(c) { return classes.has(c); },
+    };
+  }
+  document.body = { classList: classListMock() };
+
   const stage = {
+    classList: classListMock(),
     replaceChild(fresh, old) {
       assert.equal(old.parentNode, stage, "replaced frame must be attached");
       old.parentNode = null;
@@ -88,7 +99,7 @@ export function createEmbedHarness({ html, script, ids }) {
     return event;
   };
   return {
-    get: id => nodes.get(id), document, timers, navigation, discarded, markup, key,
+    get: id => nodes.get(id), document, stage, timers, navigation, discarded, markup, key,
     advance(ms) { time += ms; },
     delays() { return [...timers.values()].map(value => value.delay).sort((a, b) => a - b); },
     fireTimer(delay) {

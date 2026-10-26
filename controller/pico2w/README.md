@@ -16,6 +16,43 @@ connection. [MicroPython v1.29 `ssl` documentation](https://docs.micropython.org
 
 ## Modes
 
+### Isolated player-key engine (supervised only)
+
+`main.py` exposes `supervised_player_command("pause_toggle")`,
+`supervised_player_command("seek_backward")`, and
+`supervised_player_command("seek_forward")` for an explicit Thonny REPL test.
+They use the existing pinned SmartCast TLS and private device token. They are
+not called by boot, the cloud queue, or the unattended loop. Stop the running
+controller in Thonny before testing, and make sure YapGrid has focus on the TV.
+Each call reports a local monotonic receipt tick, connection/TLS/request
+durations, and API acceptance. Acceptance does not prove YapGrid acted. The
+bounded `PlayerCommandDispatcher` is a future transport seam; no browser-to-Pico
+transport or automatic key delivery exists yet. Copy only the updated `main.py`
+to `/main.py` for this test; keep private config and secrets unchanged.
+
+For a same-session cold/warm comparison, keep YapGrid focused and explicitly
+run `supervised_player_sequence(("seek_forward", "seek_forward"), reuse=True)`
+from Thonny after `import main as horizon` (prefix the call with `horizon.`).
+The first log should say `socket new`; the second says `socket warm` only if the
+TV kept the HTTP/1.1 connection open. `reuse=False` sends each key on a new
+pinned connection for a control comparison. The experimental socket closes
+after five seconds idle, eight requests, a server close, or any error. A failed
+or ambiguous command stops the supervised sequence and is never replayed.
+No keep-alive socket is opened by unattended startup or existing TV polling.
+The first physical `reuse=True` trial timed out on its first response after a
+successful pinned TLS handshake; its old reader requested 512 bytes at once.
+The revised opt-in path reads headers one byte at a time and then exactly the
+declared Content-Length or chunked body. It logs only the safe phase, framing
+type, and elapsed times. For the next test, run `import main as horizon` and
+`trial = horizon.prepare_supervised_player_session()` in Thonny **before**
+transferring TV focus. Preparing connects Wi-Fi and synchronizes NTP but sends
+no key and opens no TV socket. After focusing YapGrid, run
+`trial.send("seek_forward")` once, then `trial.close()`. Confirm one successful
+`socket new` request before interpreting any `socket warm` timings. If it still
+fails, report the phase line and use the existing one-shot path; do not repeat
+an ambiguous key command automatically. A later warm test can call `send()`
+twice on a new prepared trial, within the five-second idle limit.
+
 `config.example.py` defaults both `CLOUD_LIVE_CLAIMING` and
 `AUTO_LAUNCH_ON_POWER` to `False`. It also defaults
 `IHEART_RETURNS_TO_HORIZON` to `False`.

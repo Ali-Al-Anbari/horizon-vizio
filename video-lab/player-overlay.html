@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src https://yapgrid.com; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <meta name="color-scheme" content="dark" />
+    <title>Horizon Video Lab · Player Overlay</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="player-overlay.css" />
+    <script src="focus-lease.js" defer></script>
+    <script src="player-bridge-client.js" defer></script>
+    <script src="player-overlay.js" defer></script>
+  </head>
+  <body>
+    <main id="player-shell" class="player-shell">
+      <iframe id="player-frame" title="YapGrid video player" allow="autoplay; fullscreen"
+        referrerpolicy="no-referrer" tabindex="-1"></iframe>
+      <button id="remote-capture" type="button" tabindex="0" aria-label="Horizon video remote control"></button>
+      <section id="overlay" class="overlay" aria-label="Horizon playback controls" aria-hidden="true">
+        <div class="overlay-content">
+          <p class="brand">HORIZON VIDEO</p>
+          <h1>South Park</h1>
+          <p class="episode">Season 13 · Episode 2</p>
+          <p class="telemetry">Playback time and progress are unavailable from this embedded player.</p>
+          <div class="control-row primary" aria-label="Playback actions">
+            <button id="rewind" type="button" tabindex="-1"><span aria-hidden="true">↶</span><small>Rewind 10 s</small></button>
+            <button id="play-pause" type="button" tabindex="-1"><span aria-hidden="true">⏯</span><small>Play / Pause</small></button>
+            <button id="forward" type="button" tabindex="-1"><span aria-hidden="true">↷</span><small>Forward 10 s</small></button>
+          </div>
+          <div class="control-row secondary" aria-label="More playback options">
+            <button id="subtitles" type="button" tabindex="-1">Subtitles: <span id="subtitle-mode">ON</span></button>
+            <button id="episodes" type="button" tabindex="-1">Episodes / Video Lab</button>
+          </div>
+          <section id="subtitle-menu" class="subtitle-menu" aria-label="Subtitle settings" hidden>
+            <h2 id="menu-title">Subtitle mode</h2>
+            <p id="menu-description">Changing subtitles reloads YapGrid and may lose your position.</p>
+            <div class="menu-actions">
+              <button id="menu-cancel" type="button" tabindex="-1">Keep playing</button>
+              <button id="menu-change" type="button" tabindex="-1">Switch mode · reload required</button>
+            </div>
+          </section>
+          <p id="command-status" class="command-status" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+      <p id="screen-reader-status" class="screen-reader-only" role="status" aria-live="polite">Video playing. Press an arrow or OK to show controls. Back exits to Video Lab.</p>
+    </main>
+  </body>
+</html>

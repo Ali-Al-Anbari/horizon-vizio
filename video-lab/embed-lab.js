@@ -7,7 +7,6 @@
   var CANDIDATE = "https://player.vidlove.cc/embed/tv/2190/13/2";
   var HORIZON = "https://horizon-vizio.ali-al-anbari.workers.dev/";
   var STRICT = "allow-scripts allow-presentation";
-  var SAFETY_MS = 30000;
   var SOURCES = {
     fixtureA: "embed-fixture.html?view=a",
     fixtureB: "embed-fixture.html?view=b",
@@ -38,7 +37,6 @@
     var loadedSignal = false;
     var parentBlocked = false;
     var navigationTimer = null;
-    var safetyTimer = null;
     var blurTimer = null;
     var disposed = false;
     var signals = [];
@@ -56,7 +54,6 @@
     }
     function clearTimers() {
       if (navigationTimer !== null) { clock.clearTimeout(navigationTimer); navigationTimer = null; }
-      if (safetyTimer !== null) { clock.clearTimeout(safetyTimer); safetyTimer = null; }
       if (blurTimer !== null) { clock.clearTimeout(blurTimer); blurTimer = null; }
     }
     // Replace the iframe with a never-navigated clone of the verified markup.
@@ -115,15 +112,6 @@
           say("No iframe navigation signal after 12 seconds. It may be blocked, unavailable, or slow. Stop unloads it.");
         }
       }, 12000);
-      // Runs from the request time regardless of render state or remote input;
-      // this is why a frame that did render disappears about 30 s after OK.
-      safetyTimer = clock.setTimeout(function () {
-        safetyTimer = null;
-        if (activeSource === sourceName && !disposed) {
-          note("30-second safety unload");
-          stop("Frame auto-unloaded after 30 seconds. Back returns to Video Lab.");
-        }
-      }, SAFETY_MS);
       focus(sourceName === "fixtureA" ? 0 : sourceName === "fixtureB" ? 1 : 2);
     }
     function observe(value) {

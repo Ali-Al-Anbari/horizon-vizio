@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; frame-src https://player.vidlove.cc https://www.youtube.com; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; frame-src https://player.vidlove.cc https://www.youtube.com https://vidlink.pro https://embedwave.cc https://yapgrid.com; object-src 'none'; form-action 'none'; base-uri 'none'" />
     <meta name="color-scheme" content="dark" />
     <title>Horizon Video Lab · Candidate Sandbox Matrix</title>
     <link rel="icon" href="data:," />
@@ -14,13 +14,26 @@
     <main>
       <header>
         <div><span class="brand">HORIZON VIDEO LAB</span><h1>Candidate sandbox matrix</h1></div>
-        <p>Experiment concluded · VidLove not compatible under Horizon's sandbox · reproduction only</p>
+        <p>Experiment concluded · South Park S13E2 (TMDB 2190) · Multi-provider comparison</p>
       </header>
       <nav aria-label="Sandbox comparison controls">
         <button id="strict" type="button">VidLove · strict</button>
         <button id="origin" type="button">VidLove · same-origin</button>
-        <button id="unsandboxed" type="button">VidLove · unsandboxed</button>
-        <button id="youtube" type="button">YouTube official sample · strict</button>
+        <button id="unsandboxed" type="button">VidLove · unsandboxed (autoplay)</button>
+        <button id="user-play" type="button">VidLove · unsandboxed (user-init)</button>
+        <button id="vidlink" type="button">VidLink</button>
+        <button id="embedwave" type="button">EmbedWave</button>
+        <button id="yapgrid" type="button">YapGrid</button>
+        <button id="yapgrid-sub" type="button">YapGrid (en sub)</button>
+        <button id="yapgrid-off" type="button">YapGrid (sub off)</button>
+        <button id="youtube" type="button">YouTube sample</button>
+        <button id="ctl-play" type="button">Play/Pause</button>
+        <button id="ctl-seek-back" type="button">-10s</button>
+        <button id="ctl-seek-fwd" type="button">+10s</button>
+        <button id="ctl-sub" type="button">Subtitles/CC</button>
+        <button id="control-player" type="button">Control YapGrid</button>
+        <button id="fullscreen-api" type="button">Test API Fullscreen</button>
+        <button id="fullscreen-css" type="button">Test CSS Fullscreen</button>
         <button id="stop" type="button">Stop and unload</button>
         <button id="observed-player" type="button">Observed player</button>
         <button id="observed-blank" type="button">Observed blank</button>
@@ -40,9 +53,10 @@
       <p id="signals">Parent signals: none.</p>
       <p id="observation">Visible TV observation: not recorded.</p>
       <p id="results" class="hint">Recorded on the physical Vizio: VidLove strict — blank. VidLove same-origin — provider error page ("This site broke the player"; embedding configuration disables part of its functionality) plus a small ad or overlay inside the frame. YouTube official sample strict — black. Same-origin fixtures A and B (fixture lab) — rendered.</p>
-      <p class="hint">Strict uses scripts and presentation only. Same-origin also permits the external player to use its own origin and storage. Unsandboxed mode removes the sandbox attribute entirely, allowing popups/navigation from the frame; if Back is trapped, use TV Home to exit and relaunch. Forms mode is deferred: no form dependency has been observed. No mode transfers remote focus into the frame.</p>
-      <p class="hint">Back unloads first, then returns to the fixture lab. Every frame is discarded 30 seconds after it was requested, whether or not it rendered and even if remote input is lost. If that fails on the TV, press TV Home and relaunch this isolated preview using the authenticated TV controller.</p>
-      <p class="hint">A parent load event can occur for a blank or blocked frame. The parent cannot read cross-origin response status, media errors, redirects inside the frame, or playback state. The YouTube sample is an official embed example; under this strict sandbox it showed black on this Vizio, which is not a statement about YouTube's own app.</p>
+      <p class="hint">Strict uses scripts and presentation only. Same-origin also permits the external player to use its own origin and storage. Unsandboxed mode removes the sandbox attribute entirely, allowing popups/navigation from the frame; if Back is trapped, use TV Home to exit and relaunch. Automatic loading never transfers remote focus into the frame.</p>
+      <p class="hint">Back unloads first, then returns to the fixture lab. Frames stay loaded indefinitely until manual Stop/Unload or Back navigation. If input is lost, press TV Home to relaunch via the TV controller.</p>
+      <p class="hint">Control YapGrid: Transfers remote focus directly into the existing iframe so real Vizio remote keys (OK, arrows) reach YapGrid's native player controls (play/pause, seeking, CC subtitles, timing). If Back is trapped inside the player, press TV Home on the remote and relaunch via the authenticated TV controller.</p>
+      <p class="hint">A parent load event can occur for a blank or blocked frame. The parent cannot read cross-origin response status, media errors, redirects inside the frame, or playback state. Cross-origin providers without a public messaging API cannot be controlled via parent buttons; use Control YapGrid or on-screen player controls.</p>
     </main>
   </body>
 </html>

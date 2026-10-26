@@ -12,6 +12,7 @@ import ntptime
 import os
 import socket
 import ssl
+import sys
 import time
 
 import config
@@ -63,6 +64,15 @@ CLOUD_APP_STATES = {
 CLOUD_RESULT_CODES = ("app_confirmed", "tv_rejected", "tv_unconfirmed", "tv_unavailable", "controller_error")
 CLOUD_APP_NAMES = {"youtube": "YouTube", "prime-video": "Prime Video", "disney-plus": "Disney+",
                    "live-tv": "Live TV", "plex": "Plex"}
+# Player input is deliberately narrower than the general SmartCast key API.
+# These are the three mappings confirmed with the existing Mac controller.
+PLAYER_KEYS = {"pause_toggle": (0, 32), "seek_backward": (3, 1), "seek_forward": (3, 7)}
+PLAYER_QUEUE_LIMIT = 8
+PLAYER_KEEPALIVE_IDLE_MS = 5000
+PLAYER_KEEPALIVE_MAX_REQUESTS = 8
+PLAYER_SESSION_HEARTBEAT_MS = 2500
+PLAYER_SESSION_STALE_MS = 3500
+PLAYER_CLOUD_MAX_DEFERRAL_MS = 8000
 NETWORK_TIMING = {"tv_dns": 0, "tv_tcp": 0, "tv_tls": 0, "tv_gc": 0,
                   "cloud_dns": 0, "cloud_tcp": 0, "cloud_tls": 0, "cloud_gc": 0}
 
@@ -98,6 +108,15 @@ def next_periodic_due(previous_due, interval, completed_at):
     next_due = time.ticks_add(previous_due, interval)
     return (time.ticks_add(completed_at, interval)
             if time.ticks_diff(completed_at, next_due) >= 0 else next_due)
+
+
+def player_cloud_deferral(active, started_at, now_tick):
+    """Defer an empty claim only for a bounded visible-player window."""
+    if not active:
+        return None, False
+    if started_at is None:
+        started_at = now_tick
+    return started_at, time.ticks_diff(now_tick, started_at) < PLAYER_CLOUD_MAX_DEFERRAL_MS
 
 
 def perf_start():
@@ -228,9 +247,10 @@ def tls_context():
     return context
 
 
-def open_pinned_socket(context):
+def open_pinned_socket(context, timing=None):
     raw = None
     try:
+        connection_started = ticks() if timing is not None else None
         started = perf_start()
         address = socket.getaddrinfo(config.TV_IP, 7345)[0][-1]
         if started is not None:
@@ -243,7 +263,11 @@ def open_pinned_socket(context):
             NETWORK_TIMING["tv_tcp"] = time.ticks_diff(ticks(), started)
         # Default handshake is synchronous. On error, no HTTP bytes are sent.
         started = perf_start()
+        started_tls = ticks() if timing is not None else None
         wrapped = context.wrap_socket(raw, server_hostname=config.TV_TLS_NAME)
+        if timing is not None:
+            timing["tls_ms"] = time.ticks_diff(ticks(), started_tls)
+            timing["connect_ms"] = time.ticks_diff(ticks(), connection_started)
         if started is not None:
             NETWORK_TIMING["tv_tls"] = time.ticks_diff(ticks(), started)
         return wrapped
@@ -497,8 +521,11 @@ def _cloud_read_line(wrapped, limit):
     raise RuntimeError("Cloud response line too long")
 
 
-def read_persistent_cloud_response(wrapped):
-    """Read exactly one HTTP/1.1 response; leave the next response untouched."""
+def read_persistent_cloud_response(wrapped, timing=None):
+    """Read exactly one framed HTTP response without waiting for socket EOF."""
+    if timing is not None:
+        timing["phase"] = "read_headers"
+        header_started = ticks()
     raw = bytearray()
     while len(raw) < MAX_CLOUD_HEADERS + 4:
         byte = wrapped.read(1)
@@ -512,6 +539,12 @@ def read_persistent_cloud_response(wrapped):
     else:
         raise RuntimeError("Cloud response headers too large")
     status, headers, _body = _parse_http_head(raw, MAX_CLOUD_HEADERS, strict=True)
+    if timing is not None:
+        timing["headers_ms"] = time.ticks_diff(ticks(), header_started)
+        timing["framing"] = ("chunked" if headers.get("transfer-encoding") == "chunked"
+                             else "content_length" if "content-length" in headers else "none")
+        timing["phase"] = "read_body"
+        body_started = ticks()
     if status != 204:
         if headers.get("transfer-encoding") == "chunked":
             decoded_length = 0
@@ -553,6 +586,9 @@ def read_persistent_cloud_response(wrapped):
         raise RuntimeError("invalid no-content Cloud response")
     if len(raw) > MAX_CLOUD_RESPONSE + MAX_CLOUD_HEADERS + 4:
         raise RuntimeError("Cloud response too large")
+    if timing is not None:
+        timing["body_ms"] = time.ticks_diff(ticks(), body_started)
+        timing["phase"] = "parse_response"
     parsed_status, body = parse_http_response(raw, MAX_CLOUD_RESPONSE, MAX_CLOUD_HEADERS,
                                               require_framing=True, strict=True)
     return parsed_status, body, headers, raw[:9] == b"HTTP/1.1 "
@@ -665,7 +701,7 @@ def tls_probe(context):
     wrapped.close()
 
 
-def tv_request(context, token, method, path, body=None):
+def tv_request(context, token, method, path, body=None, timing=None):
     payload = b"" if body is None else json.dumps(body).encode()
     header = (method + " " + path + " HTTP/1.1\r\n"
               + "Host: " + config.TV_IP + ":7345\r\n"
@@ -677,23 +713,44 @@ def tv_request(context, token, method, path, body=None):
                    + "Content-Length: " + str(len(payload)) + "\r\n")
     header = (header + "\r\n").encode()
     wrapped = None
+    request_started = None
     try:
-        wrapped = open_pinned_socket(context)
+        if timing is not None:
+            timing["phase"] = "connect"
+        wrapped = open_pinned_socket(context, timing) if timing is not None else open_pinned_socket(context)
+        request_started = ticks() if timing is not None else None
+        if timing is not None:
+            timing["phase"] = "write_headers"
         write_all(wrapped, header)
         if payload:
+            if timing is not None:
+                timing["phase"] = "write_body"
             write_all(wrapped, payload)
+        if timing is not None:
+            timing["phase"] = "read_response"
         response = read_http_response(wrapped, MAX_RESPONSE, MAX_RESPONSE,
                                       MAX_CLOUD_HEADERS, require_framing=True, strict=True)
+        if timing is not None:
+            timing["phase"] = "parse_response"
         status, result = parse_http_response(response, MAX_RESPONSE,
                                              MAX_CLOUD_HEADERS, require_framing=True, strict=True)
+        if timing is not None:
+            timing["request_ms"] = time.ticks_diff(ticks(), request_started)
+            timing["http_status"] = status
+            timing["phase"] = "complete"
         if status != 200:
             raise RuntimeError("TV HTTP status not 200")
         if not isinstance(result, dict):
             raise RuntimeError("TV HTTP response is not a JSON object")
         return result
     finally:
+        if timing is not None and request_started is not None and "request_ms" not in timing:
+            timing["request_ms"] = time.ticks_diff(ticks(), request_started)
         if wrapped is not None:
+            close_started = ticks() if timing is not None else None
             wrapped.close()
+            if timing is not None:
+                timing["close_ms"] = time.ticks_diff(ticks(), close_started)
         started = perf_start()
         gc.collect()
         if started is not None:
@@ -705,6 +762,236 @@ def checked_request(context, token, method, path, body=None):
     if result.get("STATUS", {}).get("RESULT") != "SUCCESS":
         raise RuntimeError("TV API rejected request")
     return result
+
+
+class TVPlayerConnection:
+    """One pinned SmartCast TLS socket for sequential, explicit player keys."""
+    def __init__(self, context):
+        self.context = context
+        self.wrapped = None
+        self.last_used = None
+        self.requests = 0
+        self.close_reason = "initial"
+
+    def close(self, reason="closed"):
+        wrapped = self.wrapped
+        self.wrapped = None
+        self.last_used = None
+        self.requests = 0
+        self.close_reason = reason
+        if wrapped is not None:
+            try:
+                wrapped.close()
+            except (OSError, ValueError, RuntimeError):
+                pass
+
+    def request(self, method, path, token, body, timing):
+        if self.wrapped is not None and (self.last_used is None
+                or time.ticks_diff(ticks(), self.last_used) >= PLAYER_KEEPALIVE_IDLE_MS):
+            self.close("idle")
+        if self.wrapped is not None and self.requests >= PLAYER_KEEPALIVE_MAX_REQUESTS:
+            self.close("request_limit")
+        reused = self.wrapped is not None
+        timing["connection"] = "warm" if reused else "new"
+        timing["reconnect"] = "none" if reused else self.close_reason
+        if reused:
+            timing["connect_ms"] = 0
+            timing["tls_ms"] = 0
+        payload = json.dumps(body).encode() if body is not None else b""
+        header = (method + " " + path + " HTTP/1.1\r\n"
+                  + "Host: " + config.TV_IP + ":7345\r\n"
+                  + "AUTH: " + token + "\r\n"
+                  + "Accept: application/json\r\n"
+                  + "Connection: keep-alive\r\n"
+                  + ("Content-Type: application/json\r\nContent-Length: "
+                     + str(len(payload)) + "\r\n" if body is not None else "")
+                  + "\r\n").encode()
+        try:
+            if self.wrapped is None:
+                self.wrapped = open_pinned_socket(self.context, timing)
+            started = ticks()
+            try:
+                timing["phase"] = "write_headers"
+                write_all(self.wrapped, header)
+                timing["phase"] = "write_body"
+                if payload:
+                    write_all(self.wrapped, payload)
+                # MicroPython TLS read(512) can wait for more bytes on an open
+                # socket. Read headers bytewise, then the exact framed body.
+                status, result, headers, http11 = read_persistent_cloud_response(
+                    self.wrapped, timing)
+            finally:
+                timing["request_ms"] = time.ticks_diff(ticks(), started)
+            timing["http_status"] = status
+            timing["phase"] = "check_ack"
+            if status != 200 or not isinstance(result, dict):
+                raise RuntimeError("invalid TV key response")
+            tv_status = result.get("STATUS")
+            if not isinstance(tv_status, dict) or tv_status.get("RESULT") != "SUCCESS":
+                timing["phase"] = "close_rejected"
+                self.close("rejected")
+                return result
+            self.requests += 1
+            connection = headers.get("connection", "")
+            if (not http11 or any(part.strip() == "close" for part in connection.split(","))
+                    or self.requests >= PLAYER_KEEPALIVE_MAX_REQUESTS):
+                timing["phase"] = "close_socket"
+                close_started = ticks()
+                self.close("server_close" if self.requests < PLAYER_KEEPALIVE_MAX_REQUESTS
+                           else "request_limit")
+                timing["close_ms"] = time.ticks_diff(ticks(), close_started)
+            else:
+                self.last_used = ticks()
+            timing["phase"] = "complete"
+            return result
+        except Exception:
+            # A failed write/read may follow a delivered keypress. Never replay.
+            timing["failed_phase"] = timing.get("phase", "connect")
+            close_started = ticks()
+            self.close("transport_error")
+            timing["close_ms"] = time.ticks_diff(ticks(), close_started)
+            raise
+
+    def keypress(self, token, body, timing):
+        return self.request("PUT", "/key_command/", token, body, timing)
+
+    def prewarm(self, token):
+        """Read-only authenticated check on the pinned socket; never sends a key."""
+        timing = {}
+        result = self.request("GET", "/app/current", token, None, timing)
+        status = result.get("STATUS")
+        return isinstance(status, dict) and status.get("RESULT") == "SUCCESS"
+
+
+class SupervisedPlayerSession:
+    """Explicit REPL helper; prepare Wi-Fi/NTP before the TV focus window."""
+    def __init__(self, context, token):
+        self.connection = TVPlayerConnection(context)
+        self._token = token
+
+    def send(self, command):
+        if self._token is None:
+            raise RuntimeError("supervised player session is closed")
+        return send_player_command(self.connection.context, self._token, command,
+                                   self.connection)
+
+    def close(self):
+        self.connection.close()
+        self._token = None
+
+
+def send_player_command(context, token, command, session=None):
+    """One allowlisted player keypress; API acknowledgment is not player proof."""
+    if command not in PLAYER_KEYS:
+        raise ValueError("unsupported player command")
+    if not token:
+        raise RuntimeError("private SmartCast token is not configured")
+    codeset, code = PLAYER_KEYS[command]
+    body = {"KEYLIST": [{"CODESET": codeset, "CODE": code, "ACTION": "KEYPRESS"}]}
+    received_at = ticks()
+    timing = {}
+    try:
+        result = (tv_request(context, token, "PUT", "/key_command/", body, timing=timing)
+                  if session is None else session.keypress(token, body, timing))
+        tv_status = result.get("STATUS")
+        accepted = isinstance(tv_status, dict) and tv_status.get("RESULT") == "SUCCESS"
+        outcome = "accepted" if accepted else "rejected"
+    except (OSError, ValueError, RuntimeError) as error:
+        accepted = False
+        outcome = "transport_" + type(error).__name__
+    elapsed = time.ticks_diff(ticks(), received_at)
+    print("Player key %s at %d: %s; socket %s; reconnect %s; phase %s; HTTP %s; framing %s; headers %s ms; body %s ms; close %s ms; connect %s ms; TLS %s ms; SmartCast %s ms; total %d ms" %
+          (command, received_at, outcome, timing.get("connection", "one-shot"),
+           timing.get("reconnect", "none"), timing.get("failed_phase", timing.get("phase", "?")),
+           timing.get("http_status", "?"), timing.get("framing", "?"), timing.get("headers_ms", "?"),
+           timing.get("body_ms", "?"), timing.get("close_ms", "?"),
+           timing.get("connect_ms", "?"),
+           timing.get("tls_ms", "?"), timing.get("request_ms", "?"), elapsed))
+    return accepted
+
+
+class PlayerCommandDispatcher:
+    """Bounded ordered commands for a future authenticated transport.
+
+    A transport must use one fresh dispatcher per player session and report
+    explicit full/gap errors. Commands are removed before sending so an
+    ambiguous SmartCast response never causes an automatic duplicate.
+    """
+    def __init__(self):
+        self.pending = []
+        self.last_sequence = 0
+
+    def offer(self, sequence, command):
+        if command not in PLAYER_KEYS or not isinstance(sequence, int) or isinstance(sequence, bool):
+            return "invalid"
+        if sequence <= self.last_sequence:
+            return "duplicate"
+        if sequence != self.last_sequence + 1:
+            return "gap"
+        if len(self.pending) >= PLAYER_QUEUE_LIMIT:
+            return "full"
+        self.pending.append((sequence, command))
+        self.last_sequence = sequence
+        return "queued"
+
+    def run_next(self, context, token, session=None):
+        if not self.pending:
+            return None
+        sequence, command = self.pending.pop(0)
+        return sequence, send_player_command(context, token, command, session) if session is not None else send_player_command(context, token, command)
+
+
+def supervised_player_command(command):
+    """Explicit REPL-only action; never called by boot or the unattended loop."""
+    if command not in PLAYER_KEYS:
+        raise ValueError("unsupported player command")
+    wlan = network.WLAN(network.WLAN.IF_STA)
+    if not connect_wifi(wlan):
+        raise RuntimeError("Wi-Fi unavailable")
+    synchronize_time()
+    token = token_value()
+    if token is None:
+        raise RuntimeError("private SmartCast token is not configured")
+    return send_player_command(tls_context(), token, command)
+
+
+def prepare_supervised_player_session():
+    """No key is sent; the first pinned TLS socket opens on send()."""
+    wlan = network.WLAN(network.WLAN.IF_STA)
+    if not connect_wifi(wlan):
+        raise RuntimeError("Wi-Fi unavailable")
+    synchronize_time()
+    token = token_value()
+    if token is None:
+        raise RuntimeError("private SmartCast token is not configured")
+    return SupervisedPlayerSession(tls_context(), token)
+
+
+def supervised_player_sequence(commands, reuse=True):
+    """Explicit same-session cold/warm trial; no boot or cloud integration."""
+    if (not isinstance(commands, (tuple, list)) or not 1 <= len(commands) <= 8
+            or any(command not in PLAYER_KEYS for command in commands)):
+        raise ValueError("invalid player command sequence")
+    wlan = network.WLAN(network.WLAN.IF_STA)
+    if not connect_wifi(wlan):
+        raise RuntimeError("Wi-Fi unavailable")
+    synchronize_time()
+    token = token_value()
+    if token is None:
+        raise RuntimeError("private SmartCast token is not configured")
+    context = tls_context()
+    session = TVPlayerConnection(context) if reuse else None
+    outcomes = []
+    try:
+        for command in commands:
+            accepted = send_player_command(context, token, command, session)
+            outcomes.append(accepted)
+            if not accepted:
+                break  # Stop a scripted sequence after any ambiguous key.
+    finally:
+        if session is not None:
+            session.close()
+    return outcomes
 
 
 def power_state(context, token):
@@ -1149,16 +1436,31 @@ def supervised_check():
         print("Cloud controller auth: accepted; queue was not claimed")
 
 
+class PlayerBridgeController:
+    """Explicit bridge dependencies; main.py need not be in sys.modules."""
+    ticks = staticmethod(ticks)
+    write_all = staticmethod(write_all)
+    TVPlayerConnection = TVPlayerConnection
+    PlayerCommandDispatcher = PlayerCommandDispatcher
+    PLAYER_SESSION_HEARTBEAT_MS = PLAYER_SESSION_HEARTBEAT_MS
+    PLAYER_SESSION_STALE_MS = PLAYER_SESSION_STALE_MS
+
+
 def unattended_watch():
     token = token_value()
     if token is None:
         raise RuntimeError("private SmartCast token is not configured")
     cloud_enabled = getattr(config, "CLOUD_LIVE_CLAIMING", False) is True
+    player_bridge_enabled = getattr(config, "PLAYER_BRIDGE_ENABLED", False) is True
     cloud_keepalive = getattr(config, "CLOUD_KEEPALIVE", False) is True
     shortcut_enabled = getattr(config, "IHEART_RETURNS_TO_HORIZON", False) is True
     cloud_secret = controller_token() if cloud_enabled else None
+    bridge_secret = getattr(secrets, "PLAYER_BRIDGE_TOKEN", "") if player_bridge_enabled else None
     if cloud_enabled and cloud_secret is None:
         raise RuntimeError("private Cloudflare controller token is not configured")
+    if player_bridge_enabled and (not bridge_secret or bridge_secret.startswith("YOUR_")
+                                  or len(bridge_secret) < 32):
+        raise RuntimeError("private preview player bridge token is not configured")
     cloud_interval = getattr(config, "CLOUD_POLL_MS", POWER_POLL_MS)
     if cloud_enabled and not 1000 <= cloud_interval <= 30000:
         raise RuntimeError("Cloud poll interval must be 1000 to 30000 ms")
@@ -1180,11 +1482,13 @@ def unattended_watch():
     context = None
     cloud_context = None
     cloud_session = None
+    player_bridge = None
     time_sync_due = 0
     wifi_failures = 0
     cloud_failures = 0
     power_poll_due = ticks()
     cloud_poll_due = ticks()
+    player_cloud_deferral_at = None
     shortcut_poll_due = ticks()
     shortcut_state = {"observed": False, "latched": False, "pending_at": None,
                       "cooldown_at": None, "detected_at": None}
@@ -1194,6 +1498,8 @@ def unattended_watch():
             if cloud_session is not None and not wlan.isconnected():
                 cloud_session.close()
                 cloud_session = None
+            if player_bridge is not None and not wlan.isconnected():
+                player_bridge.close()
             if not connect_wifi(wlan):
                 raise OSError("Wi-Fi unavailable")
             wifi_failures = 0
@@ -1202,10 +1508,16 @@ def unattended_watch():
                 time_sync_due = time.ticks_add(ticks(), NTP_REFRESH_MS)
             if context is None:
                 context = tls_context()
-            if cloud_enabled and cloud_context is None:
+            if (cloud_enabled or player_bridge_enabled) and cloud_context is None:
                 cloud_context = cloud_tls_context()
             if cloud_enabled and cloud_keepalive and cloud_session is None:
                 cloud_session = CloudConnection(cloud_context)
+            if player_bridge_enabled and player_bridge is None:
+                import player_bridge as player_bridge_module
+                player_bridge = player_bridge_module.PlayerBridgeClient(
+                    PlayerBridgeController, cloud_context, bridge_secret, context, token)
+            if player_bridge is not None:
+                player_bridge.step()
 
             if due(power_poll_due):
                 # Keep the power watcher on its own cadence when cloud polling
@@ -1274,28 +1586,41 @@ def unattended_watch():
                     shortcut_poll_due, shortcut_interval)
 
             if cloud_enabled and due(cloud_poll_due):
-                try:
-                    poll_lag = max(0, time.ticks_diff(ticks(), cloud_poll_due))
-                    if getattr(config, "PERF_TIMING", False) is True and poll_lag > 250:
-                        print("Timing cloud poll overdue: %d ms" % poll_lag)
-                    claimed = cloud_poll_once(cloud_context, context, cloud_secret, token,
-                                              shortcut_state if shortcut_enabled else None,
-                                              (last_power, last_power_at) if last_power_at is not None else None,
-                                              cloud_session)
-                    if claimed and shortcut_enabled:
-                        shortcut_superseded_by_cloud(shortcut_state)
-                    cloud_failures = 0
-                    cloud_poll_due = next_periodic_due(cloud_poll_due, cloud_interval, ticks())
-                except (OSError, ValueError, RuntimeError) as error:
-                    print("Cloud queue waiting:", type(error).__name__)
-                    delay = CLOUD_RETRY_MS[min(cloud_failures, len(CLOUD_RETRY_MS) - 1)]
-                    cloud_failures += 1
-                    cloud_poll_due = time.ticks_add(ticks(), delay)
+                if player_bridge is not None:
+                    player_bridge.step()
+                player_cloud_deferral_at, defer_claim = player_cloud_deferral(
+                    player_bridge is not None and player_bridge.session is not None,
+                    player_cloud_deferral_at, ticks())
+                if defer_claim:
+                    # Favor the short player-focus window. A held-visible
+                    # overlay still permits a queue claim at least every 8 s.
+                    pass
+                else:
+                    player_cloud_deferral_at = None
+                    try:
+                        poll_lag = max(0, time.ticks_diff(ticks(), cloud_poll_due))
+                        if getattr(config, "PERF_TIMING", False) is True and poll_lag > 250:
+                            print("Timing cloud poll overdue: %d ms" % poll_lag)
+                        claimed = cloud_poll_once(cloud_context, context, cloud_secret, token,
+                                                  shortcut_state if shortcut_enabled else None,
+                                                  (last_power, last_power_at) if last_power_at is not None else None,
+                                                  cloud_session)
+                        if claimed and shortcut_enabled:
+                            shortcut_superseded_by_cloud(shortcut_state)
+                        cloud_failures = 0
+                        cloud_poll_due = next_periodic_due(cloud_poll_due, cloud_interval, ticks())
+                    except (OSError, ValueError, RuntimeError) as error:
+                        print("Cloud queue waiting:", type(error).__name__)
+                        delay = CLOUD_RETRY_MS[min(cloud_failures, len(CLOUD_RETRY_MS) - 1)]
+                        cloud_failures += 1
+                        cloud_poll_due = time.ticks_add(ticks(), delay)
 
             if shortcut_enabled and due(shortcut_poll_due):
                 shortcut_poll_due = poll_shortcut_once(
                     context, token, shortcut_state, last_power, pending_launch,
                     shortcut_poll_due, shortcut_interval)
+            if player_bridge is not None:
+                player_bridge.step()
 
         except (OSError, ValueError, RuntimeError) as error:
             print("Controller waiting:", type(error).__name__)
@@ -1303,6 +1628,8 @@ def unattended_watch():
                 if cloud_session is not None:
                     cloud_session.close()
                     cloud_session = None
+                if player_bridge is not None:
+                    player_bridge.close()
                 context = None
                 cloud_context = None
                 time_sync_due = 0
@@ -1317,7 +1644,7 @@ def unattended_watch():
                     pending_at = time.ticks_add(ticks(), LAUNCH_RETRY_MS[launch_attempts])
         time.sleep_ms(next_watch_sleep_ms(ticks(), power_poll_due, cloud_poll_due,
                                          pending_at if pending_launch else None, cloud_enabled,
-                                         getattr(config, "POLL_MS", POWER_POLL_MS),
+                                         50 if player_bridge_enabled else getattr(config, "POLL_MS", POWER_POLL_MS),
                                          shortcut_poll_due if shortcut_enabled else None))
 
 
@@ -1325,6 +1652,7 @@ def main():
     # Live queue claiming, power-on launch, and iHeart shortcut are independent opt-ins.
     if (getattr(config, "AUTO_LAUNCH_ON_POWER", False) is not True
             and getattr(config, "CLOUD_LIVE_CLAIMING", False) is not True
+            and getattr(config, "PLAYER_BRIDGE_ENABLED", False) is not True
             and getattr(config, "IHEART_RETURNS_TO_HORIZON", False) is not True):
         supervised_check()
         return
@@ -1334,12 +1662,18 @@ def main():
         print("Automatic power-transition launching is enabled")
     if getattr(config, "IHEART_RETURNS_TO_HORIZON", False) is True:
         print("iHeart return shortcut is enabled")
+    if getattr(config, "PLAYER_BRIDGE_ENABLED", False) is True:
+        print("Preview player bridge is enabled")
     unattended_watch()
+
+
+def report_startup_error(error):
+    print("Controller stopped:", type(error).__name__)
+    sys.print_exception(error)
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        # Do not print configuration values, tokens, URLs, or fingerprints.
-        print("Controller stopped:", type(error).__name__, str(error))
+        report_startup_error(error)

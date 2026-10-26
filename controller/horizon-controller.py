@@ -617,6 +617,57 @@ def command_remove_agent(_args):
         print("LaunchAgent was not installed")
 
 
+SMARTCAST_KEY_COMMANDS = {
+    "pause": {"codeset": 2, "code": 2, "description": "Media Pause (codeset 2, code 2)"},
+    "play": {"codeset": 2, "code": 3, "description": "Media Play (codeset 2, code 3)"},
+    "space": {"codeset": 0, "code": 32, "description": "ASCII Space character (codeset 0, code 32)"},
+    "space-52": {"codeset": 0, "code": 52, "description": "Documented Space candidate (codeset 0, code 52)"},
+    "tab": {"codeset": 0, "code": 9, "description": "ASCII Tab character (codeset 0, code 9)"},
+    "enter": {"codeset": 0, "code": 13, "description": "ASCII Enter/Carriage-Return (codeset 0, code 13)"},
+    "back": {"codeset": 4, "code": 0, "description": "Navigation Back key (codeset 4, code 0)"},
+    "cc": {"codeset": 4, "code": 4, "description": "Closed Captions CC key (codeset 4, code 4)"},
+}
+
+
+def send_key_command(tv, token, codeset, code, action="KEYPRESS", timeout=3):
+    body = {
+        "KEYLIST": [
+            {
+                "CODESET": int(codeset),
+                "CODE": int(code),
+                "ACTION": str(action),
+            }
+        ]
+    }
+    return tv_request(tv, token, "PUT", "/key_command/", body, timeout=timeout)
+
+
+def command_key(args):
+    token = load_auth(args.auth_file)
+    if args.key:
+        name = args.key.lower()
+        if name not in SMARTCAST_KEY_COMMANDS:
+            valid = ", ".join(sorted(SMARTCAST_KEY_COMMANDS.keys()))
+            raise SystemExit(f"Unknown key '{args.key}'. Valid choices: {valid}")
+        cmd = SMARTCAST_KEY_COMMANDS[name]
+        codeset = cmd["codeset"]
+        code = cmd["code"]
+        desc = cmd["description"]
+    else:
+        if args.codeset is None or args.code is None:
+            raise SystemExit("Specify either --key <name> or both --codeset <int> and --code <int>.")
+        codeset = args.codeset
+        code = args.code
+        desc = f"Custom (codeset {codeset}, code {code})"
+
+    print(f"Sending SmartCast key command: {desc}")
+    response = send_key_command(args.tv, token, codeset, code, action=args.action)
+    result = response.get("STATUS", {}).get("RESULT", "UNKNOWN")
+    accepted = status_ok(response)
+    print(f"SmartCast API response: RESULT={result} (accepted: {accepted})")
+    print("Verification note: API acceptance confirms TV network receipt, not in-app reaction.")
+
+
 def add_connection_options(parser):
     parser.add_argument("--tv", default=TV_DEFAULT, help="TV IP address")
     parser.add_argument("--auth-file", default=str(AUTH_DEFAULT), help="private paired-token JSON file")
@@ -632,7 +683,7 @@ def add_host_options(parser):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name, handler in (("status", command_status), ("enable", command_enable), ("disable", command_disable), ("launch", None), ("serve", command_serve), ("cloud-poll", command_cloud_poll), ("watch", command_watch), ("install-agent", command_install_agent), ("remove-agent", command_remove_agent)):
+    for name, handler in (("status", command_status), ("enable", command_enable), ("disable", command_disable), ("launch", None), ("serve", command_serve), ("cloud-poll", command_cloud_poll), ("watch", command_watch), ("install-agent", command_install_agent), ("remove-agent", command_remove_agent), ("key", command_key)):
         command = sub.add_parser(name)
         add_connection_options(command)
         if name == "cloud-poll":
@@ -644,6 +695,12 @@ def main():
             add_host_options(command)
         if name in ("watch", "install-agent"):
             command.add_argument("--dry-run", action="store_true", help="log detected power-on events without launching")
+        if name == "key":
+            command.add_argument("--key", choices=sorted(SMARTCAST_KEY_COMMANDS.keys()), help="named key command to test")
+            command.add_argument("--codeset", type=int, help="custom integer codeset")
+            command.add_argument("--code", type=int, help="custom integer code")
+            command.add_argument("--action", choices=("KEYPRESS", "KEYDOWN", "KEYUP"), default="KEYPRESS",
+                                 help="key action (default: KEYPRESS)")
         command.set_defaults(handler=handler)
     args = parser.parse_args()
     if args.command == "launch":

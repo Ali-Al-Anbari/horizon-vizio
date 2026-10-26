@@ -1,0 +1,6 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; }
+body { margin: 0; background: #0b111d; color: #f5f8ff; }
+main { max-width: 850px; margin: 8vh auto; padding: 32px; font-size: 24px; line-height: 1.45; }
+h1 { font-size: 52px; } p { color: #c4d2e5; } #code { font: bold 48px ui-monospace, monospace; letter-spacing: .12em; color: #8ee1ff; }
+button, a { display: inline-block; margin: 12px 20px 12px 0; padding: 12px 18px; border: 2px solid #8ee1ff; border-radius: 10px; background: #193651; color: white; font: inherit; }
+:focus-visible { outline: 4px solid #fff; outline-offset: 4px; }

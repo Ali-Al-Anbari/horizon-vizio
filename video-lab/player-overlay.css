@@ -1,0 +1,33 @@
+:root { color-scheme: dark; font-family: Arial, Helvetica, sans-serif; background: #000; color: #f6f9ff; }
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+.player-shell { position: relative; width: 100vw; height: 100vh; overflow: hidden; background: #000; }
+#player-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; pointer-events: none; }
+#remote-capture { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; padding: 0; border: 0; opacity: 0; pointer-events: none; }
+#remote-capture:focus { outline: none; }
+.overlay { position: absolute; inset: 0; z-index: 2; display: flex; align-items: flex-end; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .16s ease, visibility 0s linear .16s; }
+.overlay::before { content: ""; position: absolute; inset: 48% 0 0; background: linear-gradient(transparent, rgba(2, 7, 16, .58) 55%, rgba(2, 7, 16, .9)); }
+.overlay.is-visible { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity .16s ease; }
+.overlay-content { position: relative; width: 100%; padding: 0 4vw 3vh; }
+.brand { margin: 0 0 .35rem; color: #9db7d8; font-size: clamp(12px, .85vw, 16px); font-weight: bold; letter-spacing: .13em; }
+h1 { margin: 0; font-size: clamp(24px, 2.1vw, 40px); line-height: 1.1; }
+.episode { margin: .2rem 0 .5rem; font-size: clamp(16px, 1.1vw, 22px); color: #d1ddec; }
+.telemetry { display: none; }
+.control-row { display: flex; justify-content: center; align-items: center; gap: .65rem; }
+.control-row button, .menu-actions button { border: 1px solid rgba(218, 232, 250, .46); border-radius: .65rem; background: rgba(15, 33, 53, .72); color: inherit; font: inherit; cursor: pointer; }
+.primary button { display: flex; flex-direction: column; align-items: center; justify-content: center; width: clamp(100px, 8vw, 150px); min-height: clamp(70px, 6vw, 108px); gap: .1rem; }
+.primary button span { font-size: clamp(28px, 2.2vw, 42px); line-height: 1; }
+.primary button small { font-size: clamp(14px, .95vw, 18px); }
+.primary #play-pause { width: clamp(112px, 9vw, 168px); border-color: #8bbbea; background: rgba(25, 72, 122, .88); }
+.secondary { margin-top: .55rem; }
+.secondary button { min-width: clamp(155px, 13vw, 235px); min-height: 2.8rem; padding: .35rem .75rem; font-size: clamp(14px, .95vw, 18px); }
+button:focus { outline: 3px solid #fff; outline-offset: 3px; background: #316ba6; transform: scale(1.025); }
+.subtitle-menu { position: absolute; right: 4vw; bottom: 2vh; width: min(38vw, 620px); padding: 1.15rem; border: 1px solid #8abaff; border-radius: .8rem; background: #0b192a; box-shadow: 0 10px 30px rgba(0, 0, 0, .45); }
+.subtitle-menu[hidden] { display: none; }
+.subtitle-menu h2 { margin: 0 0 .4rem; font-size: clamp(23px, 1.8vw, 34px); }
+.subtitle-menu p { font-size: clamp(17px, 1.1vw, 21px); line-height: 1.35; }
+.menu-actions { display: flex; gap: .75rem; }
+.menu-actions button { flex: 1; min-height: 3.5rem; padding: .5rem; font-size: clamp(17px, 1.1vw, 21px); }
+.command-status { min-height: 1.2rem; margin: .45rem 0 0; text-align: center; font-size: clamp(13px, .9vw, 17px); color: #d8e8ff; }
+.screen-reader-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@media (prefers-reduced-motion: reduce) { .overlay { transition: none; } button:focus { transform: none; } }

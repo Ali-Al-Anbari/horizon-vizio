@@ -2,10 +2,20 @@
   "name": "horizon-video-lab-preview",
   "compatibility_date": "2026-10-25",
   "workers_dev": true,
-  "main": "./video-lab-media-worker.js",
+  "keep_vars": true,
+  "vars": { "PAIRING_ONLY": true },
+  "secrets": { "required": ["TEAM_DOMAIN", "ACCESS_AUD", "OWNER_EMAIL", "PLAYER_BRIDGE_TOKEN"] },
+  "main": "./video-lab-preview-worker.js",
   "assets": {
     "directory": "./video-lab",
     "binding": "ASSETS",
-    "run_worker_first": ["/media/*"]
-  }
+    "run_worker_first": ["/media/*", "/api/*"]
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "LAUNCH_QUEUE", "class_name": "LaunchQueue" },
+      { "name": "PLAYER_BRIDGE", "class_name": "PlayerBridge" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LaunchQueue", "PlayerBridge"] }]
 }

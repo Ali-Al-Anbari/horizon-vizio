@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker, { mediaSize, serveMedia } from "../video-lab-media-worker.js";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 
 const ORIGIN = "https://horizon-video-lab-preview.example";
 const PATH = "/media/sintel-original.mp4";
@@ -106,4 +106,45 @@ test("truncated source fails instead of silently completing a partial response",
   const response = await call(app, app.request("bytes=5-9"));
   assert.equal(response.status, 206);
   await assert.rejects(response.arrayBuffer());
+});
+
+test("empty.vtt route serves valid WebVTT with CORS, text/vtt type, and exactly one cue at 99 hours", async () => {
+  const app = fixture();
+  const res = await worker.fetch(new Request(ORIGIN + "/empty.vtt"), app.env);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("Content-Type"), "text/vtt; charset=utf-8");
+  assert.equal(res.headers.get("Access-Control-Allow-Origin"), "*");
+  const text = await res.text();
+  assert.match(text, /^WEBVTT\b/);
+
+  // Check the static file matches the worker response
+  const disk = readFileSync(new URL("../video-lab/empty.vtt", import.meta.url), "utf8");
+  assert.equal(text.trim(), disk.trim());
+
+  // Parse cues according to WebVTT specification and YapGrid's cue parser requirements
+  const lines = text.replace(/\r/g, "").split("\n");
+  const cueTimingLines = lines.filter(line => line.includes("-->"));
+  assert.equal(cueTimingLines.length, 1, "must contain exactly one cue timing line");
+
+  const [startStr, endStr] = cueTimingLines[0].split("-->").map(s => s.trim());
+  const parseVttTimestamp = (s) => {
+    const match = s.match(/^(?:(\d+):)?(\d{2}):(\d{2})\.(\d{3})$/);
+    assert.ok(match, `valid timestamp format for ${s}`);
+    const hours = Number(match[1] || 0);
+    const minutes = Number(match[2]);
+    const seconds = Number(match[3]);
+    const millis = Number(match[4]);
+    return hours * 3600 + minutes * 60 + seconds + millis / 1000;
+  };
+
+  const startSec = parseVttTimestamp(startStr);
+  const endSec = parseVttTimestamp(endStr);
+  assert.equal(startSec, 99 * 3600, "start time must be exactly 99 hours (356400s)");
+  assert.equal(endSec, 99 * 3600 + 1, "end time must be 99 hours 1 second");
+  assert.ok(endSec > startSec, "end time must be greater than start time");
+
+  // Verify non-empty cue payload
+  const cueIndex = lines.indexOf(cueTimingLines[0]);
+  const cuePayload = lines.slice(cueIndex + 1).filter(l => l.trim().length > 0);
+  assert.ok(cuePayload.length > 0, "cue payload must be non-empty");
 });

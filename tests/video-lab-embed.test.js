@@ -55,9 +55,9 @@ test("remote loads candidate once and Back unloads before returning to Video Lab
   assert.equal(app.key("Enter").prevented, true);
   assert.equal(frame.src, CANDIDATE_URL);
   assert.equal(frame.hidden, false);
-  assert.equal(app.timers.size, 2);
+  assert.equal(app.timers.size, 1);
   app.get("load").click();
-  assert.equal(app.timers.size, 2);
+  assert.equal(app.timers.size, 1);
   assert.deepEqual(frame.navigations, [CANDIDATE_URL]);
   assert.match(app.get("status").textContent, /already loaded/);
   app.key("Backspace");
@@ -79,7 +79,7 @@ test("same-origin fixture A and B navigate the identical sandboxed frame without
   assert.equal(app.get("candidate"), frame);
   assert.deepEqual(frame.navigations, ["embed-fixture.html?view=a", "embed-fixture.html?view=b"]);
   assert.equal(app.document.activeElement.id, "fixture-b");
-  assert.equal(app.timers.size, 2);
+  assert.equal(app.timers.size, 1);
   app.get("stop").click();
   app.assertDiscarded(frame);
 });
@@ -94,12 +94,12 @@ test("switching to or from the third-party candidate always starts a fresh brows
   assert.deepEqual(candidateFrame.navigations, [CANDIDATE_URL]);
   assert.equal(candidateFrame.hidden, false);
   assert.equal(candidateFrame.attributes.sandbox, "allow-scripts allow-presentation");
-  assert.deepEqual(app.delays(), [12000, 30000]);
+  assert.deepEqual(app.delays(), [12000]);
   app.get("fixture-b").click();
   const nextFrame = app.get("candidate");
   assert.equal(candidateFrame.parentNode, null);
   assert.deepEqual(nextFrame.navigations, ["embed-fixture.html?view=b"]);
-  assert.deepEqual(app.delays(), [12000, 30000]);
+  assert.deepEqual(app.delays(), [12000]);
   // Late events from the discarded candidate frame cannot touch the fixture state.
   candidateFrame.dispatch("load");
   assert.doesNotMatch(app.get("status").textContent, /navigation event received/);
@@ -110,7 +110,7 @@ test("iframe load event is explicitly inconclusive; manual outcomes are labeled 
   app.get("load").click();
   app.get("candidate").dispatch("load");
   assert.match(app.get("status").textContent, /does not prove rendering, media support, or playback/);
-  assert.equal(app.timers.size, 1);
+  assert.equal(app.timers.size, 0);
   app.get("observed-blocked").click();
   assert.match(app.get("observation").textContent, /blocked or blank frame.*manual report/);
   app.get("observed-media-error").click();
@@ -135,18 +135,16 @@ test("timeout, iframe error, and parent CSP violation have distinct bounded diag
   assert.ok(app.get("signals").textContent.split("→").length <= 6);
 });
 
-test("unexpected iframe focus returns to parent; a 30-second timer unloads independently of keys", () => {
+test("unexpected iframe focus returns to parent and frame stays loaded without auto-unload", () => {
   const app = setup();
   app.get("load").click();
   const frame = app.get("candidate");
   frame.dispatch("load");
   frame.focus();
   assert.equal(app.document.activeElement.id, "load");
-  app.fireTimer(30000);
-  app.assertDiscarded(frame);
+  // Only 12s navigation timer exists initially; once loaded, no auto-unload timers remain
   assert.equal(app.timers.size, 0);
-  assert.match(app.get("status").textContent, /auto-unloaded after 30 seconds/);
-  assert.match(app.get("signals").textContent, /30-second safety unload → unloaded\.$/);
+  assert.equal(frame.hidden, false);
   app.get("horizon").click();
   assert.equal(app.navigation.at(-1), "https://horizon-vizio.ali-al-anbari.workers.dev/");
 });

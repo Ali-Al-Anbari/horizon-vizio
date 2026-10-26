@@ -26,6 +26,9 @@ PERF_TIMING = False
 # Live claiming can consume and execute a queued TV command. Keep disabled
 # until the connectivity probe and a supervised physical launch have passed.
 CLOUD_LIVE_CLAIMING = False
+# Isolated Video Lab outbound player bridge. Keep disabled until supervised
+# preview pairing, authentication, TLS and physical command tests pass.
+PLAYER_BRIDGE_ENABLED = False
 
 # SHA-256 digest of the TV's *leaf* DER certificate, independently confirmed.
 TV_CERT_SHA256 = "YOUR_TV_CERTIFICATE_SHA256_HEX"

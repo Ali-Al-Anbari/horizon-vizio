@@ -1,0 +1,13 @@
+{
+  "name": "horizon-universal-search-preview",
+  "main": "./universal-search-worker.js",
+  "compatibility_date": "2026-10-25",
+  "workers_dev": true,
+  "keep_vars": true,
+  "secrets": { "required": ["TMDB_TOKEN"] },
+  "assets": {
+    "directory": "./universal-search",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  }
+}

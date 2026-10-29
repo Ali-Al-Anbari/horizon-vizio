@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 96" role="img" aria-label="Horizon Watch">
+  <path d="M7 16v57M47 16v57M7 44h40" fill="none" stroke="#eef6ff" stroke-width="7" stroke-linecap="round"/>
+  <text x="69" y="43" fill="#f4f8fc" font-family="Arial,Helvetica,sans-serif" font-size="30" font-weight="500" letter-spacing="5">HORIZON</text>
+  <path d="M69 55h236" stroke="#8cb8d3" stroke-width="1.5" opacity=".8"/>
+  <text x="70" y="81" fill="#b8d9eb" font-family="Arial,Helvetica,sans-serif" font-size="23" font-weight="600" letter-spacing="8">WATCH</text>
+</svg>

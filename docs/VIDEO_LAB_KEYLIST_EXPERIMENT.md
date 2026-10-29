@@ -1,10 +1,12 @@
-# Supervised two-key SmartCast KEYLIST experiment
+# Supervised SmartCast KEYLIST experiment
 
 This is a manual, Pico-only test for the isolated Horizon Video Lab. Nothing in
 the browser player, Cloudflare bridge, or unattended controller imports
-`seek_batch_experiment.py`. The **KEYLIST trial** permits only the existing forward key
-(codeset 3, code 7, `KEYPRESS`), with a maximum size of two. The batch
-trial sends exactly one `PUT /key_command/` containing two identical entries.
+`seek_batch_experiment.py`. The **KEYLIST trial** permits only the existing forward
+(codeset 3, code 7) and backward (codeset 3, code 1) seek keys, with 2, 6, 12,
+30, or 60 `KEYPRESS` entries. Each batch trial sends exactly one authenticated
+`PUT /key_command/` containing that many identical entries. The 30- and 60-key
+requests are unverified on the physical Vizio and require staged testing.
 The comparison sends two separate existing `seek_forward` requests in order.
 The same helper now also has a distinct Pico-local sequential trial for the
 progressive seek project; see [VIDEO_LAB_PROGRESSIVE_SEEK.md](VIDEO_LAB_PROGRESSIVE_SEEK.md).
@@ -101,6 +103,52 @@ request sent while Horizon has focus as a YapGrid batching result. Wait for the
 page's automatic Horizon focus restoration after each trial. TV Home and the
 existing authenticated relaunch are available if remote focus becomes trapped.
 
+## Larger supervised KEYLIST trials
+
+The 6- and 12-key requests have been physically checked. Test 30 first, then
+60 only if 30 produces the expected visible movement without errors. For each
+trial, prepare a **new** one-use session in Thonny before arming focus:
+
+```python
+trial = probe.prepare_trial()
+```
+
+On the Video Lab **focus-switch** page, choose **Window: 30 s**, select
+**Arm Focus Transfer**, and confirm the page reports YapGrid iframe focus.
+Then promptly run exactly one of these commands in Thonny:
+
+```python
+print(probe.batched_trial(trial, 30, "seek_forward"))
+```
+
+After checking the actual scene/time shift and letting playback settle,
+prepare another trial, re-arm the 30-second focus window, and run:
+
+```python
+print(probe.batched_trial(trial, 60, "seek_forward"))
+```
+
+For rewind, start well away from the beginning, prepare a new trial and
+re-arm focus for **each** command:
+
+```python
+print(probe.batched_trial(trial, 30, "seek_backward"))
+```
+
+```python
+print(probe.batched_trial(trial, 60, "seek_backward"))
+```
+
+Each result prints direction, requested key count, one-request latency, and
+whether SmartCast acknowledged, rejected, or left the request uncertain. It
+closes its socket automatically and never retries. Record YapGrid's visible
+starting and ending time or scene, request latency, buffering, and focus
+restoration. A SmartCast acknowledgment alone does **not** prove all seek
+inputs affected playback. If a request is rejected or uncertain, stop rather
+than sending a compensating seek. The focus-switch page restores Horizon
+focus after 30 seconds; this is separate from the player's completion-based
+focus lease.
+
 ## Interpret and report
 
 | Observation | Meaning for the next phase |
@@ -127,7 +175,6 @@ From the repository root on the Mac (no TV or Pico access):
 PYTHONPYCACHEPREFIX=/private/tmp/horizon-keylist-pycache python3 tests/pico-seek-batch-experiment-test.py
 ```
 
-The tests verify the fixed request shape, two-key cap, no-key preparation and
-read-only warmup,
-single-request behavior, and stop-without-retry behavior. They cannot prove
-that YapGrid receives two distinct seeks.
+The tests verify the fixed request shapes and allowed counts, no-key preparation and
+read-only warmup, single-request behavior, and stop-without-retry behavior.
+They cannot prove that YapGrid processes every KEYLIST entry.

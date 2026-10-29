@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://image.tmdb.org data:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'" />
+  <title>Horizon Watch</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="search.css" />
+  <script src="core.js" defer></script>
+  <script src="player-adapter.js" defer></script>
+  <script src="mock-data.js" defer></script>
+  <script src="search.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <nav class="watch-rail" aria-label="Horizon Watch navigation">
+      <button id="home-toggle" class="rail-action" data-focus type="button" aria-label="Horizon Home"><img src="icons/house.svg" alt="" /><span>Home</span></button>
+      <button id="search-toggle" class="rail-action is-current" data-focus type="button" aria-label="Search"><img src="icons/search.svg" alt="" /><span>Search</span></button>
+      <button id="continue-toggle" class="rail-action" data-focus type="button" aria-label="Continue Watching"><img src="icons/play-circle.svg" alt="" /><span>Continue</span></button>
+      <button id="history-toggle" class="rail-action" data-focus type="button" aria-label="Watch History"><img src="icons/clock-history.svg" alt="" /><span>History</span></button>
+    </nav>
+    <div class="watch-content">
+    <header class="topbar">
+      <span class="wordmark">HORIZON WATCH</span>
+    </header>
+    <section id="search-view" class="view">
+      <div class="search-layout">
+        <div class="search-panel">
+          <div class="search-field"><img src="icons/search.svg" alt="" /><input id="query" data-focus type="search" autocomplete="off" placeholder="Search titles" aria-label="Search movies and TV shows" /></div>
+          <section id="keyboard" class="keyboard" aria-label="On-screen keyboard">
+            <div id="keyboard-keys" class="keyboard-keys"></div>
+            <p class="keyboard-hint">Arrows move · OK selects · Back closes</p>
+          </section>
+          <button id="keyboard-toggle" class="top-action" data-focus type="button">Hide Keyboard</button>
+        </div>
+        <div class="results-panel">
+          <div class="results-heading">
+            <h1>Search</h1>
+            <div class="filters" aria-label="Search filters">
+              <button data-filter="all" data-focus class="is-current" type="button">All</button>
+              <button data-filter="movie" data-focus type="button">Movies</button>
+              <button data-filter="tv" data-focus type="button">TV Shows</button>
+            </div>
+          </div>
+          <p id="search-status" class="status" role="status">Enter a title with the remote keyboard or a physical keyboard.</p>
+          <div id="results" class="results" aria-label="Search results"></div>
+        </div>
+      </div>
+    </section>
+    <section id="details-view" class="view detail-view" aria-label="Show details" hidden>
+      <div class="detail-art" id="detail-art" aria-hidden="true"></div>
+      <div class="detail-shade" aria-hidden="true"></div>
+      <button id="details-back" class="details-back" data-focus type="button" aria-label="Back to results">← Results</button>
+      <div class="detail-copy">
+        <p id="detail-kind" class="detail-kind"></p>
+        <h1 id="detail-title"></h1>
+        <p id="detail-year" class="detail-meta"></p>
+        <p id="detail-summary" class="detail-summary"></p>
+        <div id="detail-actions" class="detail-actions"></div>
+        <div id="providers" class="provider-strip" aria-label="Where to watch"></div>
+        <p class="provider-attribution">Availability via TMDB · JustWatch</p>
+        <p id="detail-status" class="detail-status" role="status"></p>
+      </div>
+      <section id="detail-episode-section" class="detail-episode-section" aria-label="Episodes">
+        <div class="episode-heading-row">
+          <h2>Episodes</h2>
+          <div class="season-control">
+            <button id="detail-season-toggle" data-focus type="button" aria-haspopup="true" aria-expanded="false" disabled>Season</button>
+            <div id="detail-season-menu" class="season-menu" role="listbox" aria-label="Choose a season" hidden></div>
+          </div>
+        </div>
+        <p id="detail-episode-status" class="detail-episode-status" role="status"></p>
+        <div id="detail-episodes" class="detail-episodes" aria-label="Season episodes"></div>
+      </section>
+    </section>
+    <section id="episodes-view" class="view episodes-view" hidden>
+      <button id="episodes-back" class="back-button" data-focus type="button">← Details</button>
+      <h1 id="episodes-heading"></h1>
+      <p class="disclaimer">Select an aired episode. YapGrid playback availability is unverified.</p>
+      <div id="seasons" class="seasons" aria-label="Seasons"></div>
+      <p id="episode-status" class="status" role="status"></p>
+      <div id="episode-list" class="episode-list"></div>
+    </section>
+    <section id="history-view" class="view history-view" hidden>
+      <div class="history-header">
+        <button id="history-back" class="back-button" data-focus type="button">← History</button>
+        <span class="history-sort-label">Recently started</span>
+      </div>
+      <div id="history-list" class="results history-grid" aria-label="Watch History"></div>
+      <p id="history-status" class="status" role="status"></p>
+      <button id="history-clear" class="back-button" data-focus type="button">Clear History</button>
+    </section>
+    <footer>Search metadata by <a href="https://www.themoviedb.org/" tabindex="-1">TMDB</a> · Provider data by JustWatch · Horizon Watch playback uses Video Lab</footer>
+    </div>
+  </main>
+</body>
+</html>

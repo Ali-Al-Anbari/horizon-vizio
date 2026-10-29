@@ -2,7 +2,8 @@
   "use strict";
   var route = root.HorizonEpisodes.parse(root.location.search);
   var url = root.HorizonEpisodes.pageUrl(route.current, route.subtitle,
-    route.testEnd && root.location.origin === "https://horizon-video-lab-preview.ali-al-anbari.workers.dev");
+    route.testEnd && root.location.origin === "https://horizon-video-lab-preview.ali-al-anbari.workers.dev",
+    null, route.fromSearch, route.showTitle, route.tvdbId);
   var returnLink = root.document.getElementById("return-player");
   returnLink.href = url;
   returnLink.focus();

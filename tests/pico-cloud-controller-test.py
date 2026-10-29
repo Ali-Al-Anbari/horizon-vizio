@@ -30,6 +30,7 @@ sys.modules["config"] = types.SimpleNamespace(
     TV_TLS_NAME="MT5581.prod.vizio.com", TV_CERT_SHA256="0" * 64,
     HORIZON_URL="https://horizon-vizio.ali-al-anbari.workers.dev/",
     CLOUD_CA_FILE="cloud-root-isrg-x1.pem", AUTO_LAUNCH_ON_POWER=False,
+    SOCKET_TIMEOUT_S=4,
     CLOUD_LIVE_CLAIMING=False,
     IHEART_RETURNS_TO_HORIZON=False, IHEART_POLL_MS=2000,
 )
@@ -286,6 +287,80 @@ class PicoCloudTests(unittest.TestCase):
         self.assertIn("body_ms", timing)
         self.assertFalse(fake.closed)  # The server remains open after complete response.
         self.assertEqual(fake.ready, b"")
+        session.close()
+
+    def test_large_keylist_extends_warm_raw_socket_timeout_then_restores_it(self):
+        ack = response(200, {"STATUS": {"RESULT": "SUCCESS"}})
+        wrapped = ScriptedTVSocket([ack, ack, ack])
+        class Raw:
+            def __init__(self): self.timeouts = []
+            def settimeout(self, value): self.timeouts.append(value)
+        raw = Raw()
+        session = pico.TVPlayerConnection(object())
+        def body(count):
+            return {"KEYLIST": [{"CODESET": 3, "CODE": 7, "ACTION": "KEYPRESS"}
+                                for _ in range(count)]}
+        with patch.object(pico, "open_pinned_socket", return_value=(wrapped, raw)) as connect:
+            for count in (1, 30, 60):
+                result = session.keypress("test-token", body(count), {})
+                self.assertEqual(result["STATUS"]["RESULT"], "SUCCESS")
+        connect.assert_called_once()
+        self.assertEqual(raw.timeouts, [12, pico.config.SOCKET_TIMEOUT_S,
+                                        12, pico.config.SOCKET_TIMEOUT_S])
+        self.assertEqual(len(wrapped.requests), 3)
+        session.close()
+
+    def test_cold_large_keylist_opens_pinned_socket_with_bounded_timeout(self):
+        ack = response(200, {"STATUS": {"RESULT": "SUCCESS"}})
+        wrapped = ScriptedTVSocket([ack])
+        class Raw:
+            def __init__(self): self.timeouts = []
+            def settimeout(self, value): self.timeouts.append(value)
+        raw = Raw()
+        session = pico.TVPlayerConnection(object())
+        body = {"KEYLIST": [{"CODESET": 3, "CODE": 1, "ACTION": "KEYPRESS"}
+                            for _ in range(60)]}
+        with patch.object(pico, "open_pinned_socket", return_value=(wrapped, raw)) as connect:
+            self.assertEqual(session.keypress("test-token", body, {})["STATUS"]["RESULT"], "SUCCESS")
+        self.assertEqual(connect.call_args.kwargs["timeout_s"], 12)
+        self.assertTrue(connect.call_args.kwargs["return_raw"])
+        self.assertEqual(raw.timeouts, [pico.config.SOCKET_TIMEOUT_S])
+        self.assertEqual(len(wrapped.requests), 1)
+        session.close()
+
+    def test_pinned_socket_applies_large_timeout_to_raw_socket(self):
+        class Raw:
+            def __init__(self): self.timeouts = []
+            def settimeout(self, value): self.timeouts.append(value)
+            def connect(self, _address): pass
+            def close(self): pass
+        raw = Raw()
+        wrapped = types.SimpleNamespace(close=lambda: None)
+        context = types.SimpleNamespace(wrap_socket=lambda source, server_hostname:
+                                        wrapped if source is raw and server_hostname ==
+                                        pico.config.TV_TLS_NAME else None)
+        with patch.object(pico.socket, "getaddrinfo", return_value=[(0, 0, 0, "", ("192.0.2.2", 7345))]), \
+             patch.object(pico.socket, "socket", return_value=raw):
+            self.assertEqual(pico.open_pinned_socket(context, {}, timeout_s=12,
+                                                      return_raw=True), (wrapped, raw))
+        self.assertEqual(raw.timeouts, [12])
+
+    def test_large_keylist_timeout_setup_failure_sends_no_key(self):
+        ack = response(200, {"STATUS": {"RESULT": "SUCCESS"}})
+        wrapped = ScriptedTVSocket([ack])
+        class Raw:
+            def settimeout(self, value):
+                if value == 12: raise OSError("timeout unsupported")
+        session = pico.TVPlayerConnection(object())
+        body = {"KEYLIST": [{"CODESET": 3, "CODE": 7, "ACTION": "KEYPRESS"}
+                            for _ in range(60)]}
+        with patch.object(pico, "open_pinned_socket", return_value=(wrapped, Raw())):
+            self.assertTrue(session.prewarm("test-token"))
+            timing = {}
+            with self.assertRaises(OSError):
+                session.keypress("test-token", body, timing)
+        self.assertTrue(timing["request_not_sent"])
+        self.assertEqual(len(wrapped.requests), 1)  # Only the read-only warmup.
         session.close()
 
     def test_player_keepalive_fully_consumes_chunked_reply_before_next_key(self):
@@ -1537,6 +1612,48 @@ class PicoCloudTests(unittest.TestCase):
 
 
 class PlayerBridgeTests(unittest.TestCase):
+    def test_live_player_defers_blocking_power_and_iheart_reads_but_only_for_eight_seconds(self):
+        class EndLoop(Exception):
+            pass
+
+        clock = {"now": 0}
+        power_reads, shortcut_reads = [], []
+
+        class ActiveBridge:
+            session = "active"
+            batch = None
+
+            def __init__(self, *_args):
+                pass
+
+            def step(self):
+                pass
+
+        def sleep(milliseconds):
+            clock["now"] += milliseconds
+            if clock["now"] >= 8100:
+                raise EndLoop()
+
+        with patch.object(sys.modules["config"], "PLAYER_BRIDGE_ENABLED", True, create=True), \
+             patch.object(sys.modules["config"], "IHEART_RETURNS_TO_HORIZON", True), \
+             patch.object(sys.modules["secrets"], "PLAYER_BRIDGE_TOKEN", "x" * 32, create=True), \
+             patch.object(pico.time, "ticks_ms", side_effect=lambda: clock["now"], create=True), \
+             patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
+             patch.object(pico.time, "sleep_ms", side_effect=sleep, create=True), \
+             patch.object(pico, "load_power", return_value=1), \
+             patch.object(pico, "connect_wifi", return_value=True), \
+             patch.object(pico, "synchronize_time"), \
+             patch.object(pico, "tls_context", return_value=object()), \
+             patch.object(pico, "cloud_tls_context", return_value=object()), \
+             patch.object(pico, "power_state", side_effect=lambda *_: power_reads.append(clock["now"]) or 1), \
+             patch.object(pico, "poll_shortcut_once", side_effect=lambda *_: shortcut_reads.append(clock["now"]) or clock["now"] + 2000), \
+             patch.object(player_bridge, "PlayerBridgeClient", ActiveBridge):
+            with self.assertRaises(EndLoop):
+                pico.unattended_watch()
+        self.assertEqual(power_reads, [8000])
+        self.assertEqual(shortcut_reads, [8000])
+
     def test_main_script_starts_bridge_without_sys_modules_main_entry(self):
         class BridgeReached(Exception):
             pass
@@ -1645,6 +1762,7 @@ class PlayerBridgeTests(unittest.TestCase):
         with patch.object(player_bridge.socket, "getaddrinfo", return_value=[(0, 0, 0, "", ("127.0.0.1", 443))]), \
              patch.object(player_bridge.socket, "socket", return_value=raw), \
              patch.object(player_bridge.select, "poll", return_value=poll), \
+             patch.object(player_bridge.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
              patch.object(player_bridge.time, "ticks_add", side_effect=lambda a, b: a + b, create=True):
             client.connect()
             self.assertIs(client.socket, tls)
@@ -1685,6 +1803,8 @@ class PlayerBridgeTests(unittest.TestCase):
         frame.extend(payload[4:])
         self.assertEqual(player_bridge._next_frame(frame), (1, payload))
         self.assertEqual(frame, b"")
+        self.assertEqual(player_bridge._next_frame(NoDeleteBuffer(b"\x88\x02\x03\xf3")),
+                         (8, b"\x03\xf3"))  # Server close 1011, without bytearray deletion.
         with self.assertRaises(ValueError):
             player_bridge._next_frame(bytearray(b"\x81\xff"))
 
@@ -1753,7 +1873,7 @@ class PlayerBridgeTests(unittest.TestCase):
             self.assertTrue(FakeTV.instances[-1].closed)
             self.assertIsNone(client.tv)
 
-    def test_player_batch_runs_one_ordered_key_per_step_and_can_cancel(self):
+    def test_player_batch_explicit_sequential_debug_mode_can_cancel(self):
         class FakeTV:
             def __init__(self):
                 self.wrapped = object()
@@ -1779,9 +1899,10 @@ class PlayerBridgeTests(unittest.TestCase):
         sent = []
         client.send = sent.append
         value = {"session": client.session, "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-                 "sequence": 1, "command": "seek_forward", "count": 6,
+                 "sequence": 1, "command": "seek_forward", "count": 30,
                  "deadlineAt": int(time.time() * 1000) + 1200}
-        with patch.object(player_bridge.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+        with patch.object(player_bridge.config, "PLAYER_SEEK_MODE", "sequential", create=True), \
+             patch.object(player_bridge.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
              patch.object(player_bridge.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True):
             client._batch(value)
             self.assertEqual(sent[-1]["type"], "batch_accepted")
@@ -1807,6 +1928,7 @@ class PlayerBridgeTests(unittest.TestCase):
             self.assertEqual(sent[-1]["state"], "complete")
             self.assertEqual(sent[-1]["acknowledged"], 3)
             self.assertEqual(sent[-1]["metrics"]["avgMs"], 120)
+            self.assertEqual(sent[-1]["metrics"]["smartcastRequests"], 3)
             self.assertEqual(tv.keys[-1]["KEYLIST"][0]["CODE"], 1)
             value.update({"id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "sequence": 3,
                           "command": "seek_forward", "count": 60})
@@ -1815,6 +1937,58 @@ class PlayerBridgeTests(unittest.TestCase):
             self.assertEqual(sent[-1]["state"], "complete")
             self.assertEqual(sent[-1]["acknowledged"], 60)
             self.assertEqual(len(tv.keys), 65)
+
+    def test_player_keylist_uses_one_request_for_verified_counts_and_both_directions(self):
+        class FakeTV:
+            wrapped = object()
+            last_used = 100
+            def __init__(self): self.requests = []
+            def keypress(self, _token, body, timing):
+                self.requests.append(body)
+                timing.update({"request_ms": 531, "connection": "warm"})
+                return {"STATUS": {"RESULT": "SUCCESS"}}
+            def close(self, _reason="closed"): pass
+
+        controller = types.SimpleNamespace(ticks=lambda: 100, PLAYER_KEYS=pico.PLAYER_KEYS,
+            PLAYER_SESSION_HEARTBEAT_MS=2500, PLAYER_SESSION_STALE_MS=3500)
+        with patch.object(player_bridge.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(player_bridge.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True):
+            for mode, counts in ((None, (1, 3, 6, 12, 30, 60)),
+                                 ("verified", (1, 3, 6, 12, 30, 60)),
+                                 ("all_keylist", (1, 3, 6, 12, 30, 60))):
+                with patch.object(player_bridge.config, "PLAYER_SEEK_MODE", mode, create=True):
+                    for command, code in (("seek_forward", 7), ("seek_backward", 1)):
+                        for count in counts:
+                            with self.subTest(mode=mode, command=command, count=count):
+                                tv = FakeTV()
+                                client = player_bridge.PlayerBridgeClient(controller, object(),
+                                                                           "cloud", object(), "tv")
+                                client.session = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+                                client.tv = tv
+                                client.dispatcher = pico.PlayerCommandDispatcher()
+                                sent = []
+                                client.send = sent.append
+                                value = {"session": client.session,
+                                    "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "sequence": 1,
+                                    "command": command, "count": count,
+                                    "deadlineAt": int(time.time() * 1000) + 1200}
+                                client._batch(value)
+                                self.assertEqual(sent[-1]["type"], "batch_accepted")
+                                self.assertTrue(sent[-1]["accepted"])
+                                client._batch_step()
+                                self.assertEqual(len(tv.requests), 1)
+                                self.assertEqual(tv.requests[0], {"KEYLIST": [
+                                    {"CODESET": 3, "CODE": code, "ACTION": "KEYPRESS"}
+                                    for _ in range(count)]})
+                                self.assertEqual([item["type"] for item in sent],
+                                                 ["batch_accepted", "batch_progress", "batch_done"])
+                                self.assertEqual(sent[-1]["state"], "complete")
+                                self.assertEqual(sent[-1]["code"], "keylist_acknowledged")
+                                self.assertEqual(sent[-1]["acknowledged"], count)
+                                self.assertEqual(sent[-1]["metrics"]["smartcastRequests"], 1)
+                                self.assertEqual(sent[-1]["metrics"]["avgMs"], 531)
+                                client._batch_step()
+                                self.assertEqual(len(tv.requests), 1)
 
     def test_player_batch_invalid_and_uncertain_key_stops_without_retry(self):
         class FakeTV:
@@ -1852,6 +2026,98 @@ class PlayerBridgeTests(unittest.TestCase):
             client._batch_step()
             self.assertEqual(client.tv.calls, 1)
 
+    def test_player_keylist_rejection_uncertainty_warmup_and_cancel_never_replay(self):
+        class FakeTV:
+            def __init__(self, outcome):
+                self.outcome = outcome
+                self.wrapped = object() if outcome != "warmup" else None
+                self.last_used = 100 if outcome != "warmup" else None
+                self.calls = 0
+            def prewarm(self, _token): return False
+            def keypress(self, _token, _body, timing):
+                self.calls += 1
+                if self.outcome == "rejected":
+                    return {"STATUS": {"RESULT": "FAILURE"}}
+                if self.outcome == "malformed":
+                    return {"unexpected": "response"}
+                if self.outcome == "not_sent":
+                    timing["request_not_sent"] = True
+                    raise OSError("timeout setup failed before any write")
+                timing["failed_phase"] = "read_body"
+                raise OSError("response lost after write")
+            def close(self, _reason="closed"): pass
+
+        controller = types.SimpleNamespace(ticks=lambda: 100, PLAYER_KEYS=pico.PLAYER_KEYS,
+            PLAYER_SESSION_HEARTBEAT_MS=2500, PLAYER_SESSION_STALE_MS=3500)
+        with patch.object(player_bridge.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(player_bridge.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True):
+            for outcome, state, code, calls in (("rejected", "failed", "tv_rejected", 1),
+                                                ("malformed", "unknown", "ambiguous_response", 1),
+                                                ("not_sent", "failed", "request_not_sent", 1),
+                                                ("timeout", "unknown", "transport_OSError", 1),
+                                                ("warmup", "failed", "warmup_failed", 0)):
+                with self.subTest(outcome=outcome):
+                    tv = FakeTV(outcome)
+                    client = player_bridge.PlayerBridgeClient(controller, object(),
+                                                               "cloud", object(), "tv")
+                    client.session = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+                    client.tv = tv
+                    client.dispatcher = pico.PlayerCommandDispatcher()
+                    sent = []
+                    client.send = sent.append
+                    value = {"session": client.session,
+                        "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "sequence": 1,
+                        "command": "seek_forward", "count": 60,
+                        "deadlineAt": int(time.time() * 1000) + 1200}
+                    client._batch(value)
+                    if outcome == "rejected":
+                        client._message(json.dumps({"type": "player_batch_cancel",
+                            "session": client.session, "id": value["id"]}).encode())
+                        self.assertEqual(sent[-1]["state"], "cancelled")
+                        self.assertEqual(tv.calls, 0)
+                        value["id"] = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+                        value["sequence"] = 2
+                        client._batch(value)
+                    client._batch_step()
+                    self.assertEqual(sent[-1]["state"], state)
+                    self.assertEqual(sent[-1]["code"], code)
+                    self.assertEqual(sent[-1]["acknowledged"], 0)
+                    self.assertEqual(sent[-1]["metrics"]["smartcastRequests"], calls)
+                    client._batch_step()
+                    self.assertEqual(tv.calls, calls)
+
+    def test_player_sequential_debug_mode_uses_original_one_key_requests(self):
+        class FakeTV:
+            wrapped = object()
+            last_used = 100
+            def __init__(self): self.requests = []
+            def keypress(self, _token, body, timing):
+                self.requests.append(body)
+                timing["request_ms"] = 120
+                return {"STATUS": {"RESULT": "SUCCESS"}}
+            def close(self, _reason="closed"): pass
+        tv = FakeTV()
+        controller = types.SimpleNamespace(ticks=lambda: 100, PLAYER_KEYS=pico.PLAYER_KEYS,
+            PLAYER_SESSION_HEARTBEAT_MS=2500, PLAYER_SESSION_STALE_MS=3500)
+        client = player_bridge.PlayerBridgeClient(controller, object(), "cloud", object(), "tv")
+        client.session = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        client.tv = tv
+        client.dispatcher = pico.PlayerCommandDispatcher()
+        sent = []
+        client.send = sent.append
+        with patch.object(player_bridge.config, "PLAYER_SEEK_MODE", "sequential", create=True), \
+             patch.object(player_bridge.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(player_bridge.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True):
+            client._batch({"session": client.session,
+                "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "sequence": 1,
+                "command": "seek_forward", "count": 6,
+                "deadlineAt": int(time.time() * 1000) + 1200})
+            for _ in range(6): client._batch_step()
+        self.assertEqual(len(tv.requests), 6)
+        self.assertTrue(all(len(body["KEYLIST"]) == 1 for body in tv.requests))
+        self.assertEqual(sent[-1]["state"], "complete")
+        self.assertEqual(sent[-1]["metrics"]["smartcastRequests"], 6)
+
     def test_player_batch_session_close_drops_remaining_inputs(self):
         class FakeTV:
             wrapped = object()
@@ -1874,7 +2140,8 @@ class PlayerBridgeTests(unittest.TestCase):
         value = {"session": client.session, "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
                  "sequence": 1, "command": "seek_forward", "count": 30,
                  "deadlineAt": int(time.time() * 1000) + 1200}
-        with patch.object(player_bridge.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+        with patch.object(player_bridge.config, "PLAYER_SEEK_MODE", "sequential", create=True), \
+             patch.object(player_bridge.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
              patch.object(player_bridge.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True):
             client._batch(value)
             client._batch_step()

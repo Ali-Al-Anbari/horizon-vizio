@@ -3,11 +3,15 @@
 
   const config = window.HORIZON_CONFIG;
   const grid = document.getElementById("app-grid");
-  if (!config || !Array.isArray(config.tiles) || !grid) return;
+  const secondaryGrid = document.getElementById("secondary-app-grid");
+  if (!config || !Array.isArray(config.tiles) || !grid || !secondaryGrid) return;
 
   const home = document.getElementById("home-screen");
   const settings = document.getElementById("settings-screen");
   const browser = document.getElementById("browser-screen");
+  const searchOpen = document.getElementById("search-open");
+  const watchSection = document.getElementById("watch-section");
+  const watchHost = document.getElementById("watch-cards");
   const settingsOpen = document.getElementById("settings-open");
   const settingsClose = document.getElementById("settings-close");
   const browserClose = document.getElementById("browser-close");
@@ -31,10 +35,9 @@
   const wallpaperLayers = [...document.querySelectorAll(".wallpaper-layer")];
   const wallpaperInterval = 60000;
   const storageKey = "horizon.preferences.v1";
-  const defaults = { wallpaper: wallpapers[0]?.id, slideshow: true, accent: "cyan", arrangement: "original" };
+  const defaults = { wallpaper: wallpapers[0]?.id, slideshow: true, accent: "cyan" };
   const options = {
     accent: [{ value: "cyan", label: "Pearl" }, { value: "violet", label: "Violet" }, { value: "ice", label: "Ice" }],
-    arrangement: [{ value: "original", label: "Original" }, { value: "reverse", label: "Reverse" }, { value: "alphabetical", label: "A–Z" }],
   };
   const localControllerPage = location.protocol === "http:" && location.port === "8765";
   const cloudControllerPage = location.protocol === "https:"
@@ -54,7 +57,14 @@
   let nextWallpaper = null;
   let launchPending = false;
   let launchConfirmed = false;
+  let searchOpening = false;
+  let watchRows = [];
+  let watchIndex = 0;
+  const topTileCount = config.tiles.filter(tile => tile.favorite !== false).length;
+  const tileButton = index => index < topTileCount ? grid.children[index] : secondaryGrid.children[index - topTileCount];
+  function revealFocus(element) { element?.scrollIntoView?.({ block: "nearest", inline: "nearest" }); }
   let paired = false;
+  let pairingRequired = false;
   let pairingTimer = 0;
   let pairingGeneration = 0;
   let pairingBusy = false;
@@ -115,6 +125,124 @@
     notice.hidden = false;
     clearTimeout(noticeTimer);
     noticeTimer = setTimeout(() => { notice.hidden = true; }, 2400);
+  }
+
+  function openSearch(source = "search-open") {
+    if (searchOpening || !searchOpen) return;
+    const localPreview = ["localhost", "127.0.0.1"].includes(location.hostname) && location.port === "4173";
+    const target = localPreview ? "/universal-search/index.html?mock=1&from=home-local" : config.searchUrl;
+    if (typeof target !== "string" || !target) { showNotice("Search is unavailable."); return; }
+    searchOpening = true;
+    try { sessionStorage.setItem("horizon.home.searchFocus", source); } catch (_error) {}
+    try { location.assign(target); }
+    catch (_error) { searchOpening = false; showNotice("Search could not open."); }
+  }
+
+  function validWatchRow(row) {
+    const positive = value => Number.isInteger(value) && value > 0 && value <= 999999999;
+    if (!row || !["tv", "movie"].includes(row.type) || !positive(row.id)
+        || typeof row.title !== "string" || !row.title || row.title.length > 160
+        || !Number.isFinite(row.at) || row.at < 0 || row.at > 8640000000000000
+        || (row.type === "tv" && (!positive(row.season) || !positive(row.episode)))) return null;
+    const artwork = value => typeof value === "string" && /^\/[a-zA-Z0-9._-]{1,90}$/.test(value) ? value : null;
+    return { type: row.type, id: row.id, title: row.title, season: row.type === "tv" ? row.season : null,
+      episode: row.type === "tv" ? row.episode : null, subtitle: row.subtitle === "on" ? "on" : "off",
+      at: row.at, poster: artwork(row.poster), backdrop: artwork(row.backdrop),
+      episodeTitle: typeof row.episodeTitle === "string" ? row.episodeTitle.slice(0, 160) : "",
+      tvdbId: row.type === "tv" && positive(row.tvdbId) ? row.tvdbId : null };
+  }
+
+  function readWatchRows() {
+    const key = "horizon.watch.home.v1";
+    let parsed = null;
+    try {
+      const fragment = location.hash || "";
+      parsed = fragment.startsWith("#watch=") && fragment.length < 7000
+        ? JSON.parse(decodeURIComponent(fragment.slice(7))) : JSON.parse(localStorage.getItem(key) || "null");
+    } catch (_error) { return []; }
+    if (!parsed || parsed.version !== 2 || !Array.isArray(parsed.items) || parsed.items.length > 6) return [];
+    const seen = new Set();
+    const rows = parsed.items.map(validWatchRow).filter(row => {
+      if (!row) return false;
+      const id = `${row.type}:${row.id}`;
+      if (seen.has(id)) return false;
+      seen.add(id); return true;
+    });
+    if ((location.hash || "").startsWith("#watch=")) {
+      try { localStorage.setItem(key, JSON.stringify({ version: 2, items: rows })); } catch (_error) {}
+    }
+    return rows;
+  }
+
+  function openWatchRow(row) {
+    if (searchOpening) return;
+    const localPreview = ["localhost", "127.0.0.1"].includes(location.hostname) && location.port === "4173";
+    const watchUrl = localPreview ? "/universal-search/index.html?mock=1&from=home-local" : config.searchUrl;
+    try { sessionStorage.setItem("horizon.watch.returnFocus", `${row.type}:${row.id}`); } catch (_error) {}
+    if (row.type === "movie") {
+      searchOpening = true;
+      try { location.assign(watchUrl + "&open=movie&id=" + row.id); }
+      catch (_error) { searchOpening = false; showNotice("Movie details could not open."); }
+      return;
+    }
+    const url = watchUrl + "&play=tv&id=" + row.id + "&season=" + row.season + "&episode="
+      + row.episode + "&sub=" + row.subtitle + "&name=" + encodeURIComponent(row.title.slice(0, 160))
+      + (row.poster ? "&poster=" + encodeURIComponent(row.poster) : "")
+      + (row.backdrop ? "&backdrop=" + encodeURIComponent(row.backdrop) : "")
+      + (row.episodeTitle ? "&episodeTitle=" + encodeURIComponent(row.episodeTitle) : "")
+      + (row.tvdbId ? "&tvdb=" + row.tvdbId : "");
+    searchOpening = true;
+    try { location.assign(url);
+      const fresh = { ...row, at: Date.now() };
+      watchRows = [fresh, ...watchRows.filter(other => other.type !== row.type || other.id !== row.id)].slice(0, 6);
+      try { localStorage.setItem("horizon.watch.home.v1", JSON.stringify({ version: 2, items: watchRows })); } catch (_error) {}
+    } catch (_error) { searchOpening = false; showNotice("Player could not open."); }
+  }
+
+  function renderWatchRows() {
+    if (!watchHost || !watchSection) return;
+    watchRows = readWatchRows(); watchHost.replaceChildren();
+    watchSection.hidden = !watchRows.length;
+    watchRows.forEach((row, index) => {
+      const card = document.createElement("button"); card.type = "button"; card.className = "watch-card";
+      card.dataset.watchIndex = String(index);
+      const art = document.createElement("span"); art.className = "watch-card-art";
+      const showFallback = () => {
+        const fallback = document.createElement("img"); fallback.className = "watch-card-fallback";
+        fallback.src = "assets/horizon-watch.svg"; fallback.alt = "";
+        art.replaceChildren(fallback);
+      };
+      if (row.poster || row.backdrop) {
+        const image = document.createElement("img"); image.loading = "lazy"; image.alt = "";
+        image.className = "watch-card-poster";
+        image.src = "https://image.tmdb.org/t/p/" + (row.poster ? "w500" + row.poster : "w780" + row.backdrop);
+        image.onerror = () => {
+          if (row.poster && row.backdrop && image.src.indexOf(row.backdrop) < 0) {
+            image.src = "https://image.tmdb.org/t/p/w780" + row.backdrop;
+          } else showFallback();
+        };
+        art.append(image);
+      } else showFallback();
+      const copy = document.createElement("span"); copy.className = "watch-card-copy";
+      const title = document.createElement("strong"); title.textContent = row.title;
+      const detail = document.createElement("small"); detail.textContent = row.type === "tv"
+        ? `S${row.season} E${row.episode}${row.episodeTitle ? " · " + row.episodeTitle : ""}` : "Movie";
+      copy.append(title, detail); card.append(art, copy);
+      card.setAttribute("aria-label", row.title + ", " + detail.textContent);
+      card.addEventListener("focus", () => { watchIndex = index; markFocused(card); });
+      card.addEventListener("blur", () => blurFocused(card));
+      card.addEventListener("click", () => openWatchRow(row));
+      watchHost.append(card);
+    });
+  }
+
+  function focusWatch(index) {
+    if (!watchRows.length) return false;
+    watchIndex = Math.max(0, Math.min(watchRows.length - 1, index));
+    const card = watchHost.children[watchIndex];
+    focusElement(card);
+    revealFocus(card);
+    return true;
   }
 
   function applyPreferences() {
@@ -216,11 +344,7 @@
   }
 
   function orderedTiles() {
-    const favorites = config.tiles.filter(tile => tile.favorite !== false);
-    const additional = config.tiles.filter(tile => tile.favorite === false);
-    if (preferences.arrangement === "reverse") favorites.reverse();
-    if (preferences.arrangement === "alphabetical") favorites.sort((a, b) => a.name.localeCompare(b.name));
-    return favorites.concat(additional);
+    return config.tiles.filter(tile => tile.favorite !== false).concat(config.tiles.filter(tile => tile.favorite === false));
   }
 
   function currentTileIndex() {
@@ -230,10 +354,11 @@
   }
 
   function updateSelection(tile) {
-    const status = tile.kind === "browser" ? "Browser coming soon"
+    const status = tile.kind === "watch" ? "Search movies and TV"
+      : tile.kind === "browser" ? "Browser coming soon"
       : tile.kind === "settings" ? "Personalize Horizon"
       : tile.launchState === "supported" ? (localControllerPage ? "Press OK to open"
-        : cloudControllerPage ? (paired ? "Press OK to open" : "Pair this TV to open") : "Controller required")
+        : cloudControllerPage ? (paired ? "Press OK to open" : pairingRequired ? "Pair this TV to open" : "Launch service unavailable") : "Controller required")
       : "Native launch unverified";
     if (!leanFocus || selectionName.textContent !== tile.name) selectionName.textContent = tile.name;
     if (!leanFocus || selectionStatus.textContent !== status) selectionStatus.textContent = status;
@@ -273,7 +398,7 @@
   }
 
   function showPairing() {
-    if (!cloudControllerPage || localControllerPage) return;
+    if (!cloudControllerPage || localControllerPage || !pairingRequired) return;
     pairing.hidden = false;
     focusElement(pairingRetry);
     if (!pairingBusy && pairingCode.textContent === "—") startPairing();
@@ -281,7 +406,7 @@
 
   function closePairing() {
     pairing.hidden = true;
-    focusElement(grid.children[activeIndex]);
+    focusElement(tileButton(activeIndex));
   }
 
   async function startPairing() {
@@ -290,13 +415,16 @@
     const generation = ++pairingGeneration;
     clearTimeout(pairingTimer);
     pairingCode.textContent = "—";
+    pairingCode.hidden = true;
     pairingStatus.textContent = "Creating a short-lived code…";
     try {
       const result = await cloudJson("/api/pair/start", {
         method: "POST", headers: { "X-Horizon-Action": "pair" },
       });
       if (generation !== pairingGeneration) return;
+      if (!/^[A-Z0-9]{10}$/.test(result.code || "")) throw new Error("Pairing service returned no usable code. Try again later.");
       pairingCode.textContent = result.code;
+      pairingCode.hidden = false;
       pairingUrl.textContent = result.pairingUrl;
       pairingStatus.textContent = "Waiting for your approval. This code expires in five minutes.";
       const poll = async () => {
@@ -310,7 +438,7 @@
             pairingCode.textContent = "—";
             pairingStatus.textContent = "TV paired.";
             pairing.hidden = true;
-            focusElement(grid.children[activeIndex]);
+            focusElement(tileButton(activeIndex));
             if (tiles[activeIndex]) updateSelection(tiles[activeIndex]);
             showNotice("This TV is paired and ready.");
             return;
@@ -325,7 +453,9 @@
       };
       pairingTimer = setTimeout(poll, 3000);
     } catch (error) {
-      pairingStatus.textContent = error.message || "Could not start pairing.";
+      pairingStatus.textContent = error.message === "Cloud sign-in or launch service is unavailable."
+        ? "Pairing service unavailable. Try New code later, or select Back to Horizon."
+        : error.message || "Could not start pairing. Try New code later.";
     } finally { pairingBusy = false; }
   }
 
@@ -333,18 +463,31 @@
     if (!cloudControllerPage || localControllerPage) return;
     try {
       const response = await fetch("/api/pair/session", { cache: "no-store" });
-      const state = response.ok ? await response.json() : null;
-      if (state?.state === "paired") {
-        if (state.rotationDue) await cloudJson("/api/pair/rotate", {
-          method: "POST", headers: { "X-Horizon-Action": "pair" },
-        });
+      if (!response.headers.get("content-type")?.includes("application/json")) return;
+      const state = await response.json();
+      if (response.ok && state?.state === "paired") {
+        pairingRequired = false;
         paired = true;
         pairing.hidden = true;
         if (tiles[activeIndex]) updateSelection(tiles[activeIndex]);
+        if (state.rotationDue) {
+          try { await cloudJson("/api/pair/rotate", {
+            method: "POST", headers: { "X-Horizon-Action": "pair" },
+          }); } catch (error) {
+            if (error.message === cloudErrors.not_authorized) {
+              paired = false; pairingRequired = true; showPairing();
+            }
+            /* A service outage is not evidence that the validated session expired. */
+          }
+        }
         return;
       }
-    } catch (_error) { /* The pairing panel reports connection failure. */ }
-    showPairing();
+      if (response.status === 401 && state?.code === "not_authorized") {
+        pairingRequired = true;
+        paired = false;
+        showPairing();
+      }
+    } catch (_error) { /* Service failure is not evidence that pairing is required. */ }
   }
 
   async function launchCloudApp(tile) {
@@ -372,7 +515,8 @@
   async function launchNative(tile) {
     if (launchPending || launchConfirmed) return;
     if (cloudControllerPage && !localControllerPage && !paired) {
-      showPairing();
+      if (pairingRequired) showPairing();
+      else showNotice("Cloud launch service is unavailable. Try again later.");
       return;
     }
     if (!localControllerPage && !cloudControllerPage) {
@@ -409,6 +553,7 @@
       showNotice(message);
       if (message === cloudErrors.not_authorized) {
         paired = false;
+        pairingRequired = true;
         showPairing();
       }
     } finally {
@@ -417,6 +562,7 @@
   }
 
   function activate(tile) {
+    if (tile.kind === "watch") { openSearch(tile.id); return; }
     if (tile.kind === "browser") {
       returnTileId = tile.id;
       notice.hidden = true;
@@ -440,12 +586,13 @@
     tiles = orderedTiles();
     focusedElement = null;
     grid.replaceChildren();
-    for (const tile of tiles) {
+    secondaryGrid.replaceChildren();
+    for (const [index, tile] of tiles.entries()) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "app-tile";
       button.dataset.id = tile.id;
-      button.setAttribute("aria-label", `${tile.name}, ${tile.kind === "browser" ? "browser coming soon" : tile.kind === "settings" ? "open settings" : tile.launchState === "supported" ? "open native app" : "native launch unverified"}`);
+      button.setAttribute("aria-label", `${tile.name}, ${tile.kind === "watch" ? "open Horizon Watch" : tile.kind === "browser" ? "browser coming soon" : tile.kind === "settings" ? "open settings" : tile.launchState === "supported" ? "open native app" : "native launch unverified"}`);
 
       const icon = document.createElement("span");
       icon.className = `tile-icon icon-${tile.id}`;
@@ -469,12 +616,12 @@
       });
       button.addEventListener("blur", () => blurFocused(button));
       button.addEventListener("click", () => activate(tile));
-      grid.append(button);
+      (index < topTileCount ? grid : secondaryGrid).append(button);
     }
     const restored = restoreId ? tiles.findIndex(tile => tile.id === restoreId) : -1;
     activeIndex = restored >= 0 ? restored : Math.min(activeIndex, tiles.length - 1);
     if (!home.hidden) {
-      focusElement(grid.children[activeIndex]);
+      focusElement(tileButton(activeIndex));
       updateSelection(tiles[activeIndex]);
     }
   }
@@ -500,7 +647,6 @@
     preferences[key] = choices[(current + 1) % choices.length].value;
     applyPreferences();
     savePreferences();
-    if (key === "arrangement") renderTiles(returnTileId || tiles[currentTileIndex()]?.id);
   }
 
   function openSettings() {
@@ -516,7 +662,7 @@
     home.hidden = false;
     const restored = tiles.findIndex(tile => tile.id === returnTileId);
     activeIndex = restored >= 0 ? restored : 0;
-    focusElement(grid.children[activeIndex]);
+    focusElement(tileButton(activeIndex));
   }
 
   function closeBrowser() {
@@ -524,35 +670,33 @@
     home.hidden = false;
     const restored = tiles.findIndex(tile => tile.id === returnTileId);
     activeIndex = restored >= 0 ? restored : 0;
-    focusElement(grid.children[activeIndex]);
+    focusElement(tileButton(activeIndex));
   }
 
-  function columns() { return window.innerWidth <= 700 ? 3 : 6; }
-
   function moveTile(key) {
-    const count = tiles.length;
-    const cols = columns();
     const current = currentTileIndex();
+    const top = current < topTileCount;
+    const start = top ? 0 : topTileCount;
+    const count = top ? topTileCount : tiles.length - topTileCount;
+    const local = current - start;
     let next = current;
-    if (key === "ArrowLeft" && current % cols > 0) next--;
-    if (key === "ArrowRight" && current + 1 < count && current % cols < cols - 1) next++;
+    if (key === "ArrowLeft" && local > 0) next--;
+    if (key === "ArrowRight" && local + 1 < count) next++;
     if (key === "ArrowUp") {
-      if (current - cols >= 0) next -= cols;
-      else { focusElement(settingsOpen); return true; }
+      if (top) { activeIndex = current; focusElement(settingsOpen); home.scrollTop = 0; return true; }
+      if (watchRows.length) return focusWatch(Math.min(watchRows.length - 1, local));
+      next = Math.min(topTileCount - 1, local);
     }
-    if (key === "ArrowDown" && current + cols < count) {
-      const rowStart = Math.floor(current / cols + 1) * cols;
-      next = rowStart + Math.min(current % cols, Math.min(cols, count - rowStart) - 1);
+    if (key === "ArrowDown") {
+      if (top && watchRows.length) return focusWatch(Math.min(watchRows.length - 1, local));
+      if (top) next = topTileCount + local;
     }
     if (next === current) return false;
     const beforeFocusScroll = diagnostics ? home.scrollTop : 0;
-    focusElement(grid.children[next]);
+    const target = tileButton(next);
+    focusElement(target);
+    revealFocus(target);
     diagnostics?.focusScroll(home.scrollTop - beforeFocusScroll);
-    if (Math.floor(next / cols) !== Math.floor(current / cols)) {
-      const started = diagnostics ? now() : 0;
-      home.scrollTop = next < cols ? 0 : Math.round(window.innerHeight * .43 * Math.floor(next / cols));
-      diagnostics?.scroll(now() - started);
-    }
     return true;
   }
 
@@ -570,6 +714,9 @@
   }
 
   settingsOpen.addEventListener("focus", () => markFocused(settingsOpen));
+  searchOpen?.addEventListener("focus", () => markFocused(searchOpen));
+  searchOpen?.addEventListener("blur", () => blurFocused(searchOpen));
+  searchOpen?.addEventListener("click", () => openSearch());
   settingsOpen.addEventListener("blur", () => blurFocused(settingsOpen));
   settingsClose.addEventListener("focus", () => markFocused(settingsClose));
   settingsClose.addEventListener("blur", () => blurFocused(settingsClose));
@@ -637,16 +784,36 @@
     } else if (key === "Back") {
       event.preventDefault();
       home.scrollTop = 0;
-      if (document.activeElement !== grid.children[0]) focusElement(grid.children[0]);
+      if (document.activeElement !== tileButton(0)) focusElement(tileButton(0));
       focusChanged = true;
     } else if (key === "OK") {
       event.preventDefault();
-      if (document.activeElement === settingsOpen) openSettings();
+      if (document.activeElement === searchOpen) { if (!event.repeat) openSearch(); }
+      else if (document.activeElement?.dataset?.watchIndex !== undefined) {
+        if (!event.repeat) openWatchRow(watchRows[watchIndex]);
+      }
+      else if (document.activeElement === settingsOpen) openSettings();
       else if (tiles[currentTileIndex()]) activate(tiles[currentTileIndex()]);
     } else if (key.startsWith("Arrow")) {
       event.preventDefault();
       if (document.activeElement === settingsOpen) {
-        if (key === "ArrowDown") { focusElement(grid.children[activeIndex]); focusChanged = true; }
+        if (key === "ArrowDown") { focusElement(tileButton(activeIndex)); revealFocus(tileButton(activeIndex)); focusChanged = true; }
+        else if (key === "ArrowLeft") { focusElement(searchOpen); home.scrollTop = 0; focusChanged = true; }
+        else if (key === "ArrowUp") { home.scrollTop = 0; focusChanged = true; }
+      } else if (document.activeElement === searchOpen) {
+        if (key === "ArrowDown") { focusElement(tileButton(activeIndex)); revealFocus(tileButton(activeIndex)); focusChanged = true; }
+        else if (key === "ArrowRight") { focusElement(settingsOpen); home.scrollTop = 0; focusChanged = true; }
+        else if (key === "ArrowUp") { home.scrollTop = 0; focusChanged = true; }
+      } else if (document.activeElement?.dataset?.watchIndex !== undefined) {
+        if (key === "ArrowLeft") focusChanged = focusWatch(watchIndex - 1);
+        else if (key === "ArrowRight") focusChanged = focusWatch(watchIndex + 1);
+        else if (key === "ArrowUp") {
+          const target = tileButton(Math.min(topTileCount - 1, watchIndex));
+          focusElement(target); revealFocus(target); focusChanged = true;
+        } else if (key === "ArrowDown") {
+          const target = tileButton(Math.min(tiles.length - 1, topTileCount + watchIndex));
+          focusElement(target); revealFocus(target); focusChanged = true;
+        }
       } else focusChanged = moveTile(key);
     }
     diagnostics?.handled(receivedAt, focusChanged);
@@ -655,6 +822,22 @@
   applyPreferences();
   if (wallpapers.length) showWallpaper(Math.max(0, wallpapers.findIndex(wallpaper => wallpaper.id === preferences.wallpaper)));
   renderTiles();
+  renderWatchRows();
+  if (/(?:^|[?&])return=search(?:&|$)/.test(location.search || "")) {
+    let returnFocus = null;
+    try { returnFocus = sessionStorage.getItem("horizon.watch.returnFocus"); sessionStorage.removeItem("horizon.watch.returnFocus"); } catch (_error) {}
+    const returnedIndex = watchRows.findIndex(row => `${row.type}:${row.id}` === returnFocus);
+    if (returnedIndex >= 0) focusWatch(returnedIndex);
+    else {
+      let searchFocus = null;
+      try { searchFocus = sessionStorage.getItem("horizon.home.searchFocus"); } catch (_error) {}
+      focusElement(searchFocus === "horizon-watch" ? tileButton(0) : searchOpen);
+    }
+    try { sessionStorage.removeItem("horizon.home.searchFocus"); } catch (_error) {}
+    window.history?.replaceState?.(null, "", location.pathname || "/");
+  } else if ((location.hash || "").startsWith("#watch=")) {
+    window.history?.replaceState?.(null, "", location.pathname || "/");
+  }
   checkCloudSession();
   updateClock();
   setInterval(updateClock, 60000);

@@ -1,10 +1,12 @@
 """Host-only tests for the supervised KEYLIST experiment; no TV connection."""
 
 import importlib.util
+import io
 import pathlib
 import sys
 import types
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 
@@ -77,15 +79,61 @@ class SeekBatchExperimentTests(unittest.TestCase):
         self.assertNotIn("private-test-token", str(result))
 
     def test_batch_size_and_mapping_fail_closed(self):
-        for count in (0, 3, 60, True, 2.0, "2"):
+        for count in (0, 1, 3, 61, True, 2.0, "2"):
             with self.subTest(count=count), self.assertRaises(ValueError):
                 experiment._forward_body(count)
-        self.assertEqual(len(experiment._forward_body(2)["KEYLIST"]), 2)
+        for count in (2, 6, 12, 30, 60):
+            with self.subTest(count=count):
+                self.assertEqual(len(experiment._forward_body(count)["KEYLIST"]), count)
         trial = FakeTrial()
         with self.controller(trial, mapping=(3, 8)), self.assertRaises(RuntimeError):
             experiment.batched_pair(trial)
         self.assertEqual(trial.connection.requests, [])
         self.assertEqual(trial.closes, 1)
+
+    def test_batched_trial_sends_one_request_with_exact_allowed_count_and_prints_diagnostics(self):
+        for count in (2, 6, 12, 30, 60):
+            for command, code in (("seek_forward", 7), ("seek_backward", 1)):
+                with self.subTest(count=count, command=command):
+                    trial = FakeTrial()
+                    output = io.StringIO()
+                    with self.controller(trial), redirect_stdout(output):
+                        result = experiment.batched_trial(trial, count, command)
+                    self.assertEqual(result, {"outcome": "acknowledged", "requested_keys": count,
+                                              "request_ms": 123})
+                    self.assertEqual(len(trial.connection.requests), 1)
+                    self.assertEqual(len(trial.connection.requests[0][1]["KEYLIST"]), count)
+                    self.assertTrue(all(key == {"CODESET": 3, "CODE": code, "ACTION": "KEYPRESS"}
+                                        for key in trial.connection.requests[0][1]["KEYLIST"]))
+                    self.assertEqual(trial.connection.prewarms, 1)
+                    self.assertEqual(trial.closes, 1)
+                    self.assertIn("requested %d keys" % count, output.getvalue())
+                    self.assertIn("acknowledgment acknowledged", output.getvalue())
+                    self.assertIn("request 123 ms", output.getvalue())
+
+    def test_batched_trial_rejects_other_counts_and_never_retries_uncertain_request(self):
+        for count in (0, 1, 3, 61, True, 6.0, "12"):
+            trial = FakeTrial()
+            with self.subTest(count=count), self.controller(trial), self.assertRaises(ValueError):
+                experiment.batched_trial(trial, count)
+            self.assertEqual(trial.connection.requests, [])
+            self.assertEqual(trial.closes, 1)
+
+        trial = FakeTrial()
+        with self.controller(trial), self.assertRaises(ValueError):
+            experiment.batched_trial(trial, 30, "pause_toggle")
+        self.assertEqual(trial.connection.requests, [])
+        self.assertEqual(trial.closes, 1)
+
+        trial = FakeTrial(FakeConnection(error=OSError("response lost after write")))
+        output = io.StringIO()
+        with self.controller(trial), redirect_stdout(output):
+            result = experiment.batched_trial(trial, 12)
+        self.assertEqual(result["outcome"], "unknown")
+        self.assertEqual(result["requested_keys"], 12)
+        self.assertEqual(len(trial.connection.requests), 1)
+        self.assertEqual(trial.closes, 1)
+        self.assertIn("acknowledgment unknown", output.getvalue())
 
     def test_prepare_sends_no_tv_request_and_bad_warmup_stops_before_key(self):
         trial = FakeTrial()

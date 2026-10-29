@@ -18,11 +18,13 @@ connection. [MicroPython v1.29 `ssl` documentation](https://docs.micropython.org
 
 ### Isolated player-key engine (supervised only)
 
-For the separate, two-forward-key `KEYLIST` feasibility test and exact manual
+For the supervised 2/6/12/30/60-key `KEYLIST` tests and exact manual
 REPL steps, see [the Video Lab KEYLIST experiment](../../docs/VIDEO_LAB_KEYLIST_EXPERIMENT.md).
+For the isolated timed `KEYDOWN`/`KEYUP` forward-seek test, see
+[the held-key experiment](../../docs/VIDEO_LAB_HELD_KEY_EXPERIMENT.md).
 The experiment does not change the player bridge or unattended command path.
-For the new Pico-local sequential 2/3/6/12/30/60-key trials and preview
-batch protocol, see [progressive seek validation](../../docs/VIDEO_LAB_PROGRESSIVE_SEEK.md).
+For the Pico-local sequential trials, optimized player batch modes, and preview
+protocol, see [progressive seek validation](../../docs/VIDEO_LAB_PROGRESSIVE_SEEK.md).
 
 `main.py` exposes `supervised_player_command("pause_toggle")`,
 `supervised_player_command("seek_backward")`, and

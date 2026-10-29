@@ -1,0 +1,9 @@
+{
+  "name": "horizon-vizio",
+  "compatibility_date": "2026-10-19",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./frontend",
+    "serve_directly": true
+  }
+}

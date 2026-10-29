@@ -1,16 +1,6 @@
-<!-- @license lucide-static v1.61.0 - ISC -->
-<svg
-  class="lucide lucide-tv"
-  xmlns="http://www.w3.org/2000/svg"
-  width="24"
-  height="24"
-  viewBox="0 0 24 24"
-  fill="none"
-  stroke="currentColor"
-  stroke-width="2"
-  stroke-linecap="round"
-  stroke-linejoin="round"
->
-  <path d="m17 2-5 5-5-5" />
-  <rect width="20" height="15" x="2" y="7" rx="2" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Live TV">
+  <rect x="6" y="11" width="52" height="39" rx="7" fill="none" stroke="#f4f8fc" stroke-width="3.5"/>
+  <path d="M23 56h18M32 50v6" fill="none" stroke="#f4f8fc" stroke-width="3.5" stroke-linecap="round"/>
+  <circle cx="22" cy="37" r="2.8" fill="#f4f8fc"/>
+  <path d="M22 28c5 0 9 4 9 9M22 19c10 0 18 8 18 18" fill="none" stroke="#f4f8fc" stroke-width="3.5" stroke-linecap="round"/>
 </svg>

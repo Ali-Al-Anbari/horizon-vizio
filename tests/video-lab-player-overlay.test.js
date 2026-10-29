@@ -11,7 +11,7 @@ const listHtml = readFileSync(new URL("../video-lab/episode-list-placeholder.htm
 const listScript = readFileSync(new URL("../video-lab/episode-list-placeholder.js", import.meta.url), "utf8");
 const playerScript = readFileSync(new URL("../video-lab/player-overlay.js", import.meta.url), "utf8");
 const ids = ["player-frame", "remote-capture", "overlay", "rewind", "rewind-label", "play-pause", "forward", "forward-label", "subtitles",
-  "episodes", "previous-episode", "next-episode", "manual-end", "episode-caption", "up-next", "up-next-title", "up-next-countdown", "up-next-play", "up-next-cancel",
+  "episodes", "previous-episode", "next-episode", "manual-end", "show-title", "metadata-credit", "episode-caption", "up-next", "up-next-title", "up-next-countdown", "up-next-play", "up-next-cancel",
   "subtitle-menu", "subtitle-mode", "menu-title", "menu-description", "menu-cancel", "menu-change",
   "command-status", "screen-reader-status"];
 const baseUrl = "https://yapgrid.com/embed/tv/2190/13/2";
@@ -647,6 +647,20 @@ test("a 60-input batch holds iframe focus beyond three seconds until matching te
   assert.equal(app.get("forward-label").textContent, "+10m");
 });
 
+test("KEYLIST completion reports one SmartCast request acknowledgment, not observed playback", async () => {
+  const app = setup({ adapter: {
+    open: () => Promise.resolve(), ready: () => Promise.resolve(), close() {}, send() {},
+    sendBatch() { return Promise.resolve({ id: "keylist-6" }); },
+    batchStatus() { return Promise.resolve({ id: "keylist-6", state: "complete",
+      code: "keylist_acknowledged", acknowledged: 6, metrics: { picoMs: 531 } }); },
+  } });
+  await startBatch(app, "forward", 2);
+  assert.match(app.get("command-status").textContent,
+    /SmartCast KEYLIST request acknowledged for 6 inputs/);
+  assert.match(app.get("command-status").textContent, /YapGrid position unverified/);
+  assert.equal(app.document.activeElement.id, "forward");
+});
+
 test("one-input seek keeps the original short focus lease", async () => {
   const cancelled = [];
   const app = setup({ adapter: {
@@ -786,10 +800,48 @@ test("catalog validates positive provider route inputs without hardcoded season 
   for (const [season, number] of [[13, 0], [13, -1], [0, 1], [13, 1.5]]) {
     assert.equal(episodes.episode(season, number), null);
   }
-  assert.equal(episodes.pageUrl({ showId: 2191, season: 13, episode: 2 }, "on", false), null);
+  assert.equal(episodes.pageUrl({ showId: 2191, season: 13, episode: 2 }, "on", false),
+    "player-overlay.html?season=13&episode=2&sub=on&showId=2191");
   assert.equal(episodes.embedUrl({ showId: 2190, season: 13, episode: 0 }), null);
   assert.equal(episodes.parse("?season=-1&episode=0&sub=off").current.episode, 2);
+  assert.equal(episodes.parse("?season=13&episode=2").subtitle, "off");
+  assert.equal(episodes.parse("?season=13&episode=2&sub=on").subtitle, "on");
   assert.equal(episodes.parse("?season=%ZZ&episode=3").invalid, true);
+  const generic = episodes.parse("?showId=1396&season=1&episode=2&sub=off&from=search&name=Breaking%20Bad");
+  assert.equal(generic.current.showId, 1396);
+  assert.equal(generic.fromSearch, true);
+  assert.equal(episodes.embedUrl(generic.current), "https://yapgrid.com/embed/tv/1396/1/2");
+  assert.equal(episodes.pageUrl(generic.current, "off", false, null, true, generic.showTitle),
+    "player-overlay.html?season=1&episode=2&sub=off&showId=1396&from=search&name=Breaking%20Bad");
+});
+
+test("search-launched TV keeps validated show ID and returns safely to fixed search origin", () => {
+  const app = setup({ search: "?showId=1396&season=1&episode=2&sub=off&from=search&name=Breaking%20Bad" });
+  assert.match(app.get("player-frame").src, /\/embed\/tv\/1396\/1\/2\?sub_url=/);
+  assert.equal(app.get("show-title").textContent, "Breaking Bad");
+  assert.match(app.get("metadata-credit").textContent, /TMDB selection/);
+  app.key("Backspace");
+  assert.deepEqual(app.navigation, [
+    "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/?return=1&showId=1396&season=1&episode=2&sub=off"
+  ]);
+});
+
+test("search-launched real-show player uses the same full-size seek batch path", async () => {
+  for (const direction of ["forward", "rewind"]) {
+    const sent = [];
+    const app = setup({ search: "?showId=1396&season=1&episode=2&sub=off&from=search&name=Breaking%20Bad",
+      adapter: {
+        open: () => Promise.resolve(), ready: () => Promise.resolve(), close() {}, send() {},
+        sendBatch(command, count) { sent.push([command, count]); return Promise.resolve({ id: "search-seek" }); },
+        batchStatus() { return Promise.resolve({ id: "search-seek", state: "complete",
+          code: "keylist_acknowledged", acknowledged: 60 }); },
+      } });
+    await startBatch(app, direction, 5);
+    assert.match(app.get("player-frame").src, /\/embed\/tv\/1396\/1\/2\?sub_url=/);
+    assert.deepEqual(sent, [[direction === "forward" ? "seek_forward" : "seek_backward", 60]]);
+    assert.equal(app.document.activeElement.id, direction);
+    assert.match(app.get("command-status").textContent, /KEYLIST request acknowledged for 60 inputs/);
+  }
 });
 
 test("dynamic metadata resolves same-season and cross-season episodes without episode counts", () => {
@@ -858,6 +910,34 @@ test("metadata resolver caches verified listings and keeps HTTP failure and time
   await flush();
   expire();
   assert.equal((await outcome).reason, "timeout");
+});
+
+test("Cyberpunk original TVDB identity retains Season 2 numbering and rejects the separate sequel", async () => {
+  const episodes = catalog();
+  const rows = Array.from({ length: 10 }, (_, i) => ({ season: 1, number: i + 1,
+    name: "Original " + (i + 1), type: "regular", airdate: "2022-09-13" })).concat(
+    Array.from({ length: 10 }, (_, i) => ({ season: 2, number: i + 1,
+      name: ["Last Chance for a Slow Dance", "Give Me Another Day", "0 + 2 = 1"][i]
+        || "Sequel " + (i + 1), type: "regular", airdate: "2026-10-20" })));
+  const urls = [];
+  const resolver = episodes.createResolver({ showId: 105248, tvdbId: 384541,
+    today: "2026-10-29", storage: {}, clock: { setTimeout, clearTimeout },
+    fetch: async url => { urls.push(url);
+      return { ok: true, json: async () => url.includes("lookup")
+        ? { id: 48945, externals: { thetvdb: 384541 } } : rows }; } });
+  const current = { showId: 105248, season: 2, episode: 2 };
+  assert.deepEqual(JSON.parse(JSON.stringify((await resolver.resolve(current, 1)).target)),
+    { showId: 105248, season: 2, episode: 3, title: "0 + 2 = 1" });
+  assert.equal((await resolver.resolve({ ...current, episode: 3 }, -1)).target.episode, 2);
+  assert.equal((await resolver.resolve({ ...current, episode: 10 }, 1)).kind, "none_known");
+  assert.equal((await resolver.resolve({ ...current, season: 1, episode: 10 }, 1)).target.season, 2);
+  assert.deepEqual(urls, ["https://api.tvmaze.com/lookup/shows?thetvdb=384541",
+    "https://api.tvmaze.com/shows/48945/episodes"]);
+  assert.match(episodes.pageUrl(current, "off", false, null, true, "Cyberpunk", 384541), /tvdb=384541$/);
+  const wrong = episodes.createResolver({ showId: 105248, tvdbId: 384541,
+    storage: {}, clock: { setTimeout, clearTimeout }, fetch: async () => ({ ok: true,
+      json: async () => ({ id: 88337, externals: { thetvdb: null } }) }) });
+  assert.equal((await wrong.resolve(current, 1)).kind, "unknown");
 });
 
 test("remote reaches Previous, Next, Subtitles, Episode List and keeps playback controls reachable", () => {

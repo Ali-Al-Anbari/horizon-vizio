@@ -70,6 +70,7 @@ PLAYER_KEYS = {"pause_toggle": (0, 32), "seek_backward": (3, 1), "seek_forward":
 PLAYER_QUEUE_LIMIT = 8
 PLAYER_KEEPALIVE_IDLE_MS = 5000
 PLAYER_KEEPALIVE_MAX_REQUESTS = 8
+PLAYER_LARGE_KEYLIST_TIMEOUT_S = 12
 PLAYER_SESSION_HEARTBEAT_MS = 2500
 PLAYER_SESSION_STALE_MS = 3500
 PLAYER_CLOUD_MAX_DEFERRAL_MS = 8000
@@ -248,7 +249,7 @@ def tls_context():
     return context
 
 
-def open_pinned_socket(context, timing=None):
+def open_pinned_socket(context, timing=None, timeout_s=None, return_raw=False):
     raw = None
     try:
         connection_started = ticks() if timing is not None else None
@@ -257,7 +258,7 @@ def open_pinned_socket(context, timing=None):
         if started is not None:
             NETWORK_TIMING["tv_dns"] = time.ticks_diff(ticks(), started)
         raw = socket.socket()
-        raw.settimeout(config.SOCKET_TIMEOUT_S)
+        raw.settimeout(config.SOCKET_TIMEOUT_S if timeout_s is None else timeout_s)
         started = perf_start()
         raw.connect(address)
         if started is not None:
@@ -271,7 +272,7 @@ def open_pinned_socket(context, timing=None):
             timing["connect_ms"] = time.ticks_diff(ticks(), connection_started)
         if started is not None:
             NETWORK_TIMING["tv_tls"] = time.ticks_diff(ticks(), started)
-        return wrapped
+        return (wrapped, raw) if return_raw else wrapped
     except Exception:
         if raw is not None:
             raw.close()
@@ -766,17 +767,20 @@ def checked_request(context, token, method, path, body=None):
 
 
 class TVPlayerConnection:
-    """One pinned SmartCast TLS socket for sequential, explicit player keys."""
+    """One pinned SmartCast TLS socket for explicit player keys."""
     def __init__(self, context):
         self.context = context
         self.wrapped = None
+        self.raw = None
         self.last_used = None
         self.requests = 0
         self.close_reason = "initial"
 
     def close(self, reason="closed"):
         wrapped = self.wrapped
+        raw = self.raw
         self.wrapped = None
+        self.raw = None
         self.last_used = None
         self.requests = 0
         self.close_reason = reason
@@ -785,8 +789,13 @@ class TVPlayerConnection:
                 wrapped.close()
             except (OSError, ValueError, RuntimeError):
                 pass
+        if raw is not None and raw is not wrapped:
+            try:
+                raw.close()
+            except (OSError, ValueError, RuntimeError, AttributeError):
+                pass
 
-    def request(self, method, path, token, body, timing):
+    def request(self, method, path, token, body, timing, timeout_s=None):
         if self.wrapped is not None and (self.last_used is None
                 or time.ticks_diff(ticks(), self.last_used) >= PLAYER_KEEPALIVE_IDLE_MS):
             self.close("idle")
@@ -798,6 +807,7 @@ class TVPlayerConnection:
         if reused:
             timing["connect_ms"] = 0
             timing["tls_ms"] = 0
+        timing["request_not_sent"] = True
         payload = json.dumps(body).encode() if body is not None else b""
         header = (method + " " + path + " HTTP/1.1\r\n"
                   + "Host: " + config.TV_IP + ":7345\r\n"
@@ -809,10 +819,28 @@ class TVPlayerConnection:
                   + "\r\n").encode()
         try:
             if self.wrapped is None:
-                self.wrapped = open_pinned_socket(self.context, timing)
+                opened = open_pinned_socket(self.context, timing, timeout_s=timeout_s,
+                                            return_raw=True)
+                # Host test doubles may still return only the wrapped stream.
+                if isinstance(opened, tuple):
+                    self.wrapped, self.raw = opened
+                else:
+                    self.wrapped = opened
+                    self.raw = opened if hasattr(opened, "settimeout") else None
+            elif timeout_s is not None:
+                if self.raw is None:
+                    timing["request_not_sent"] = True
+                    raise RuntimeError("TV socket timeout cannot be extended")
+                try:
+                    self.raw.settimeout(timeout_s)
+                except (OSError, ValueError, AttributeError):
+                    timing["request_not_sent"] = True
+                    raise
             started = ticks()
             try:
                 timing["phase"] = "write_headers"
+                # Any write failure may have delivered part or all of the key.
+                timing["request_not_sent"] = False
                 write_all(self.wrapped, header)
                 timing["phase"] = "write_body"
                 if payload:
@@ -852,9 +880,17 @@ class TVPlayerConnection:
             self.close("transport_error")
             timing["close_ms"] = time.ticks_diff(ticks(), close_started)
             raise
+        finally:
+            if timeout_s is not None and self.raw is not None:
+                try:
+                    self.raw.settimeout(config.SOCKET_TIMEOUT_S)
+                except (OSError, ValueError, AttributeError):
+                    self.close("timeout_restore_failed")
 
     def keypress(self, token, body, timing):
-        return self.request("PUT", "/key_command/", token, body, timing)
+        keys = body.get("KEYLIST") if isinstance(body, dict) else None
+        timeout_s = PLAYER_LARGE_KEYLIST_TIMEOUT_S if isinstance(keys, list) and len(keys) >= 30 else None
+        return self.request("PUT", "/key_command/", token, body, timing, timeout_s)
 
     def prewarm(self, token):
         """Read-only authenticated check on the pinned socket; never sends a key."""
@@ -1492,6 +1528,7 @@ def unattended_watch():
     cloud_poll_due = ticks()
     player_cloud_deferral_at = None
     player_batch_deferral_at = None
+    player_background_deferral_at = None
     shortcut_poll_due = ticks()
     shortcut_state = {"observed": False, "latched": False, "pending_at": None,
                       "cooldown_at": None, "detected_at": None}
@@ -1522,7 +1559,14 @@ def unattended_watch():
             if player_bridge is not None:
                 player_bridge.step()
 
-            if due(power_poll_due):
+            # Synchronous TV status reads can occupy several seconds on this
+            # device. Give a live player session a bounded window to receive
+            # its next command before those optional background samples.
+            player_background_deferral_at, defer_background = player_cloud_deferral(
+                player_bridge is not None and player_bridge.session is not None,
+                player_background_deferral_at, ticks())
+
+            if due(power_poll_due) and not defer_background:
                 # Keep the power watcher on its own cadence when cloud polling
                 # is configured more frequently than power polling.
                 power_poll_due = time.ticks_add(ticks(), POWER_POLL_MS)
@@ -1580,7 +1624,7 @@ def unattended_watch():
                     # The queue claim still runs immediately after that sample.
                     cloud_poll_due = shortcut_poll_due
 
-            if (shortcut_enabled and shortcut_state.get("horizon_seen_at") is not None
+            if (not defer_background and shortcut_enabled and shortcut_state.get("horizon_seen_at") is not None
                     and due(shortcut_poll_due)):
                 # A second Horizon sample is due. Read it before an expensive
                 # empty claim; the claim still runs in this same loop pass.
@@ -1619,12 +1663,15 @@ def unattended_watch():
                         cloud_failures = 0
                         cloud_poll_due = next_periodic_due(cloud_poll_due, cloud_interval, ticks())
                     except (OSError, ValueError, RuntimeError) as error:
-                        print("Cloud queue waiting:", type(error).__name__)
+                        # RuntimeError messages here are fixed local protocol
+                        # classifications. Never print socket errors or bodies.
+                        print("Cloud queue waiting:", str(error) if isinstance(error, RuntimeError)
+                              else type(error).__name__)
                         delay = CLOUD_RETRY_MS[min(cloud_failures, len(CLOUD_RETRY_MS) - 1)]
                         cloud_failures += 1
                         cloud_poll_due = time.ticks_add(ticks(), delay)
 
-            if shortcut_enabled and due(shortcut_poll_due):
+            if not defer_background and shortcut_enabled and due(shortcut_poll_due):
                 shortcut_poll_due = poll_shortcut_once(
                     context, token, shortcut_state, last_power, pending_launch,
                     shortcut_poll_due, shortcut_interval)

@@ -29,6 +29,10 @@ CLOUD_LIVE_CLAIMING = False
 # Isolated Video Lab outbound player bridge. Keep disabled until supervised
 # preview pairing, authentication, TLS and physical command tests pass.
 PLAYER_BRIDGE_ENABLED = False
+# All six Video Lab seek amounts use one KEYLIST request by default.
+# "sequential" explicitly selects the old executor for debugging only.
+# A missing setting or the former "verified" value also uses KEYLIST.
+PLAYER_SEEK_MODE = "all_keylist"
 
 # SHA-256 digest of the TV's *leaf* DER certificate, independently confirmed.
 TV_CERT_SHA256 = "YOUR_TV_CERTIFICATE_SHA256_HEX"

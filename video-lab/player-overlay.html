@@ -21,9 +21,9 @@
       <section id="overlay" class="overlay" aria-label="Horizon playback controls" aria-hidden="true">
         <div class="overlay-content">
           <p class="brand">HORIZON VIDEO</p>
-          <h1>South Park</h1>
+          <h1 id="show-title">South Park</h1>
           <p id="episode-caption" class="episode">Season 13 · Episode 2</p>
-          <p class="metadata-credit">Episode metadata: <a href="https://www.tvmaze.com/shows/112/south-park" tabindex="-1">TVmaze</a> · YapGrid playback availability is unverified</p>
+          <p id="metadata-credit" class="metadata-credit">Episode metadata: <a href="https://www.tvmaze.com/shows/112/south-park" tabindex="-1">TVmaze</a> · YapGrid playback availability is unverified</p>
           <p class="telemetry">Playback time and progress are unavailable from this embedded player.</p>
           <div class="control-row primary" aria-label="Playback actions">
             <button id="rewind" type="button" tabindex="-1"><span aria-hidden="true">↶</span><small id="rewind-label">−10s</small></button>
@@ -32,7 +32,7 @@
           </div>
           <div class="control-row secondary" aria-label="More playback options">
             <button id="previous-episode" type="button" tabindex="-1">Previous Episode</button>
-            <button id="subtitles" type="button" tabindex="-1">Subtitles: <span id="subtitle-mode">ON</span></button>
+            <button id="subtitles" type="button" tabindex="-1">Subtitles: <span id="subtitle-mode">OFF</span></button>
             <button id="episodes" type="button" tabindex="-1">Episode List</button>
             <button id="next-episode" type="button" tabindex="-1">Next Episode</button>
           </div>

@@ -17,6 +17,10 @@
     if (!positive(season) || !positive(number)) return null;
     return { showId: SHOW_ID, season: season, episode: number, title: title || null };
   }
+  function episodeFor(showId, season, number) {
+    if (!positive(showId) || !positive(season) || !positive(number)) return null;
+    return { showId: showId, season: season, episode: number, title: null };
+  }
   function parameter(search, name) {
     var match = new RegExp("(?:^|[?&])" + name + "=([^&]*)").exec(search || "");
     if (!match) return null;
@@ -28,22 +32,32 @@
     var episodeText = parameter(search, "episode");
     var season = seasonText === null ? 13 : /^[1-9][0-9]*$/.test(seasonText) ? Number(seasonText) : NaN;
     var number = episodeText === null ? 2 : /^[1-9][0-9]*$/.test(episodeText) ? Number(episodeText) : NaN;
-    var current = episode(season, number);
+    var showText = parameter(search, "showId");
+    var showId = showText === null ? SHOW_ID : /^[1-9][0-9]*$/.test(showText) ? Number(showText) : NaN;
+    var current = episodeFor(showId, season, number);
     return { current: current || episode(13, 2), invalid: !current,
-      subtitle: parameter(search, "sub") === "off" ? "off" : "on",
-      testEnd: parameter(search, "testEnd") === "1" };
+      subtitle: parameter(search, "sub") === "on" ? "on" : "off",
+      testEnd: parameter(search, "testEnd") === "1",
+      fromSearch: parameter(search, "from") === "search",
+      showTitle: (parameter(search, "name") || "").slice(0, 120),
+      tvdbId: /^[1-9][0-9]*$/.test(parameter(search, "tvdb") || "")
+        ? Number(parameter(search, "tvdb")) : null };
   }
-  function pageUrl(target, subtitle, testEnd, page) {
-    if (!target || target.showId !== SHOW_ID || !episode(target.season, target.episode)) return null;
+  function pageUrl(target, subtitle, testEnd, page, fromSearch, showTitle, tvdbId) {
+    if (!target || !episodeFor(target.showId, target.season, target.episode)) return null;
     var destination = page === "list" ? "episode-list-placeholder.html" : "player-overlay.html";
     return destination + "?season=" + target.season + "&episode=" + target.episode
-      + "&sub=" + (subtitle === "off" ? "off" : "on") + (testEnd ? "&testEnd=1" : "");
+      + "&sub=" + (subtitle === "on" ? "on" : "off") + (testEnd ? "&testEnd=1" : "")
+      + (target.showId === SHOW_ID ? "" : "&showId=" + target.showId)
+      + (fromSearch ? "&from=search" : "")
+      + (showTitle ? "&name=" + encodeURIComponent(showTitle.slice(0, 120)) : "")
+      + (positive(tvdbId) ? "&tvdb=" + tvdbId : "");
   }
   function embedUrl(target) {
-    if (!target || target.showId !== SHOW_ID || !episode(target.season, target.episode)) return null;
-    return "https://yapgrid.com/embed/tv/" + SHOW_ID + "/" + target.season + "/" + target.episode;
+    if (!target || !episodeFor(target.showId, target.season, target.episode)) return null;
+    return "https://yapgrid.com/embed/tv/" + target.showId + "/" + target.season + "/" + target.episode;
   }
-  function normalize(raw, today) {
+  function normalize(raw, today, expectedShowId) {
     if (!Array.isArray(raw) || raw.length < 1 || raw.length > 3000) throw new Error("invalid_episode_metadata");
     var rows = [];
     var seen = {};
@@ -58,7 +72,7 @@
       seen[key] = true;
       rows.push({ season: entry.season, number: entry.number, title: entry.name });
     });
-    if (!rows.some(function (row) { return row.season === 13 && row.number === 2 && row.title === "The Coon"; })) {
+    if (expectedShowId === undefined && !rows.some(function (row) { return row.season === 13 && row.number === 2 && row.title === "The Coon"; })) {
       throw new Error("episode_index_mismatch");
     }
     return rows;
@@ -70,7 +84,7 @@
     return null;
   }
   function resolveFromRows(rows, current, direction) {
-    if (!current || current.showId !== SHOW_ID || !episode(current.season, current.episode)
+    if (!current || !episodeFor(current.showId, current.season, current.episode)
         || (direction !== -1 && direction !== 1) || !find(rows, current.season, current.episode)) {
       return { kind: "unknown", reason: "current_episode_not_in_metadata" };
     }
@@ -87,12 +101,16 @@
         });
       }
     }
-    return candidate ? { kind: "catalogued", target: episode(candidate.season, candidate.number, candidate.title),
+    return candidate ? { kind: "catalogued", target: { showId: current.showId,
+      season: candidate.season, episode: candidate.number, title: candidate.title },
       providerAvailability: "unknown" } : { kind: "none_known" };
   }
   function createResolver(options) {
     options = options || {};
     var clock = options.clock || root;
+    var tvdbId = positive(options.tvdbId) ? options.tvdbId : null;
+    var showId = positive(options.showId) ? options.showId : SHOW_ID;
+    var cacheKey = tvdbId ? "horizon-video-lab-tvmaze-tvdb-" + tvdbId + "-v1" : CACHE_KEY;
     var fetchEpisodeList = options.fetch || (root.fetch && root.fetch.bind(root));
     var storage = options.storage || null;
     if (!storage) {
@@ -106,13 +124,13 @@
       if (rows) return Promise.resolve(rows);
       if (pending) return pending;
       try {
-        var saved = storage && JSON.parse(storage.getItem(CACHE_KEY));
+        var saved = storage && JSON.parse(storage.getItem(cacheKey));
         if (saved && typeof saved.at === "number" && Date.now() - saved.at < CACHE_MS
             && Date.now() >= saved.at && Array.isArray(saved.rows)) {
           rows = normalize(saved.rows.map(function (row) {
             return { season: row.season, number: row.number, name: row.title,
               type: "regular", airdate: today };
-          }), today);
+          }), today, tvdbId || undefined);
           return Promise.resolve(rows);
         }
       } catch (_error) { /* Storage is optional on Vizio. */ }
@@ -123,19 +141,31 @@
         timer = clock.setTimeout(function () {
           if (controller) controller.abort();
           reject(new Error("metadata_timeout"));
-        }, REQUEST_MS);
+        }, tvdbId ? REQUEST_MS * 2 : REQUEST_MS);
       });
       var request = Promise.resolve().then(function () {
-        return fetchEpisodeList(EPISODES_URL, controller ? { signal: controller.signal } : {});
+        if (!tvdbId && showId !== SHOW_ID) throw new Error("identity_unavailable");
+        return tvdbId ? fetchEpisodeList("https://api.tvmaze.com/lookup/shows?thetvdb=" + tvdbId,
+          controller ? { signal: controller.signal } : {}) : null;
+      }).then(function (lookup) {
+        if (!tvdbId) return EPISODES_URL;
+        if (!lookup || !lookup.ok) throw new Error("identity_unavailable");
+        return lookup.json().then(function (show) {
+          if (!show || !positive(show.id) || !show.externals || show.externals.thetvdb !== tvdbId)
+            throw new Error("identity_mismatch");
+          return "https://api.tvmaze.com/shows/" + show.id + "/episodes";
+        });
+      }).then(function (url) {
+        return fetchEpisodeList(url, controller ? { signal: controller.signal } : {});
       }).then(function (response) {
         if (!response || !response.ok) throw new Error("metadata_http_error");
         return response.json();
-      }).then(function (data) { return normalize(data, today); });
+      }).then(function (data) { return normalize(data, today, tvdbId || undefined); });
       pending = Promise.race([request, timeout]).then(function (result) {
         clock.clearTimeout(timer);
         rows = result;
         pending = null;
-        try { if (storage) storage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), rows: rows })); }
+        try { if (storage) storage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: rows })); }
         catch (_error) { /* Storage is optional on Vizio. */ }
         return rows;
       }, function (error) {
@@ -154,11 +184,12 @@
     function current(currentEpisode) {
       return load().then(function (data) {
         var found = find(data, currentEpisode.season, currentEpisode.episode);
-        return found ? episode(found.season, found.number, found.title) : null;
+        return found ? { showId: currentEpisode.showId, season: found.season,
+          episode: found.number, title: found.title } : null;
       }, function () { return null; });
     }
     return { resolve: resolve, current: current, load: load };
   }
-  root.HorizonEpisodes = { episode: episode, parse: parse, pageUrl: pageUrl, embedUrl: embedUrl,
+  root.HorizonEpisodes = { episode: episode, episodeFor: episodeFor, parse: parse, pageUrl: pageUrl, embedUrl: embedUrl,
     normalize: normalize, resolveFromRows: resolveFromRows, createResolver: createResolver };
 })(typeof window !== "undefined" ? window : globalThis);

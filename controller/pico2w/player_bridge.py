@@ -24,6 +24,12 @@ SEEK_COUNTS = (1, 3, 6, 12, 30, 60)
 BATCH_LIFETIME_MS = 90000
 
 
+def _seek_mode():
+    # Only an explicit debug choice retains the old sequential executor.
+    # Missing settings and the former "verified" value both use KEYLIST.
+    return "sequential" if getattr(config, "PLAYER_SEEK_MODE", None) == "sequential" else "all_keylist"
+
+
 def _b64(value):
     return binascii.b2a_base64(value).strip()
 
@@ -81,6 +87,7 @@ class PlayerBridgeClient:
         self.heartbeat = None
         self.retry_at = 0
         self.batch = None
+        self.disconnected_at = None
 
     def close_session(self):
         self.batch = None
@@ -113,8 +120,11 @@ class PlayerBridgeClient:
             except (OSError, ValueError):
                 pass
         self.retry_at = time.ticks_add(self.controller.ticks(), RECONNECT_MS)
+        if wrapped is not None or raw is not None:
+            self.disconnected_at = self.controller.ticks()
 
     def connect(self):
+        started = self.controller.ticks()
         raw = None
         wrapped = None
         try:
@@ -166,7 +176,11 @@ class PlayerBridgeClient:
             self.raw = raw
             self.poller = poller
             self.poll_raw = poll_raw
-            print("Player bridge connected")
+            print("Player bridge connected: handshake %d ms; reconnect %s ms" %
+                  (time.ticks_diff(self.controller.ticks(), started),
+                   time.ticks_diff(self.controller.ticks(), self.disconnected_at)
+                   if self.disconnected_at is not None else "initial"))
+            self.disconnected_at = None
         except Exception:
             if wrapped is not None:
                 wrapped.close()
@@ -257,8 +271,8 @@ class PlayerBridgeClient:
             self.tv.close("player_command_error")
         self.heartbeat = time.ticks_add(self.controller.ticks(),
                                         self.controller.PLAYER_SESSION_HEARTBEAT_MS)
-        print("Player bridge command %s: %s, %d ms" %
-              (command, "accepted" if accepted else "failed",
+        print("Player bridge command %s %s: %s, %d ms" %
+              (command_id[:8], command, "accepted" if accepted else "failed",
                time.ticks_diff(self.controller.ticks(), started)))
         self.send({"type": "command_ack", "session": self.session, "id": command_id,
                    "sequence": sequence, "accepted": accepted,
@@ -311,7 +325,11 @@ class PlayerBridgeClient:
         self.batch = {"id": command_id, "sequence": sequence, "command": command,
                       "count": count, "ack": 0, "failures": 0, "started": now,
                       "expires": time.ticks_add(now, BATCH_LIFETIME_MS),
-                      "min": None, "max": 0, "total": 0, "warm": 0, "new": 0}
+                      "min": None, "max": 0, "total": 0, "requests": 0,
+                      "attempted": 0,
+                      "warm": 0, "new": 0,
+                      "keylist": _seek_mode() == "all_keylist"}
+        print("Player batch accepted %s %s x%d" % (command_id[:8], command, count))
         self.send({"type": "batch_accepted", "session": self.session, "id": command_id,
                    "sequence": sequence, "accepted": True})
 
@@ -322,10 +340,12 @@ class PlayerBridgeClient:
         self.batch = None
         ack = batch["ack"]
         metrics = {"picoMs": time.ticks_diff(self.controller.ticks(), batch["started"]),
-                   "minMs": batch["min"], "avgMs": batch["total"] // ack if ack else None,
-                   "maxMs": batch["max"], "warm": batch["warm"], "new": batch["new"]}
-        print("Player batch %s: %s %d/%d, %d failures, %d ms, min/avg/max %s/%s/%s ms, warm/new %d/%d, code %s" %
-              (batch["command"], state, ack, batch["count"], batch["failures"],
+                   "minMs": batch["min"], "avgMs": batch["total"] // batch["requests"]
+                   if batch["requests"] else None,
+                   "maxMs": batch["max"], "warm": batch["warm"], "new": batch["new"],
+                   "smartcastRequests": batch["attempted"]}
+        print("Player batch %s %s: %s %d/%d, %d failures, %d ms, min/avg/max %s/%s/%s ms, warm/new %d/%d, code %s" %
+              (batch["id"][:8], batch["command"], state, ack, batch["count"], batch["failures"],
                metrics["picoMs"], metrics["minMs"], metrics["avgMs"],
                metrics["maxMs"], metrics["warm"], metrics["new"], code))
         self.send({"type": "batch_done", "session": self.session, "id": batch["id"],
@@ -352,40 +372,67 @@ class PlayerBridgeClient:
                     >= self.controller.PLAYER_SESSION_STALE_MS):
                 if not self.tv.prewarm(self.tv_token) or self.tv.wrapped is None:
                     raise RuntimeError("TV warmup rejected")
-            codeset, code = self.controller.PLAYER_KEYS[batch["command"]]
-            body = {"KEYLIST": [{"CODESET": codeset, "CODE": code, "ACTION": "KEYPRESS"}]}
-            result = self.tv.keypress(self.tv_token, body, timing)
-            status = result.get("STATUS") if isinstance(result, dict) else None
-            if not isinstance(status, dict) or status.get("RESULT") != "SUCCESS":
-                batch["failures"] = 1
-                print("Player batch TV rejection at key %d: STATUS %s; HTTP %s" %
-                      (batch["ack"] + 1, status, timing.get("http_status", "?")))
-                self._batch_done("failed", "tv_rejected")
-                return
         except (OSError, ValueError, RuntimeError) as error:
             batch["failures"] = 1
-            print("Player batch uncertain key %d: %s %s; phase %s; HTTP %s; socket %s" %
-                  (batch["ack"] + 1, type(error).__name__, str(error),
+            print("Player batch read-only warmup failed before key: %s" % type(error).__name__)
+            self._batch_done("failed", "warmup_failed")
+            return
+        codeset, code = self.controller.PLAYER_KEYS[batch["command"]]
+        count = batch["count"] if batch["keylist"] else 1
+        try:
+            body = {"KEYLIST": [{"CODESET": codeset, "CODE": code, "ACTION": "KEYPRESS"}
+                                for _ in range(count)]}
+        except MemoryError:
+            batch["failures"] = 1
+            self._batch_done("failed", "request_not_built")
+            return
+        try:
+            batch["attempted"] += 1
+            result = self.tv.keypress(self.tv_token, body, timing)
+            status = result.get("STATUS") if isinstance(result, dict) else None
+            if not isinstance(status, dict) or "RESULT" not in status:
+                batch["failures"] = 1
+                print("Player batch ambiguous response for %d keys; HTTP %s" %
+                      (count, timing.get("http_status", "?")))
+                self._batch_done("unknown", "ambiguous_response")
+                return
+            if status.get("RESULT") != "SUCCESS":
+                batch["failures"] = 1
+                print("Player batch TV rejection at request for %d keys: STATUS %s; HTTP %s" %
+                      (count, status, timing.get("http_status", "?")))
+                self._batch_done("failed", "tv_rejected")
+                return
+        except (OSError, ValueError, RuntimeError, MemoryError) as error:
+            batch["failures"] = 1
+            not_sent = timing.get("request_not_sent") is True
+            print("Player batch %s request for %d keys: %s %s; phase %s; HTTP %s; socket %s" %
+                  ("not-sent" if not_sent else "uncertain", count,
+                   type(error).__name__, str(error),
                    timing.get("failed_phase", timing.get("phase", "warmup")),
                    timing.get("http_status", "?"), timing.get("connection", "?")))
-            self._batch_done("unknown", "transport_" + type(error).__name__)
+            self._batch_done("failed" if not_sent else "unknown",
+                             "request_not_sent" if not_sent else "transport_" + type(error).__name__)
             return
         latency = timing.get("request_ms")
         if type(latency) is int:
             batch["min"] = latency if batch["min"] is None else min(batch["min"], latency)
             batch["max"] = max(batch["max"], latency)
             batch["total"] += latency
+        batch["requests"] += 1
         if timing.get("connection") == "warm":
             batch["warm"] += 1
         else:
             batch["new"] += 1
-        batch["ack"] += 1
+        # One SUCCESS acknowledges one KEYLIST request, not observed YapGrid
+        # movement or an independent response for each entry in that list.
+        batch["ack"] += count
         self.heartbeat = time.ticks_add(self.controller.ticks(),
                                         self.controller.PLAYER_SESSION_HEARTBEAT_MS)
         self.send({"type": "batch_progress", "session": self.session, "id": batch["id"],
                    "sequence": batch["sequence"], "acknowledged": batch["ack"]})
         if batch["ack"] == batch["count"]:
-            self._batch_done("complete", "acknowledged")
+            self._batch_done("complete", "keylist_acknowledged" if batch["keylist"]
+                             else "acknowledged")
 
     def _message(self, payload):
         try:
@@ -448,6 +495,10 @@ class PlayerBridgeClient:
                             self.controller.write_all(self.socket, _frame(payload, 10))
                             self.raw.settimeout(0)
                         elif opcode == 8:
+                            # A close code distinguishes a server ACK timeout
+                            # (1011) from a hibernation reconnect (1012).
+                            close_code = (payload[0] << 8) | payload[1] if len(payload) >= 2 else 0
+                            print("Player bridge close code:", close_code)
                             raise OSError("player bridge closed")
                         else:
                             raise ValueError("unsupported player frame")

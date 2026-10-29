@@ -44,8 +44,12 @@
     var catalog = root.HorizonEpisodes;
     var route = catalog.parse(nav.search);
     var currentEpisode = route.current;
-    var manualEndEnabled = route.testEnd && nav.origin === PREVIEW_ORIGIN;
-    var resolver = options && options.episodeResolver || catalog.createResolver({ clock: clock });
+    var manualEndEnabled = route.testEnd && currentEpisode.showId === 2190 && nav.origin === PREVIEW_ORIGIN;
+    var resolver = options && options.episodeResolver || (currentEpisode.showId === 2190 || route.tvdbId
+      ? catalog.createResolver({ clock: clock, showId: currentEpisode.showId, tvdbId: route.tvdbId }) : {
+        current: function () { return Promise.resolve(null); },
+        resolve: function () { return Promise.resolve({ kind: "unknown", reason: "provider_metadata_unavailable" }); }
+      });
     var adapter = options && options.commandAdapter;
     if (!adapter && root.HorizonPlayerBridge) adapter = root.HorizonPlayerBridge.create(clock);
     var subtitleMode = route.subtitle;
@@ -250,7 +254,8 @@
         focus(menuButtons[0]);
         return;
       }
-      transitionTo(catalog.pageUrl(currentEpisode, subtitleMode === "on" ? "off" : "on", manualEndEnabled));
+      transitionTo(catalog.pageUrl(currentEpisode, subtitleMode === "on" ? "off" : "on",
+        manualEndEnabled, null, route.fromSearch, route.showTitle, route.tvdbId));
     }
     function restoreFromCommand(reason, late, parentFocused) {
       if (disposed || state !== STATES.COMMAND_IN_PROGRESS) return;
@@ -317,8 +322,10 @@
       }
       renderSeekLabels();
       commandMessage = (batch.watchdogExpired ? "Focus watchdog expired; " : "")
-        + "SmartCast " + result.state + ": " + result.acknowledged + "/" + batch.count
-        + " inputs; accept " + (batch.browserAcceptanceMs === undefined ? "?" : batch.browserAcceptanceMs)
+        + (result.code === "keylist_acknowledged"
+          ? "SmartCast KEYLIST request acknowledged for " + batch.count + " inputs"
+          : "SmartCast " + result.state + ": " + result.acknowledged + "/" + batch.count + " inputs")
+        + "; accept " + (batch.browserAcceptanceMs === undefined ? "?" : batch.browserAcceptanceMs)
         + " ms (bridge " + (batch.serverAcceptanceMs === null || batch.serverAcceptanceMs === undefined
           ? "?" : batch.serverAcceptanceMs) + " ms); Pico "
         + (result.metrics && typeof result.metrics.picoMs === "number" ? result.metrics.picoMs + " ms" : "time unknown")
@@ -534,10 +541,17 @@
       nav.replace(url);
     }
     function episodeListUrl() {
-      return catalog.pageUrl(currentEpisode, subtitleMode, manualEndEnabled, "list");
+      return catalog.pageUrl(currentEpisode, subtitleMode, manualEndEnabled, "list", route.fromSearch, route.showTitle, route.tvdbId);
     }
     function launchEpisode(target) {
-      transitionTo(catalog.pageUrl(target, subtitleMode, manualEndEnabled));
+      transitionTo(catalog.pageUrl(target, subtitleMode, manualEndEnabled, null, route.fromSearch, route.showTitle, route.tvdbId));
+    }
+    function exitPlayer() {
+      if (!route.fromSearch) { dispose(); nav.replace("embed-matrix.html"); return; }
+      var url = "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/?return=1"
+        + "&showId=" + currentEpisode.showId + "&season=" + currentEpisode.season
+        + "&episode=" + currentEpisode.episode + "&sub=" + subtitleMode;
+      dispose(); nav.replace(url);
     }
     function transitionEpisode(direction) {
       if (pendingEpisode && pendingEpisode.direction === direction) {
@@ -663,7 +677,7 @@
         return;
       }
       if (state === STATES.PLAYBACK_HIDDEN) {
-        if (key === "Back") { if (!event.repeat) { dispose(); nav.replace("embed-matrix.html"); } }
+        if (key === "Back") { if (!event.repeat) exitPlayer(); }
         else if (key === "OK" && !event.repeat) {
           pauseTrace = { inputAt: now(), hidden: true };
           overlay.classList.add("is-quick-pause");
@@ -724,6 +738,10 @@
         + "&sub_lang=en&sub_label=Off";
     }
     frame.src = subtitleUrl; // One initial navigation; focus and overlay never reset it.
+    if (currentEpisode.showId !== 2190) {
+      get("show-title").textContent = route.showTitle || "TV Episode";
+      get("metadata-credit").textContent = "Episode metadata: TMDB selection · YapGrid playback availability is unverified";
+    } else if (route.showTitle) get("show-title").textContent = route.showTitle;
     get("episode-caption").textContent = "Season " + currentEpisode.season + " · Episode "
       + currentEpisode.episode;
     get("previous-episode").setAttribute("aria-disabled", "false");

@@ -52,19 +52,34 @@ first reaches terminal status. The preview allows no overlapping batches.
 
 One authenticated browser `POST /api/player/batch` with a fixed allowlisted
 count produces one authenticated Cloudflare-to-Pico `player_batch` instruction.
-The Pico sends that many sequential fixed SmartCast KEYPRESS requests on its
-warm, pinned TLS connection. Browser status polling issues no seek inputs.
-The Pico accepts cancellation between individual inputs and never retries
-an input with uncertain delivery. The Pico's WebSocket parser consumes
+The Pico sends **one** fixed KEYLIST SmartCast request for every allowed
+count: 1, 3, 6, 12, 30, or 60 inputs, in either direction. It reuses its
+authenticated, certificate-pinned warm TLS connection. A 30- or 60-entry
+request temporarily uses a 12-second underlying socket timeout, then restores
+the normal four-second timeout. The single `PLAYER_SEEK_MODE` setting defaults
+to `"all_keylist"`; a missing value and the former `"verified"` value behave
+the same way. Only `"sequential"` explicitly selects the old executor for
+debugging. Browser status polling issues no seek inputs.
+
+For a KEYLIST, cancellation can stop the request before it starts but cannot
+interrupt entries inside a request already sent to SmartCast. The Pico never
+replays a rejected or uncertain request and never switches to sequential
+seeking after such a result. `keylist_acknowledged` means one SmartCast
+request returned `SUCCESS` for the list; YapGrid movement remains unverified
+until observed on the TV. Sequential requests remain cancellable between
+inputs. The Pico's WebSocket parser consumes
 `bytearray` frames with slice assignment, retaining MicroPython compatibility.
 
 ## Manual preview deployment and physical check
 
-The current change edits only preview overlay source, documentation, and
-tests. If the Pico already runs the working batch bridge that produced the
-reported 1, 3, 6, 12, 30, and isolated 60-input results, **no Pico file
-needs reuploading for this change**. Do not change its credentials, pin,
-firmware, or private configuration.
+The final KEYLIST integration requires reuploading the updated `main.py` and
+`player_bridge.py` to the Pico root as `/main.py` and `/player_bridge.py`.
+Keep private `/config.py`, credentials, certificate pin, and firmware as they
+are. No mode change is needed in `/config.py`, even if it still contains the
+former `"verified"` value. The Cloudflare command protocol and current player
+overlay runtime are unchanged by this final update. The local overlay status
+wording from the earlier integration should be deployed if it is not already
+live, so the screen identifies one KEYLIST acknowledgment accurately.
 
 When ready, from the repository root on the Mac, deploy only the preview:
 
@@ -113,6 +128,7 @@ python3 -B tests/pico-seek-batch-experiment-test.py
 ```
 
 These tests mock the TV and cannot validate YapGrid movement or physical
-remote routing. The 30-second focus watchdog may cancel a slow 60-input run;
-the measured isolated ~15-second run is the current basis for this bound.
+remote routing. The 30-second focus watchdog still bounds an unexpectedly
+slow or disconnected batch. Large single KEYLISTs now receive a bounded 12-second socket
+timeout without changing the timeout for Play/Pause or small seeks.
 

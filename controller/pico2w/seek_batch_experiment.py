@@ -1,27 +1,36 @@
 """Manual, Pico-only KEYLIST experiment. Never imported by the boot controller.
 
-Only the fixed forward key (codeset 3, code 7) is permitted. The batch trial
-sends exactly two KEYPRESS actions in one authenticated, pinned TV request.
+Batch trials send 2, 6, 12, 30, or 60 fixed seek KEYPRESS actions in one
+authenticated, pinned TV request. Large trials require supervised TV testing.
 """
 
-MAX_BATCH_SIZE = 2
+ALLOWED_BATCH_COUNTS = (2, 6, 12, 30, 60)
 FORWARD_KEY = (3, 7)
+BACKWARD_KEY = (3, 1)
 SEQUENTIAL_COUNTS = (2, 3, 6, 12, 30, 60)
 
 
-def _forward_body(count):
-    if type(count) is not int or count < 1 or count > MAX_BATCH_SIZE:
-        raise ValueError("forward batch must contain one or two keys")
+def _batch_body(count, command="seek_forward"):
+    if type(count) is not int or count not in ALLOWED_BATCH_COUNTS:
+        raise ValueError("batch count must be 2, 6, 12, 30, or 60")
+    if command not in ("seek_forward", "seek_backward"):
+        raise ValueError("only seek inputs are permitted")
+    codeset, code = FORWARD_KEY if command == "seek_forward" else BACKWARD_KEY
     return {"KEYLIST": [
-        {"CODESET": FORWARD_KEY[0], "CODE": FORWARD_KEY[1], "ACTION": "KEYPRESS"}
+        {"CODESET": codeset, "CODE": code, "ACTION": "KEYPRESS"}
         for _ in range(count)
     ]}
 
 
+def _forward_body(count):
+    return _batch_body(count)
+
+
 def _check_mapping():
     import main as controller
-    if controller.PLAYER_KEYS.get("seek_forward") != FORWARD_KEY:
-        raise RuntimeError("forward key mapping changed; no key sent")
+    if (controller.PLAYER_KEYS.get("seek_forward") != FORWARD_KEY or
+            controller.PLAYER_KEYS.get("seek_backward") != BACKWARD_KEY):
+        raise RuntimeError("seek key mapping changed; no key sent")
     return controller
 
 
@@ -62,6 +71,37 @@ def batched_pair(trial):
                 "requested_keys": 2, "request_ms": timing.get("request_ms")}
     finally:
         trial.close()
+
+
+def batched_trial(trial, count, command="seek_forward"):
+    """Send one KEYLIST containing an allowed number of fixed seek keypresses."""
+    timing = {}
+    try:
+        body = _batch_body(count, command)
+        _check_mapping()
+        if trial._token is None:
+            raise RuntimeError("trial is closed")
+        if not _warm(trial):
+            result = {"outcome": "not_sent", "requested_keys": count,
+                      "request_ms": None, "reason": "read_only_warmup_failed"}
+        else:
+            try:
+                response = trial.connection.keypress(trial._token, body, timing)
+                status = response.get("STATUS") if isinstance(response, dict) else None
+                code = status.get("RESULT") if isinstance(status, dict) else None
+                outcome = "acknowledged" if code == "SUCCESS" else (
+                    "rejected" if code is not None else "unknown")
+                result = {"outcome": outcome, "requested_keys": count,
+                          "request_ms": timing.get("request_ms")}
+            except (OSError, ValueError, RuntimeError) as error:
+                result = {"outcome": "unknown", "requested_keys": count,
+                          "error_type": type(error).__name__,
+                          "request_ms": timing.get("request_ms")}
+    finally:
+        trial.close()
+    print("SmartCast KEYLIST %s: requested %d keys; acknowledgment %s; request %s ms" %
+          (command, count, result["outcome"], result.get("request_ms")))
+    return result
 
 
 def separate_pair(trial):

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://image.tmdb.org data:; connect-src 'self'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'" />
     <title>Horizon for Vizio</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="horizon.css" />
@@ -19,6 +19,7 @@
       <header class="topbar">
         <div class="brand" aria-label="Horizon">HORIZON</div>
         <div class="topbar-right">
+          <button class="search-open" id="search-open" type="button" aria-label="Search movies and TV shows">Search</button>
           <time class="clock" id="clock-time" aria-label="Current time">--:--</time>
           <button class="settings-open" id="settings-open" type="button" aria-label="Open settings" title="Settings">
             <img src="assets/settings.svg" alt="" />
@@ -26,12 +27,21 @@
         </div>
       </header>
       <p class="hero-caption" id="hero-caption">A place for everything you love.</p>
-      <section class="apps-section" aria-label="Applications">
+      <section class="apps-section" aria-label="Favorite applications">
         <div class="dock" aria-label="Favorite applications">
-          <nav id="app-grid" class="app-grid" aria-label="Horizon applications"></nav>
+          <nav id="app-grid" class="app-grid" aria-label="Favorite applications"></nav>
         </div>
         <div class="selection-info" id="selection-info" aria-live="polite">
-          <strong id="selection-name">YouTube</strong><span id="selection-status">Launch setup required</span>
+          <strong id="selection-name">Horizon Watch</strong><span id="selection-status">Search movies and TV</span>
+        </div>
+      </section>
+      <section class="watch-section" id="watch-section" aria-label="Continue Watching" hidden>
+        <h2>Continue Watching</h2>
+        <div id="watch-cards" class="watch-cards"></div>
+      </section>
+      <section class="secondary-apps-section" aria-label="More applications">
+        <div class="dock" aria-label="More applications">
+          <nav id="secondary-app-grid" class="app-grid" aria-label="More applications"></nav>
         </div>
       </section>
     </main>
@@ -45,7 +55,6 @@
           <button class="setting-row" type="button" data-setting="wallpaper"><span class="setting-icon setting-icon-wallpaper" aria-hidden="true"></span><span class="setting-copy"><strong>Wallpaper</strong><small>Choose from the built-in gallery</small></span><span class="setting-value" data-value="wallpaper"></span><span class="setting-chevron" aria-hidden="true">›</span></button>
           <button class="setting-row" type="button" data-setting="slideshow"><span class="setting-icon setting-icon-slideshow" aria-hidden="true">▶</span><span class="setting-copy"><strong>Slideshow</strong><small>Interval: 60 seconds</small></span><span class="setting-value" data-value="slideshow"></span><span class="setting-chevron" aria-hidden="true">›</span></button>
           <button class="setting-row" type="button" data-setting="accent"><span class="setting-icon setting-icon-accent" aria-hidden="true"></span><span class="setting-copy"><strong>Focus color</strong><small>Set your highlight</small></span><span class="setting-value" data-value="accent"></span><span class="setting-chevron" aria-hidden="true">›</span></button>
-          <button class="setting-row" type="button" data-setting="arrangement"><span class="setting-icon setting-icon-layout" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="setting-copy"><strong>App order</strong><small>Arrange your favorites</small></span><span class="setting-value" data-value="arrangement"></span><span class="setting-chevron" aria-hidden="true">›</span></button>
         </div>
         <p class="settings-footnote" id="settings-storage">Changes are saved on this device.</p>
       </div>
@@ -56,6 +65,19 @@
         <h1 id="browser-title">Browser coming soon</h1>
         <p>Web browsing is not available in Horizon yet.</p>
         <button id="browser-close" class="browser-close" type="button">Back to Home</button>
+      </div>
+    </section>
+    <section class="pairing-screen" id="pairing-screen" aria-label="Pair Horizon TV" hidden>
+      <div class="pairing-panel" role="dialog" aria-modal="true" aria-labelledby="pairing-title">
+        <span class="settings-eyebrow">HORIZON</span>
+        <h1 id="pairing-title">Pair this TV</h1>
+        <p>On your phone or Mac, open <strong id="pairing-url">the owner page</strong> and sign in. Enter this code and approve the TV.</p>
+        <strong class="pairing-code" id="pairing-code" aria-label="Pairing code" hidden>—</strong>
+        <p id="pairing-status" role="status" aria-live="polite">Connecting…</p>
+        <div class="pairing-actions">
+          <button id="pairing-retry" type="button">New code</button>
+          <button id="pairing-close" type="button">Back to Horizon</button>
+        </div>
       </div>
     </section>
     <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>

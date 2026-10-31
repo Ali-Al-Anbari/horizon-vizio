@@ -15,8 +15,15 @@ import ssl
 import sys
 import time
 
-import config
-import secrets
+try:
+    import config
+    import secrets
+except ImportError as error:
+    # These files are installed on the device, not supplied by the network.
+    # Retrying a missing file cannot repair it and would hide the useful error.
+    print("Controller stopped: required device module missing")
+    sys.print_exception(error)
+    raise
 
 
 STATE_FILE = "state.json"
@@ -27,6 +34,8 @@ MAX_CLOUD_HEADERS = 1536
 WIFI_CONNECT_TIMEOUT_MS = 10000
 WIFI_RETRY_MS = (1000, 2000, 4000, 8000, 15000, 30000, 60000)
 NTP_RETRY_MS = (1000, 3000, 8000)
+NTP_BACKGROUND_RETRY_MS = (1000, 3000, 8000, 30000, 60000)
+APP_RETRY_MS = (1000, 3000, 8000, 30000, 60000)
 LAUNCH_RETRY_MS = (3000, 5000, 10000, 20000, 40000, 60000)
 NTP_REFRESH_MS = 24 * 60 * 60 * 1000
 POWER_POLL_MS = 3000
@@ -77,6 +86,10 @@ PLAYER_CLOUD_MAX_DEFERRAL_MS = 8000
 PLAYER_BATCH_CLOUD_MAX_DEFERRAL_MS = 20000
 NETWORK_TIMING = {"tv_dns": 0, "tv_tcp": 0, "tv_tls": 0, "tv_gc": 0,
                   "cloud_dns": 0, "cloud_tcp": 0, "cloud_tls": 0, "cloud_gc": 0}
+
+
+class FatalControllerError(RuntimeError):
+    """A device-local configuration or trust failure needing owner repair."""
 
 
 def ticks():
@@ -167,12 +180,12 @@ def validate_config():
     for name in required:
         value = getattr(config, name, "")
         if not isinstance(value, str) or not value or value.startswith("YOUR_"):
-            raise RuntimeError("device config missing: " + name)
+            raise FatalControllerError("device config missing: " + name)
     if not config.HORIZON_URL.startswith("https://"):
-        raise RuntimeError("Horizon URL must use HTTPS")
+        raise FatalControllerError("Horizon URL must use HTTPS")
     pin = config.TV_CERT_SHA256.lower()
     if len(pin) != 64 or any(char not in "0123456789abcdef" for char in pin):
-        raise RuntimeError("TV certificate pin must be 64 hexadecimal characters")
+        raise FatalControllerError("TV certificate pin must be 64 hexadecimal characters")
     return binascii.unhexlify(pin)
 
 
@@ -196,10 +209,20 @@ def load_power():
         return None
 
 
-def connect_wifi(wlan):
-    if wlan.isconnected():
-        address = wlan.ifconfig()[0]
-        return address not in ("", "0.0.0.0")
+def wifi_address(wlan):
+    try:
+        if wlan.isconnected():
+            address = wlan.ifconfig()[0]
+            if isinstance(address, str) and address not in ("", "0.0.0.0"):
+                return address
+    except (OSError, ValueError, IndexError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def connect_wifi(wlan, known_address=None):
+    if known_address is not None or wifi_address(wlan) is not None:
+        return True
     wlan.active(True)
     try:
         wlan.disconnect()
@@ -208,27 +231,33 @@ def connect_wifi(wlan):
     wlan.connect(config.WIFI_SSID, config.WIFI_PASSWORD)
     deadline = time.ticks_add(ticks(), WIFI_CONNECT_TIMEOUT_MS)
     while not due(deadline):
-        if wlan.isconnected():
-            address = wlan.ifconfig()[0]
-            if address not in ("", "0.0.0.0"):
-                return True
+        if wifi_address(wlan) is not None:
+            return True
         time.sleep_ms(250)
     return False
 
 
-def synchronize_time():
+def clock_credible():
+    try:
+        return 2025 <= time.gmtime()[0] <= 2099
+    except (OSError, ValueError, OverflowError):
+        return False
+
+
+def synchronize_time(attempts=3):
     host = getattr(config, "NTP_HOST", "pool.ntp.org")
     ntptime.host = host
     last_error = None
-    for delay in NTP_RETRY_MS:
+    for attempt in range(attempts):
         try:
             ntptime.settime()
-            if time.gmtime()[0] < 2025:
+            if not clock_credible():
                 raise RuntimeError("NTP returned an implausible clock")
             return True
         except (OSError, ValueError, RuntimeError) as error:
             last_error = error
-            time.sleep_ms(delay)
+            if attempt + 1 < attempts:
+                time.sleep_ms(NTP_RETRY_MS[min(attempt, len(NTP_RETRY_MS) - 1)])
     raise RuntimeError("NTP synchronization failed: " + type(last_error).__name__)
 
 
@@ -242,10 +271,13 @@ def tls_context():
     native_context = getattr(context, "_context", None)
     set_pin = getattr(native_context, "set_pin_sha256", None)
     if set_pin is None:
-        raise RuntimeError("native certificate-pinning API unavailable")
-    set_pin(pin)
+        raise FatalControllerError("native certificate-pinning API unavailable")
+    try:
+        set_pin(pin)
+    except (OSError, ValueError, RuntimeError, TypeError):
+        raise FatalControllerError("native certificate-pinning setup failed")
     if context.verify_mode != ssl.CERT_REQUIRED:
-        raise RuntimeError("TLS verification mode is not CERT_REQUIRED")
+        raise FatalControllerError("TLS verification mode is not CERT_REQUIRED")
     return context
 
 
@@ -284,9 +316,12 @@ def cloud_tls_context():
     context.verify_mode = ssl.CERT_REQUIRED
     # A separate public CA trust anchor for Cloudflare. The Vizio leaf pin is
     # private to the TV context and is never loaded into this context.
-    context.load_verify_locations(cafile=getattr(config, "CLOUD_CA_FILE", "cloud-root-isrg-x1.pem"))
+    try:
+        context.load_verify_locations(cafile=getattr(config, "CLOUD_CA_FILE", "cloud-root-isrg-x1.pem"))
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError):
+        raise FatalControllerError("Cloud CA file unavailable or invalid")
     if context.verify_mode != ssl.CERT_REQUIRED:
-        raise RuntimeError("Cloud TLS verification is not CERT_REQUIRED")
+        raise FatalControllerError("Cloud TLS verification is not CERT_REQUIRED")
     return context
 
 
@@ -1484,10 +1519,20 @@ class PlayerBridgeController:
     PLAYER_SESSION_STALE_MS = PLAYER_SESSION_STALE_MS
 
 
+def close_runtime_connections(cloud_session, player_bridge):
+    for connection in (cloud_session, player_bridge):
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                # A failed cleanup must not prevent the next connection.
+                pass
+
+
 def unattended_watch():
     token = token_value()
     if token is None:
-        raise RuntimeError("private SmartCast token is not configured")
+        raise FatalControllerError("private SmartCast token is not configured")
     cloud_enabled = getattr(config, "CLOUD_LIVE_CLAIMING", False) is True
     player_bridge_enabled = getattr(config, "PLAYER_BRIDGE_ENABLED", False) is True
     cloud_keepalive = getattr(config, "CLOUD_KEEPALIVE", False) is True
@@ -1495,22 +1540,22 @@ def unattended_watch():
     cloud_secret = controller_token() if cloud_enabled else None
     bridge_secret = getattr(secrets, "PLAYER_BRIDGE_TOKEN", "") if player_bridge_enabled else None
     if cloud_enabled and cloud_secret is None:
-        raise RuntimeError("private Cloudflare controller token is not configured")
+        raise FatalControllerError("private Cloudflare controller token is not configured")
     if player_bridge_enabled and (not bridge_secret or bridge_secret.startswith("YOUR_")
                                   or len(bridge_secret) < 32):
-        raise RuntimeError("private preview player bridge token is not configured")
+        raise FatalControllerError("private preview player bridge token is not configured")
     cloud_interval = getattr(config, "CLOUD_POLL_MS", POWER_POLL_MS)
     if cloud_enabled and not 1000 <= cloud_interval <= 30000:
-        raise RuntimeError("Cloud poll interval must be 1000 to 30000 ms")
+        raise FatalControllerError("Cloud poll interval must be 1000 to 30000 ms")
     confirm_interval = getattr(config, "CLOUD_CONFIRM_MS", CLOUD_CONFIRM_MS)
     if cloud_enabled and not 10000 <= confirm_interval <= 20000:
-        raise RuntimeError("Cloud confirmation budget must be 10000 to 20000 ms")
+        raise FatalControllerError("Cloud confirmation budget must be 10000 to 20000 ms")
     shortcut_interval = getattr(config, "IHEART_POLL_MS", 2000)
     if shortcut_enabled and not 1000 <= shortcut_interval <= 10000:
-        raise RuntimeError("iHeart poll interval must be 1000 to 10000 ms")
+        raise FatalControllerError("iHeart poll interval must be 1000 to 10000 ms")
     shortcut_priority_ms = getattr(config, "IHEART_CONFIRM_PRIORITY_MS", 1000)
     if shortcut_enabled and not 0 <= shortcut_priority_ms <= 1000:
-        raise RuntimeError("iHeart confirmation priority must be 0 to 1000 ms")
+        raise FatalControllerError("iHeart confirmation priority must be 0 to 1000 ms")
     wlan = network.WLAN(network.WLAN.IF_STA)
     last_power = load_power()
     last_power_at = None
@@ -1524,6 +1569,9 @@ def unattended_watch():
     time_sync_due = 0
     wifi_failures = 0
     cloud_failures = 0
+    ntp_failures = 0
+    app_failures = 0
+    last_ip = None
     power_poll_due = ticks()
     cloud_poll_due = ticks()
     player_cloud_deferral_at = None
@@ -1535,17 +1583,46 @@ def unattended_watch():
 
     while True:
         try:
-            if cloud_session is not None and not wlan.isconnected():
-                cloud_session.close()
+            observed_ip = wifi_address(wlan)
+            if last_ip is not None and observed_ip != last_ip:
+                print("Network address lost or changed; closing stale sockets")
+                close_runtime_connections(cloud_session, player_bridge)
                 cloud_session = None
-            if player_bridge is not None and not wlan.isconnected():
-                player_bridge.close()
-            if not connect_wifi(wlan):
+                player_bridge = None
+                context = None
+                cloud_context = None
+                ntp_failures = 0
+                last_ip = None
+            if not connect_wifi(wlan, observed_ip):
                 raise OSError("Wi-Fi unavailable")
+            current_ip = observed_ip if observed_ip is not None else wifi_address(wlan)
+            if current_ip is None:
+                raise OSError("Wi-Fi address unavailable")
+            if last_ip is not None and current_ip != last_ip:
+                print("Network address changed; closing stale sockets")
+                close_runtime_connections(cloud_session, player_bridge)
+                cloud_session = None
+                player_bridge = None
+                context = None
+                cloud_context = None
+                ntp_failures = 0
+            last_ip = current_ip
             wifi_failures = 0
             if time_sync_due == 0 or due(time_sync_due):
-                synchronize_time()
-                time_sync_due = time.ticks_add(ticks(), NTP_REFRESH_MS)
+                try:
+                    # One bounded NTP attempt; the scheduler owns retries.
+                    synchronize_time(1)
+                    ntp_failures = 0
+                    time_sync_due = time.ticks_add(ticks(), NTP_REFRESH_MS)
+                except (OSError, ValueError, RuntimeError) as error:
+                    delay = NTP_BACKGROUND_RETRY_MS[min(ntp_failures, len(NTP_BACKGROUND_RETRY_MS) - 1)]
+                    ntp_failures = min(ntp_failures + 1, len(NTP_BACKGROUND_RETRY_MS))
+                    time_sync_due = time.ticks_add(ticks(), delay)
+                    print("NTP waiting: %s; retry in %d ms" % (type(error).__name__, delay))
+            if not clock_credible():
+                # No trusted clock means no TLS request or player command.
+                time.sleep_ms(min(1000, max(20, time.ticks_diff(time_sync_due, ticks()))))
+                continue
             if context is None:
                 context = tls_context()
             if (cloud_enabled or player_bridge_enabled) and cloud_context is None:
@@ -1668,7 +1745,7 @@ def unattended_watch():
                         print("Cloud queue waiting:", str(error) if isinstance(error, RuntimeError)
                               else type(error).__name__)
                         delay = CLOUD_RETRY_MS[min(cloud_failures, len(CLOUD_RETRY_MS) - 1)]
-                        cloud_failures += 1
+                        cloud_failures = min(cloud_failures + 1, len(CLOUD_RETRY_MS))
                         cloud_poll_due = time.ticks_add(ticks(), delay)
 
             if not defer_background and shortcut_enabled and due(shortcut_poll_due):
@@ -1677,20 +1754,52 @@ def unattended_watch():
                     shortcut_poll_due, shortcut_interval)
             if player_bridge is not None:
                 player_bridge.step()
+            app_failures = 0
 
-        except (OSError, ValueError, RuntimeError) as error:
-            print("Controller waiting:", type(error).__name__)
-            if not wlan.isconnected():
-                if cloud_session is not None:
-                    cloud_session.close()
-                    cloud_session = None
-                if player_bridge is not None:
-                    player_bridge.close()
+        except Exception as error:
+            if isinstance(error, (FatalControllerError, ImportError)):
+                close_runtime_connections(cloud_session, player_bridge)
+                raise
+            if not isinstance(error, (OSError, ValueError, RuntimeError)):
+                # Includes MemoryError. Recover in-process instead of falling
+                # into the REPL; discard sockets and TLS contexts first.
+                gc.collect()
+                print("Controller recovering:", type(error).__name__)
+                try:
+                    sys.print_exception(error)
+                except Exception:
+                    pass
+                close_runtime_connections(cloud_session, player_bridge)
+                cloud_session = None
+                player_bridge = None
                 context = None
                 cloud_context = None
+                app_failures = min(app_failures + 1, len(APP_RETRY_MS))
+                delay = APP_RETRY_MS[app_failures - 1]
+                print("Controller retry %d in %d ms" % (app_failures, delay))
+                gc.collect()
+                time.sleep_ms(delay)
+                continue
+            print("Controller waiting:", type(error).__name__)
+            if wifi_address(wlan) is None:
+                close_runtime_connections(cloud_session, player_bridge)
+                cloud_session = None
+                player_bridge = None
+                context = None
+                cloud_context = None
+                ntp_failures = 0
+                last_ip = None
                 time_sync_due = 0
                 delay = WIFI_RETRY_MS[min(wifi_failures, len(WIFI_RETRY_MS) - 1)]
-                wifi_failures += 1
+                wifi_failures = min(wifi_failures + 1, len(WIFI_RETRY_MS))
+                time.sleep_ms(delay)
+                continue
+            if context is None or ((cloud_enabled or player_bridge_enabled) and cloud_context is None):
+                # Context creation can fail transiently under memory or driver
+                # pressure. A valid Wi-Fi address must not cause a tight loop.
+                app_failures = min(app_failures + 1, len(APP_RETRY_MS))
+                delay = APP_RETRY_MS[app_failures - 1]
+                print("Controller context retry %d in %d ms" % (app_failures, delay))
                 time.sleep_ms(delay)
                 continue
             if pending_launch:
@@ -1709,12 +1818,15 @@ def unattended_watch():
                                              shortcut_poll_due if shortcut_enabled else None))
 
 
+def live_mode_enabled():
+    return any(getattr(config, name, False) is True for name in
+               ("AUTO_LAUNCH_ON_POWER", "CLOUD_LIVE_CLAIMING",
+                "PLAYER_BRIDGE_ENABLED", "IHEART_RETURNS_TO_HORIZON"))
+
+
 def main():
     # Live queue claiming, power-on launch, and iHeart shortcut are independent opt-ins.
-    if (getattr(config, "AUTO_LAUNCH_ON_POWER", False) is not True
-            and getattr(config, "CLOUD_LIVE_CLAIMING", False) is not True
-            and getattr(config, "PLAYER_BRIDGE_ENABLED", False) is not True
-            and getattr(config, "IHEART_RETURNS_TO_HORIZON", False) is not True):
+    if not live_mode_enabled():
         supervised_check()
         return
     if getattr(config, "CLOUD_LIVE_CLAIMING", False) is True:
@@ -1729,12 +1841,37 @@ def main():
 
 
 def report_startup_error(error):
-    print("Controller stopped:", type(error).__name__)
-    sys.print_exception(error)
+    try:
+        print("Controller stopped:", type(error).__name__)
+    except MemoryError:
+        pass
+    try:
+        sys.print_exception(error)
+    except Exception:
+        pass
+
+
+def run_boot():
+    failures = 0
+    while True:
+        try:
+            main()
+            if not live_mode_enabled():
+                return  # The supervised, read-only check is intentionally one-shot.
+            raise RuntimeError("unattended controller returned unexpectedly")
+        except (FatalControllerError, ImportError) as error:
+            report_startup_error(error)
+            return  # Device-local repair is required; no reboot loop.
+        except Exception as error:
+            gc.collect()
+            report_startup_error(error)
+            if not live_mode_enabled():
+                return
+            failures = min(failures + 1, len(APP_RETRY_MS))
+            delay = APP_RETRY_MS[failures - 1]
+            print("Controller startup retry in %d ms" % delay)
+            time.sleep_ms(delay)
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as error:
-        report_startup_error(error)
+    run_boot()

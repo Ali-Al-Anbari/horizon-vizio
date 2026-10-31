@@ -22,6 +22,9 @@ class FakeWLAN:
     def isconnected(self):
         return True
 
+    def ifconfig(self):
+        return ("192.0.2.10", "255.255.255.0", "192.0.2.1", "192.0.2.1")
+
 
 sys.modules["network"] = types.SimpleNamespace(WLAN=FakeWLAN)
 sys.modules["ntptime"] = types.SimpleNamespace()
@@ -742,10 +745,17 @@ class PicoCloudTests(unittest.TestCase):
         with patch.object(pico, "cloud_request", return_value=(405, {"code": "method_not_allowed"})) as request:
             pico.cloud_auth_probe(object(), "C" * 40)
             self.assertEqual(request.call_args.args[:3], (pico.CLOUD_CLAIM_PATH, "C" * 40, "GET"))
-        for status in (403, 429, 500, 503):
+        for status in (403, 404, 429, 500, 502, 503):
             with self.subTest(status=status), patch.object(pico, "cloud_request", return_value=(status, None)):
                 with self.assertRaises(RuntimeError):
                     pico.cloud_poll_once(object(), object(), "C" * 40, "T" * 40)
+        # Cloudflare route errors can be HTML (for example a 1042 page), not
+        # the JSON controller protocol. They must fail closed before claiming.
+        html = b"<html>Cloudflare error 1042</html>"
+        raw = (b"HTTP/1.1 404 Not Found\r\nContent-Length: " + str(len(html)).encode()
+               + b"\r\n\r\n" + html)
+        with self.assertRaisesRegex(RuntimeError, "invalid HTTP JSON response"):
+            pico.parse_cloud_response(raw)
 
     def test_cloud_tls_failure_sends_no_authorization(self):
         with patch.object(pico, "open_cloud_socket", side_effect=OSError("TLS verify failed")) as connect:
@@ -1483,6 +1493,25 @@ class PicoCloudTests(unittest.TestCase):
             self.assertEqual(pico.next_periodic_due(0, 3000, 400), 3000)
             self.assertEqual(pico.next_periodic_due(0, 3000, 4500), 7500)
 
+    def test_cloud_and_bridge_deadlines_survive_tick_wrap(self):
+        period = 1 << 20
+        clock = [period - 1000]
+        add = lambda value, delta: (value + delta) % period
+        diff = lambda left, right: ((left - right + period // 2) % period) - period // 2
+        controller = types.SimpleNamespace(ticks=lambda: clock[0])
+        client = player_bridge.PlayerBridgeClient(controller, object(), "cloud", object(), "tv")
+        sent = []
+        client.send = sent.append
+        with patch.object(pico.time, "ticks_add", side_effect=add, create=True), \
+             patch.object(pico.time, "ticks_diff", side_effect=diff, create=True):
+            self.assertEqual(pico.next_periodic_due(period - 500, 3000, period - 100), 2500)
+            client.ping_due = add(clock[0], player_bridge.HEARTBEAT_MS)
+            clock[0] = client.ping_due
+            client._bridge_heartbeat()
+            self.assertEqual(sent[0]["type"], "bridge_heartbeat")
+            clock[0] = add(clock[0], player_bridge.LIVENESS_MS)
+            with self.assertRaises(OSError): client._bridge_heartbeat()
+
     def test_cloud_error_backoff_does_not_stop_power_watching(self):
         class EndLoop(Exception):
             pass
@@ -1547,7 +1576,7 @@ class PicoCloudTests(unittest.TestCase):
              patch.object(pico.time, "ticks_diff", side_effect=lambda left, right: left - right, create=True), \
              patch.object(pico.time, "sleep_ms", side_effect=sleep, create=True), \
              patch.object(pico, "load_power", return_value=1), \
-             patch.object(pico, "connect_wifi", side_effect=lambda _wlan: clock["now"] >= 1000), \
+             patch.object(pico, "connect_wifi", side_effect=lambda _wlan, _address=None: clock["now"] >= 1000), \
              patch.object(pico, "synchronize_time", return_value=True), \
              patch.object(pico, "tls_context", return_value=object()), \
              patch.object(pico, "cloud_tls_context", return_value=object()), \
@@ -1556,6 +1585,386 @@ class PicoCloudTests(unittest.TestCase):
             with self.assertRaises(EndLoop):
                 pico.unattended_watch()
         self.assertEqual(claims[0], 1000)
+
+    def test_cold_start_entry_selects_unattended_mode_only_with_a_live_flag(self):
+        settings = sys.modules["config"]
+        with patch.object(settings, "AUTO_LAUNCH_ON_POWER", False), \
+             patch.object(settings, "CLOUD_LIVE_CLAIMING", False), \
+             patch.object(settings, "PLAYER_BRIDGE_ENABLED", False, create=True), \
+             patch.object(settings, "IHEART_RETURNS_TO_HORIZON", False), \
+             patch.object(pico, "supervised_check") as supervised, \
+             patch.object(pico, "unattended_watch") as unattended:
+            pico.main()
+            supervised.assert_called_once()
+            unattended.assert_not_called()
+            settings.CLOUD_LIVE_CLAIMING = True
+            pico.main()
+            unattended.assert_called_once()
+
+    def test_associated_wifi_without_ip_attempts_dhcp_reconnect(self):
+        class NoAddress:
+            def __init__(self): self.active_calls = self.disconnect_calls = self.connect_calls = 0
+            def isconnected(self): return True
+            def ifconfig(self):
+                return (("0.0.0.0" if self.connect_calls == 0 else "192.0.2.20"), "", "", "")
+            def active(self, _value): self.active_calls += 1
+            def disconnect(self): self.disconnect_calls += 1
+            def connect(self, *_args): self.connect_calls += 1
+        wlan = NoAddress()
+        with patch.object(pico.time, "ticks_ms", return_value=0, create=True), \
+             patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True):
+            self.assertTrue(pico.connect_wifi(wlan))
+        self.assertEqual((wlan.active_calls, wlan.disconnect_calls, wlan.connect_calls), (1, 1, 1))
+
+    def test_persistent_dhcp_stall_has_bounded_attempt_then_can_retry(self):
+        clock = [0]
+        class NoAddress:
+            connects = 0
+            def isconnected(self): return True
+            def ifconfig(self): return ("0.0.0.0", "", "", "")
+            def active(self, _value): pass
+            def disconnect(self): pass
+            def connect(self, *_args): self.connects += 1
+        wlan = NoAddress()
+        with patch.object(pico.time, "ticks_ms", side_effect=lambda: clock[0], create=True), \
+             patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
+             patch.object(pico.time, "sleep_ms", side_effect=lambda ms: clock.__setitem__(0, clock[0] + ms), create=True):
+            self.assertFalse(pico.connect_wifi(wlan))
+            self.assertEqual(clock[0], pico.WIFI_CONNECT_TIMEOUT_MS)
+            self.assertFalse(pico.connect_wifi(wlan))
+        self.assertEqual(wlan.connects, 2)
+
+    def test_boot_retries_unexpected_startup_failures_but_stops_on_fatal_config(self):
+        class EndLoop(BaseException): pass
+        delays = []
+        def sleep(milliseconds):
+            delays.append(milliseconds)
+            if len(delays) == 3: raise EndLoop()
+        with patch.object(pico, "main", side_effect=MemoryError("startup heap")) as start, \
+             patch.object(pico, "live_mode_enabled", return_value=True), \
+             patch.object(pico, "report_startup_error"), \
+             patch.object(pico.time, "sleep_ms", side_effect=sleep, create=True):
+            with self.assertRaises(EndLoop): pico.run_boot()
+        self.assertEqual(start.call_count, 3)
+        self.assertEqual(delays, [1000, 3000, 8000])
+        with patch.object(pico, "main", side_effect=pico.FatalControllerError("missing config")) as start, \
+             patch.object(pico, "report_startup_error") as report, \
+             patch.object(pico.time, "sleep_ms", create=True) as pause:
+            pico.run_boot()
+        start.assert_called_once()
+        report.assert_called_once()
+        pause.assert_not_called()
+        with patch.object(pico, "main", side_effect=KeyboardInterrupt), \
+             patch.object(pico.time, "sleep_ms", create=True) as pause:
+            with self.assertRaises(KeyboardInterrupt): pico.run_boot()
+        pause.assert_not_called()
+
+    def test_cloud_ca_file_failure_is_fatal_without_weakening_tls(self):
+        class BadContext:
+            verify_mode = None
+            def __init__(self, _protocol): pass
+            def load_verify_locations(self, **_kwargs): raise OSError("missing CA")
+        with patch.object(pico.ssl, "SSLContext", BadContext):
+            with self.assertRaises(pico.FatalControllerError): pico.cloud_tls_context()
+
+    def test_invalid_cold_clock_blocks_services_until_ntp_recovers(self):
+        class EndLoop(Exception): pass
+        clock = {"now": 0}
+        events = []
+        class Bridge:
+            session = None
+            batch = None
+            def __init__(self, *_args): events.append("bridge_created")
+            def step(self): events.append("bridge_step")
+            def close(self): pass
+        def ntp(*_args):
+            events.append("ntp")
+            if events.count("ntp") < 3: raise RuntimeError("NTP unavailable")
+        def sleep(milliseconds):
+            clock["now"] += milliseconds
+            if clock["now"] >= 4500: raise EndLoop()
+        with patch.object(sys.modules["config"], "CLOUD_LIVE_CLAIMING", True), \
+             patch.object(sys.modules["config"], "PLAYER_BRIDGE_ENABLED", True, create=True), \
+             patch.object(sys.modules["secrets"], "PLAYER_BRIDGE_TOKEN", "x" * 32, create=True), \
+             patch.object(pico.time, "ticks_ms", side_effect=lambda: clock["now"], create=True), \
+             patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
+             patch.object(pico.time, "sleep_ms", side_effect=sleep, create=True), \
+             patch.object(pico, "load_power", return_value=1), \
+             patch.object(pico, "connect_wifi", return_value=True), \
+             patch.object(pico, "synchronize_time", side_effect=ntp), \
+             patch.object(pico, "clock_credible", side_effect=lambda: events.count("ntp") >= 3), \
+             patch.object(pico, "tls_context", return_value=object()), \
+             patch.object(pico, "cloud_tls_context", return_value=object()), \
+             patch.object(pico, "power_state", side_effect=lambda *_: events.append("power") or 1), \
+             patch.object(pico, "cloud_poll_once", side_effect=lambda *_args: events.append("cloud") or False), \
+             patch.object(player_bridge, "PlayerBridgeClient", Bridge):
+            with self.assertRaises(EndLoop): pico.unattended_watch()
+        self.assertEqual(events[:3], ["ntp", "ntp", "ntp"])
+        self.assertIn("bridge_step", events)
+        self.assertIn("cloud", events)
+
+    def test_valid_rtc_keeps_services_running_during_ntp_refresh_outage(self):
+        class EndLoop(Exception): pass
+        clock = {"now": 0}
+        ntp_calls, claims, bridge_steps = [], [], []
+        class Bridge:
+            session = None
+            batch = None
+            def __init__(self, *_args): pass
+            def step(self): bridge_steps.append(clock["now"])
+            def close(self): pass
+        def ntp(*_args):
+            ntp_calls.append(clock["now"])
+            raise OSError("NTP offline")
+        def sleep(milliseconds):
+            clock["now"] += milliseconds
+            if clock["now"] >= 4200: raise EndLoop()
+        with patch.object(sys.modules["config"], "CLOUD_LIVE_CLAIMING", True), \
+             patch.object(sys.modules["config"], "PLAYER_BRIDGE_ENABLED", True, create=True), \
+             patch.object(sys.modules["config"], "CLOUD_POLL_MS", 1000, create=True), \
+             patch.object(sys.modules["secrets"], "PLAYER_BRIDGE_TOKEN", "x" * 32, create=True), \
+             patch.object(pico.time, "ticks_ms", side_effect=lambda: clock["now"], create=True), \
+             patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
+             patch.object(pico.time, "sleep_ms", side_effect=sleep, create=True), \
+             patch.object(pico, "load_power", return_value=1), \
+             patch.object(pico, "connect_wifi", return_value=True), \
+             patch.object(pico, "clock_credible", return_value=True), \
+             patch.object(pico, "synchronize_time", side_effect=ntp), \
+             patch.object(pico, "tls_context", return_value=object()), \
+             patch.object(pico, "cloud_tls_context", return_value=object()), \
+             patch.object(pico, "power_state", return_value=1), \
+             patch.object(pico, "cloud_poll_once", side_effect=lambda *_args: claims.append(clock["now"]) or False), \
+             patch.object(player_bridge, "PlayerBridgeClient", Bridge):
+            with self.assertRaises(EndLoop): pico.unattended_watch()
+        self.assertEqual(ntp_calls[:3], [0, 1000, 4000])
+        self.assertGreaterEqual(len(claims), 4)
+        self.assertGreater(len(bridge_steps), 4)
+
+    def test_background_ntp_attempt_has_no_internal_sleep_loop(self):
+        with patch.object(pico.ntptime, "settime", side_effect=OSError("offline"), create=True) as settime, \
+             patch.object(pico.time, "sleep_ms", create=True) as pause:
+            with self.assertRaises(RuntimeError): pico.synchronize_time(1)
+        settime.assert_called_once()
+        pause.assert_not_called()
+
+    def test_only_plausible_rtc_year_can_pass_cold_clock_gate(self):
+        for year, expected in ((2000, False), (2026, True), (2099, True), (2100, False)):
+            with self.subTest(year=year), patch.object(pico.time, "gmtime", return_value=(year,), create=True):
+                self.assertEqual(pico.clock_credible(), expected)
+
+    def test_persistent_memory_errors_back_off_without_reset_loop(self):
+        class EndLoop(Exception): pass
+        clock = {"now": 0}
+        delays = []
+        def sleep(milliseconds):
+            delays.append(milliseconds)
+            clock["now"] += milliseconds
+            if len(delays) == 6: raise EndLoop()
+        with patch.object(sys.modules["config"], "CLOUD_LIVE_CLAIMING", True), \
+             patch.object(pico.time, "ticks_ms", side_effect=lambda: clock["now"], create=True), \
+             patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
+             patch.object(pico.time, "sleep_ms", side_effect=sleep, create=True), \
+             patch.object(pico, "load_power", return_value=1), \
+             patch.object(pico, "connect_wifi", return_value=True), \
+             patch.object(pico, "synchronize_time", return_value=True), \
+             patch.object(pico, "tls_context", side_effect=MemoryError("low heap")):
+            with self.assertRaises(EndLoop): pico.unattended_watch()
+        self.assertEqual(delays, [1000, 3000, 8000, 30000, 60000, 60000])
+
+    def test_memory_error_after_socket_setup_closes_resources_then_rebuilds(self):
+        class EndLoop(Exception): pass
+        clock = {"now": 0}
+        clouds, bridges, power_reads = [], [], []
+        class Connection:
+            def __init__(self, *_args):
+                self.closed = False
+                clouds.append(self)
+            def close(self): self.closed = True
+        class Bridge:
+            session = None
+            batch = None
+            def __init__(self, *_args):
+                self.closed = False
+                bridges.append(self)
+            def step(self): pass
+            def close(self): self.closed = True
+        def power(*_args):
+            power_reads.append(clock["now"])
+            if len(power_reads) == 1: raise MemoryError("temporary heap pressure")
+            return 1
+        def sleep(milliseconds):
+            clock["now"] += milliseconds
+            if clock["now"] >= 1300: raise EndLoop()
+        with patch.object(sys.modules["config"], "CLOUD_LIVE_CLAIMING", True), \
+             patch.object(sys.modules["config"], "CLOUD_KEEPALIVE", True, create=True), \
+             patch.object(sys.modules["config"], "PLAYER_BRIDGE_ENABLED", True, create=True), \
+             patch.object(sys.modules["secrets"], "PLAYER_BRIDGE_TOKEN", "x" * 32, create=True), \
+             patch.object(pico.network, "WLAN", FakeWLAN), \
+             patch.object(pico.time, "ticks_ms", side_effect=lambda: clock["now"], create=True), \
+             patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
+             patch.object(pico.time, "sleep_ms", side_effect=sleep, create=True), \
+             patch.object(pico, "load_power", return_value=1), \
+             patch.object(pico, "synchronize_time", return_value=True), \
+             patch.object(pico, "tls_context", return_value=object()), \
+             patch.object(pico, "cloud_tls_context", return_value=object()), \
+             patch.object(pico, "power_state", side_effect=power), \
+             patch.object(pico, "cloud_poll_once", return_value=False), \
+             patch.object(pico, "CloudConnection", Connection), \
+             patch.object(player_bridge, "PlayerBridgeClient", Bridge):
+            with self.assertRaises(EndLoop): pico.unattended_watch()
+        self.assertGreaterEqual(len(clouds), 2)
+        self.assertGreaterEqual(len(bridges), 2)
+        self.assertTrue(clouds[0].closed)
+        self.assertTrue(bridges[0].closed)
+
+    def test_unexpected_initialization_memory_error_retries_in_process(self):
+        class EndLoop(Exception): pass
+        attempts = []
+        def tls():
+            attempts.append(1)
+            raise MemoryError("low heap")
+        def sleep(milliseconds):
+            self.assertEqual(milliseconds, pico.APP_RETRY_MS[0])
+            raise EndLoop()
+        with patch.object(sys.modules["config"], "CLOUD_LIVE_CLAIMING", True), \
+             patch.object(pico, "load_power", return_value=1), \
+             patch.object(pico, "connect_wifi", return_value=True), \
+             patch.object(pico, "synchronize_time", return_value=True), \
+             patch.object(pico, "tls_context", side_effect=tls), \
+             patch.object(pico.time, "sleep_ms", side_effect=sleep, create=True):
+            with self.assertRaises(EndLoop): pico.unattended_watch()
+        self.assertEqual(len(attempts), 1)
+
+    def test_home_outage_does_not_stop_bridge_and_bridge_error_does_not_stop_home(self):
+        class EndLoop(Exception): pass
+        clock = {"now": 0}
+        bridge_steps, claims = [], []
+        class Bridge:
+            session = None
+            batch = None
+            def __init__(self, *_args): pass
+            def step(self):
+                bridge_steps.append(clock["now"])
+                if len(bridge_steps) == 1: raise OSError("bridge temporarily down")
+            def close(self): pass
+        def cloud(*_args):
+            claims.append(clock["now"])
+            if len(claims) < 3: raise OSError("Home temporarily down")
+            return False
+        def sleep(milliseconds):
+            clock["now"] += milliseconds
+            if clock["now"] >= 9000: raise EndLoop()
+        with patch.object(sys.modules["config"], "CLOUD_LIVE_CLAIMING", True), \
+             patch.object(sys.modules["config"], "PLAYER_BRIDGE_ENABLED", True, create=True), \
+             patch.object(sys.modules["config"], "CLOUD_POLL_MS", 1000, create=True), \
+             patch.object(sys.modules["secrets"], "PLAYER_BRIDGE_TOKEN", "x" * 32, create=True), \
+             patch.object(pico.time, "ticks_ms", side_effect=lambda: clock["now"], create=True), \
+             patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
+             patch.object(pico.time, "sleep_ms", side_effect=sleep, create=True), \
+             patch.object(pico, "load_power", return_value=1), \
+             patch.object(pico, "connect_wifi", return_value=True), \
+             patch.object(pico, "synchronize_time", return_value=True), \
+             patch.object(pico, "tls_context", return_value=object()), \
+             patch.object(pico, "cloud_tls_context", return_value=object()), \
+             patch.object(pico, "power_state", return_value=1), \
+             patch.object(pico, "cloud_poll_once", side_effect=cloud), \
+             patch.object(player_bridge, "PlayerBridgeClient", Bridge):
+            with self.assertRaises(EndLoop): pico.unattended_watch()
+        self.assertGreater(len(bridge_steps), 3)
+        self.assertEqual(len(claims), 3)
+        self.assertGreaterEqual(claims[-1], 8000)
+
+    def test_wifi_drop_closes_bridge_then_restores_it_and_home_claims(self):
+        class EndLoop(Exception): pass
+        clock = {"now": 0}
+        bridge_events, claims = [], []
+        class FlakyWLAN(FakeWLAN):
+            def isconnected(self): return not 1000 <= clock["now"] < 2000
+        class Bridge:
+            session = None
+            batch = None
+            def __init__(self, *_args): pass
+            def step(self): bridge_events.append(("step", clock["now"]))
+            def close(self): bridge_events.append(("close", clock["now"]))
+        def sleep(milliseconds):
+            clock["now"] += milliseconds
+            if clock["now"] >= 2300: raise EndLoop()
+        with patch.object(sys.modules["config"], "CLOUD_LIVE_CLAIMING", True), \
+             patch.object(sys.modules["config"], "PLAYER_BRIDGE_ENABLED", True, create=True), \
+             patch.object(sys.modules["config"], "CLOUD_POLL_MS", 1000, create=True), \
+             patch.object(sys.modules["secrets"], "PLAYER_BRIDGE_TOKEN", "x" * 32, create=True), \
+             patch.object(pico.network, "WLAN", FlakyWLAN), \
+             patch.object(pico.time, "ticks_ms", side_effect=lambda: clock["now"], create=True), \
+             patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
+             patch.object(pico.time, "sleep_ms", side_effect=sleep, create=True), \
+             patch.object(pico, "load_power", return_value=1), \
+             patch.object(pico, "connect_wifi", side_effect=lambda wlan, _address=None: wlan.isconnected()), \
+             patch.object(pico, "synchronize_time", return_value=True), \
+             patch.object(pico, "tls_context", return_value=object()), \
+             patch.object(pico, "cloud_tls_context", return_value=object()), \
+             patch.object(pico, "power_state", return_value=1), \
+             patch.object(pico, "cloud_poll_once", side_effect=lambda *_args: claims.append(clock["now"]) or False), \
+             patch.object(player_bridge, "PlayerBridgeClient", Bridge):
+            with self.assertRaises(EndLoop): pico.unattended_watch()
+        self.assertIn(("close", 1000), bridge_events)
+        self.assertTrue(any(event == "step" and tick >= 2000 for event, tick in bridge_events))
+        self.assertTrue(any(tick >= 2000 for tick in claims))
+
+    def test_ip_change_discards_stale_cloud_and_bridge_sockets(self):
+        class EndLoop(Exception): pass
+        clock = {"now": 0}
+        bridge_instances, cloud_instances = [], []
+        class ChangingWLAN(FakeWLAN):
+            def ifconfig(self):
+                address = "192.0.2.10" if clock["now"] < 1000 else "192.0.2.11"
+                return (address, "", "", "")
+        class Connection:
+            def __init__(self, *_args):
+                self.closed = False
+                cloud_instances.append(self)
+            def close(self): self.closed = True
+        class Bridge:
+            session = None
+            batch = None
+            def __init__(self, *_args):
+                self.closed = False
+                bridge_instances.append(self)
+            def step(self): pass
+            def close(self): self.closed = True
+        def sleep(milliseconds):
+            clock["now"] += milliseconds
+            if clock["now"] >= 1200: raise EndLoop()
+        with patch.object(sys.modules["config"], "CLOUD_LIVE_CLAIMING", True), \
+             patch.object(sys.modules["config"], "CLOUD_KEEPALIVE", True, create=True), \
+             patch.object(sys.modules["config"], "PLAYER_BRIDGE_ENABLED", True, create=True), \
+             patch.object(sys.modules["config"], "CLOUD_POLL_MS", 1000, create=True), \
+             patch.object(sys.modules["secrets"], "PLAYER_BRIDGE_TOKEN", "x" * 32, create=True), \
+             patch.object(pico.network, "WLAN", ChangingWLAN), \
+             patch.object(pico.time, "ticks_ms", side_effect=lambda: clock["now"], create=True), \
+             patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
+             patch.object(pico.time, "sleep_ms", side_effect=sleep, create=True), \
+             patch.object(pico, "load_power", return_value=1), \
+             patch.object(pico, "synchronize_time", return_value=True), \
+             patch.object(pico, "tls_context", return_value=object()), \
+             patch.object(pico, "cloud_tls_context", return_value=object()), \
+             patch.object(pico, "power_state", return_value=1), \
+             patch.object(pico, "cloud_poll_once", return_value=False), \
+             patch.object(pico, "CloudConnection", Connection), \
+             patch.object(player_bridge, "PlayerBridgeClient", Bridge):
+            with self.assertRaises(EndLoop): pico.unattended_watch()
+        self.assertGreaterEqual(len(cloud_instances), 2)
+        self.assertGreaterEqual(len(bridge_instances), 2)
+        self.assertTrue(cloud_instances[0].closed)
+        self.assertTrue(bridge_instances[0].closed)
 
     def test_power_edge_launches_once_then_app_switch_does_not_relaunch(self):
         class EndLoop(Exception):
@@ -1678,6 +2087,7 @@ class PlayerBridgeTests(unittest.TestCase):
                  patch.object(pico, "synchronize_time"), \
                  patch.object(pico, "tls_context", return_value="tv-context"), \
                  patch.object(pico, "cloud_tls_context", return_value="cloud-context"), \
+                 patch.object(pico.time, "sleep_ms", side_effect=BridgeReached, create=True), \
                  patch.object(player_bridge, "PlayerBridgeClient", side_effect=construct):
                 with self.assertRaises(BridgeReached):
                     pico.unattended_watch()

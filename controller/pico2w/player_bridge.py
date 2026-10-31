@@ -19,9 +19,19 @@ PATH = "/api/player/connect"
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_MESSAGE = 512
 LEASE_MS = 8000
+HEARTBEAT_MS = 30000
+LIVENESS_MS = 90000
 RECONNECT_MS = 3000
+RECONNECT_MAX_MS = 60000
+AUTH_RETRY_MS = 300000
 SEEK_COUNTS = (1, 3, 6, 12, 30, 60)
 BATCH_LIFETIME_MS = 90000
+
+
+class BridgeHandshakeError(OSError):
+    def __init__(self, status):
+        super().__init__("WebSocket upgrade rejected")
+        self.status = status
 
 
 def _seek_mode():
@@ -88,6 +98,11 @@ class PlayerBridgeClient:
         self.retry_at = 0
         self.batch = None
         self.disconnected_at = None
+        self.connected_at = None
+        self.retry_count = 0
+        self.ping_due = None
+        self.ping_sent = None
+        self.ping_nonce = 0
 
     def close_session(self):
         self.batch = None
@@ -100,7 +115,7 @@ class PlayerBridgeClient:
         self.heartbeat = None
         print("Player session closed")
 
-    def close(self):
+    def close(self, reason="local_close", code=0, failed_connect=False, auth=False):
         self.close_session()
         wrapped = self.socket
         raw = self.raw
@@ -109,6 +124,8 @@ class PlayerBridgeClient:
         self.poller = None
         self.poll_raw = False
         self.buffer = bytearray()
+        self.ping_due = None
+        self.ping_sent = None
         if wrapped is not None:
             try:
                 wrapped.close()
@@ -119,9 +136,21 @@ class PlayerBridgeClient:
                 raw.close()
             except (OSError, ValueError):
                 pass
-        self.retry_at = time.ticks_add(self.controller.ticks(), RECONNECT_MS)
-        if wrapped is not None or raw is not None:
-            self.disconnected_at = self.controller.ticks()
+        now = self.controller.ticks()
+        if wrapped is not None or raw is not None or failed_connect:
+            self.retry_count = min(self.retry_count + 1, 6)
+            delay = min(RECONNECT_MAX_MS, RECONNECT_MS * (1 << (self.retry_count - 1)))
+            if auth:
+                delay = AUTH_RETRY_MS
+            else:
+                delay += (os.urandom(1)[0] * delay) // 1024
+            self.retry_at = time.ticks_add(now, delay)
+            print("Player bridge disconnected: %s code %d; uptime %s ms; retry %d in %d ms" %
+                  (reason, code, time.ticks_diff(now, self.connected_at)
+                   if self.connected_at is not None else "none", self.retry_count, delay))
+            if self.disconnected_at is None:
+                self.disconnected_at = now
+        self.connected_at = None
 
     def connect(self):
         started = self.controller.ticks()
@@ -150,7 +179,11 @@ class PlayerBridgeClient:
                 reply.extend(part)
             lines = bytes(reply).split(b"\r\n")
             if lines[0] != b"HTTP/1.1 101 Switching Protocols":
-                raise OSError("WebSocket upgrade rejected")
+                try:
+                    status = int(lines[0].split(b" ", 2)[1])
+                except (IndexError, ValueError):
+                    status = 0
+                raise BridgeHandshakeError(status)
             headers = {}
             for line in lines[1:]:
                 if b":" in line:
@@ -176,6 +209,9 @@ class PlayerBridgeClient:
             self.raw = raw
             self.poller = poller
             self.poll_raw = poll_raw
+            self.connected_at = self.controller.ticks()
+            self.ping_due = time.ticks_add(self.connected_at, HEARTBEAT_MS)
+            self.ping_sent = None
             print("Player bridge connected: handshake %d ms; reconnect %s ms" %
                   (time.ticks_diff(self.controller.ticks(), started),
                    time.ticks_diff(self.controller.ticks(), self.disconnected_at)
@@ -198,11 +234,33 @@ class PlayerBridgeClient:
         try:
             self.controller.write_all(self.socket, frame)
         except Exception:
-            self.close()
+            self.close("write_error")
             raise
         finally:
             if self.socket is not None:
                 self.raw.settimeout(0)
+
+    def _bridge_heartbeat(self):
+        now = self.controller.ticks()
+        if self.ping_sent is not None:
+            if time.ticks_diff(now, self.ping_sent) >= LIVENESS_MS:
+                raise OSError("bridge heartbeat timeout")
+            return
+        if self.ping_due is not None and time.ticks_diff(now, self.ping_due) >= 0:
+            self.ping_nonce = (self.ping_nonce + 1) & 0x7fffffff
+            self.send({"type": "bridge_heartbeat", "nonce": self.ping_nonce})
+            self.ping_sent = self.controller.ticks()
+
+    def _bridge_heartbeat_ack(self, value):
+        if self.ping_sent is None or value.get("nonce") != self.ping_nonce:
+            return
+        now = self.controller.ticks()
+        self.ping_sent = None
+        self.ping_due = time.ticks_add(now, HEARTBEAT_MS)
+        if (self.retry_count and self.connected_at is not None
+                and time.ticks_diff(now, self.connected_at) >= LIVENESS_MS):
+            self.retry_count = 0
+            print("Player bridge stable: heartbeat acknowledged")
 
     def _open(self, value):
         session = value.get("session")
@@ -442,7 +500,9 @@ class PlayerBridgeClient:
         if not isinstance(value, dict):
             return
         kind = value.get("type")
-        if kind == "player_session_open":
+        if kind == "bridge_heartbeat_ack":
+            self._bridge_heartbeat_ack(value)
+        elif kind == "player_session_open":
             self._open(value)
         elif kind == "player_session_renew" and value.get("session") == self.session:
             self.expires = time.ticks_add(self.controller.ticks(), LEASE_MS)
@@ -463,8 +523,11 @@ class PlayerBridgeClient:
                 try:
                     self.connect()
                 except (OSError, ValueError, RuntimeError, TypeError, AttributeError, MemoryError) as error:
-                    print("Player bridge waiting:", type(error).__name__)
-                    self.close()
+                    self.close("auth_rejected" if isinstance(error, BridgeHandshakeError)
+                               and error.status in (401, 403) else "connect_failed",
+                               getattr(error, "status", 0), failed_connect=True,
+                               auth=isinstance(error, BridgeHandshakeError)
+                               and error.status in (401, 403))
             return
         try:
             if self.expires is not None and time.ticks_diff(now, self.expires) >= 0:
@@ -498,10 +561,11 @@ class PlayerBridgeClient:
                             # A close code distinguishes a server ACK timeout
                             # (1011) from a hibernation reconnect (1012).
                             close_code = (payload[0] << 8) | payload[1] if len(payload) >= 2 else 0
-                            print("Player bridge close code:", close_code)
-                            raise OSError("player bridge closed")
+                            self.close("server_close", close_code)
+                            return
                         else:
                             raise ValueError("unsupported player frame")
+            self._bridge_heartbeat()
             if (self.tv is not None and self.heartbeat is not None
                     and time.ticks_diff(self.controller.ticks(), self.heartbeat) >= 0):
                 try:
@@ -518,7 +582,5 @@ class PlayerBridgeClient:
             if self.batch is not None:
                 self._batch_step()
         except (OSError, ValueError, RuntimeError, TypeError, AttributeError, MemoryError) as error:
-            print("Player bridge reconnect:", type(error).__name__)
-            import sys
-            sys.print_exception(error)
-            self.close()
+            reason = "heartbeat_timeout" if str(error) == "bridge heartbeat timeout" else type(error).__name__
+            self.close(reason)

@@ -51,9 +51,14 @@ export class PlayerBridge extends DurableObject {
   }
 
   async fetch(request) {
-    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket" || this.controller) {
+    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("Unavailable", { status: 409 });
     }
+    // The authenticated Pico reconnects only after its old socket fails or
+    // misses a heartbeat. A half-open socket can remain registered here, so
+    // replace it instead of rejecting recovery forever. Outstanding command
+    // outcomes remain unknown and are never replayed.
+    if (this.controller) this.disconnect();
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
@@ -287,6 +292,11 @@ export class PlayerBridge extends DurableObject {
     let value;
     try { value = JSON.parse(raw); } catch (_error) { return; }
     if (!value || typeof value !== "object") return;
+    if (value.type === "bridge_heartbeat" && Number.isSafeInteger(value.nonce)
+        && value.nonce >= 0 && value.nonce <= 0x7fffffff) {
+      this.send({ type: "bridge_heartbeat_ack", nonce: value.nonce });
+      return;
+    }
     if (this.closingSession && this.active && value.type === "command_ack"
         && value.session === this.closingSession && value.id === this.active.id) {
       const item = this.active;

@@ -1773,6 +1773,83 @@ class PlayerBridgeTests(unittest.TestCase):
             client.close()
         self.assertTrue(tls.closed)
 
+    def test_bridge_idle_heartbeat_and_silent_socket_recovery(self):
+        clock = [0]
+        class Raw:
+            def settimeout(self, _value): pass
+        class TLS:
+            def __init__(self): self.closed = False
+            def close(self): self.closed = True
+        class Poll:
+            def poll(self, _timeout): return []
+        controller = types.SimpleNamespace(ticks=lambda: clock[0])
+        client = player_bridge.PlayerBridgeClient(controller, object(), "cloud", object(), "tv")
+        client.socket, client.raw, client.poller = TLS(), Raw(), Poll()
+        client.connected_at = 0
+        client.ping_due = player_bridge.HEARTBEAT_MS
+        sent = []
+        client.send = sent.append
+        with patch.object(player_bridge.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(player_bridge.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
+             patch.object(player_bridge.os, "urandom", return_value=b"\x00"):
+            clock[0] = player_bridge.HEARTBEAT_MS - 1
+            client.step()
+            self.assertEqual(sent, [])
+            clock[0] += 1
+            client.step()
+            self.assertEqual(sent, [{"type": "bridge_heartbeat", "nonce": 1}])
+            client._message(b'{"type":"bridge_heartbeat_ack","nonce":0}')
+            self.assertEqual(client.ping_sent, clock[0])
+            client._message(b'{"type":"bridge_heartbeat_ack","nonce":1}')
+            self.assertIsNone(client.ping_sent)
+            clock[0] = player_bridge.HEARTBEAT_MS * 2
+            client.step()
+            self.assertEqual(len(sent), 2)
+            clock[0] += player_bridge.LIVENESS_MS
+            client.step()
+            self.assertIsNone(client.socket)
+            self.assertEqual(client.retry_count, 1)
+            self.assertEqual(client.retry_at - clock[0], player_bridge.RECONNECT_MS)
+            recovered = []
+            client.connect = lambda: recovered.append(clock[0])
+            clock[0] = client.retry_at - 1
+            client.step()
+            self.assertEqual(recovered, [])
+            clock[0] += 1
+            client.step()
+            self.assertEqual(recovered, [clock[0]])
+
+    def test_bridge_close_code_auth_backoff_and_stable_reset(self):
+        clock = [100]
+        controller = types.SimpleNamespace(ticks=lambda: clock[0])
+        client = player_bridge.PlayerBridgeClient(controller, object(), "cloud", object(), "tv")
+        with patch.object(player_bridge.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(player_bridge.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
+             patch.object(player_bridge.os, "urandom", return_value=b"\x00"):
+            client.connect = lambda: (_ for _ in ()).throw(player_bridge.BridgeHandshakeError(403))
+            client.step()
+            self.assertEqual(client.retry_at - clock[0], player_bridge.AUTH_RETRY_MS)
+            self.assertEqual(client.retry_count, 1)
+            clock[0] = client.retry_at
+            client.connect = lambda: (_ for _ in ()).throw(OSError("TLS handshake failed"))
+            client.step()
+            self.assertEqual(client.retry_at - clock[0], 6000)
+            client.socket = types.SimpleNamespace(close=lambda: None)
+            client.raw = types.SimpleNamespace(settimeout=lambda _value: None)
+            client.poller = types.SimpleNamespace(poll=lambda _timeout: [1])
+            client.socket.read = lambda _size: b"\x88\x02\x03\xf4"
+            client.connected_at = clock[0]
+            client.step()
+            self.assertIsNone(client.socket)
+            self.assertEqual(client.retry_count, 3)
+            client.socket = types.SimpleNamespace(close=lambda: None)
+            client.connected_at = clock[0] - player_bridge.LIVENESS_MS
+            client.ping_sent = clock[0] - 1
+            client.ping_nonce = 2
+            client._bridge_heartbeat_ack({"nonce": 2})
+            self.assertEqual(client.retry_count, 0)
+            client.close("test_cleanup")
+
     def test_warmup_is_read_only_and_reuses_framed_socket(self):
         ack = response(200, {"STATUS": {"RESULT": "SUCCESS"}})
         fake = ScriptedTVSocket([ack, ack])

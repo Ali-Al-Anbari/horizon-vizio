@@ -30,8 +30,13 @@ test("TVDB identity survives history and player URL without changing YapGrid sho
     /showId=105248.*tvdb=384541$/);
 });
 
-test("movie adapter declines unverified playback while TV uses the existing player URL", () => {
-  assert.equal(player.movieUrl(550, "on"), null);
+test("movie adapter routes validated TMDB movie IDs through Video Lab while TV stays unchanged", () => {
+  assert.equal(player.movieUrl(550, "Fight Club"),
+    "https://horizon-video-lab-preview.ali-al-anbari.workers.dev/player-overlay.html?type=movie&id=550&from=search&name=Fight%20Club");
+  assert.equal(player.movieUrl(-1, "Bad"), null);
+  assert.equal(player.movieUrl(0, "Bad"), null);
+  assert.deepEqual(JSON.parse(JSON.stringify(core.returnMovie("?return=1&type=movie&id=550"))), { id: 550 });
+  assert.equal(core.returnMovie("?return=1&type=tv&id=550"), null);
   assert.equal(player.tvUrl(2190, 13, 2, "off", "South Park"),
     core.tvPlayerUrl(2190, 13, 2, "off", "South Park"));
 });
@@ -55,6 +60,24 @@ test("versioned history keeps distinct episodes, deduplicates starts, and tolera
   assert.equal(core.readHistory(storage({ [core.HISTORY_KEY]: JSON.stringify({ version: 0, items: [first] }) })).length, 0);
   assert.equal(core.readHistory({ getItem() { throw Error("denied"); } }).length, 0);
   assert.equal(core.item("movie", 550, "Fight Club", null, null, "on", 100).episode, null);
+  core.clearHistory(store);
+  assert.equal(core.readHistory(store).length, 0);
+});
+
+test("movie starts replace the same TMDB movie and transfer as one Home row", () => {
+  const store = storage();
+  core.writeHistory(store, core.item("movie", 550, "Fight Club", null, null, "off", 100,
+    { poster: "/first.jpg" }));
+  core.writeHistory(store, core.item("tv", 2190, "South Park", 13, 2, "off", 150));
+  core.writeHistory(store, core.item("movie", 550, "Fight Club", null, null, "off", 200,
+    { poster: "/poster.jpg", backdrop: "/backdrop.jpg" }));
+  const rows = core.readHistory(store);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].type, "movie");
+  assert.equal(rows[0].id, 550);
+  assert.equal(rows[0].at, 200);
+  assert.equal(rows[0].poster, "/poster.jpg");
+  assert.deepEqual(Array.from(core.homeRows(rows), row => row.type + ":" + row.id), ["movie:550", "tv:2190"]);
   core.clearHistory(store);
   assert.equal(core.readHistory(store).length, 0);
 });

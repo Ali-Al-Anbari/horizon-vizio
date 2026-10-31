@@ -237,6 +237,16 @@ test("Continue Watching prefers vertical poster artwork and preserves native app
   assert.equal(page.document.activeElement.dataset.id, "horizon-watch");
 });
 
+test("Home accepts a movie in the Watch history transfer and opens its details", () => {
+  const snapshot = { version: 2, items: [{ type: "movie", id: 550, title: "Fight Club", at: 200,
+    poster: "/fight.jpg", backdrop: "/fight-backdrop.jpg" }] };
+  const page = boot("?return=search", { port: "4173", hash: "#watch=" + encodeURIComponent(JSON.stringify(snapshot)) });
+  assert.equal(page.get("watch-cards").children.length, 1);
+  assert.equal(JSON.parse(page.stored("horizon.watch.home.v1")).items[0].type, "movie");
+  page.press("ArrowDown"); page.press("ArrowDown"); page.press("OK");
+  assert.equal(page.navigations().at(-1), "/universal-search/index.html?mock=1&from=home-local&open=movie&id=550");
+});
+
 test("optimized is the default and explicit profile variants remain selectable", () => {
   const page = boot();
   assert.equal(page.document.body.dataset.perfProfile, "optimized");

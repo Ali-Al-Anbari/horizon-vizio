@@ -36,7 +36,15 @@ Closing the overlay does not wait for an outstanding readiness poll; once the
 session-open request settles, the browser sends the close request.
 The Pico's verified eight-request socket cap remains. It prepares a new socket
 after rotation without sending a fake key. A hidden overlay does not keep a TV
-TLS socket open. The Pico's outbound cloud WebSocket can remain connected.
+TLS socket open. The Pico's outbound cloud WebSocket can remain connected. It
+sends an application heartbeat every 30 seconds and expects the matching
+acknowledgment within 90 seconds. Missing acknowledgments, read/write errors,
+and close frames reconnect only that socket. Reconnect backoff starts at three
+seconds, caps at 60 seconds plus jitter, and waits five minutes after an
+authentication rejection. An acknowledged stable connection resets backoff.
+Reconnection ends any old player session without replaying an uncertain key.
+If controls were visible during a loss, hide and reveal them to open a fresh
+session after the bridge reconnects.
 
 The Pico is still a single-loop controller. While a player session is active,
 an otherwise due native-app queue claim is deferred for at most eight seconds.
@@ -90,10 +98,12 @@ claim is made from local tests.
 
 ## Pico update (manual, through Windows and Thonny)
 
-Transfer only `controller/pico2w/main.py` and
-`controller/pico2w/player_bridge.py` from the Mac to the Windows laptop. In
-Thonny, save a local backup of the Pico's existing `/main.py`, then copy those
-two files to the Pico root as `/main.py` and `/player_bridge.py`. Keep its
+Deploy the matching Video Lab Worker source first when releasing the heartbeat
+change; the old Worker cannot acknowledge it or replace a stale registered
+socket. Then transfer only `controller/pico2w/player_bridge.py` from the Mac to
+the Windows laptop. In Thonny, save a local backup of the Pico's existing
+`/player_bridge.py`, then copy the new file to the Pico root as
+`/player_bridge.py`. Keep its
 working firmware, CA file, TV certificate pin, Wi-Fi settings, and SmartCast
 token. In its private `/secrets.py`, add `PLAYER_BRIDGE_TOKEN` with the
 preview-only value. In private `/config.py`, set `PLAYER_BRIDGE_ENABLED = True`.

@@ -28,6 +28,14 @@
     catch (_error) { return ""; }
   }
   function parse(search) {
+    if (parameter(search, "type") === "movie") {
+      var movieText = parameter(search, "id");
+      var movieId = /^[1-9][0-9]*$/.test(movieText || "") ? Number(movieText) : NaN;
+      var movie = positive(movieId) ? { movieId: movieId } : null;
+      return { mediaType: "movie", current: movie, invalid: !movie, subtitle: "off",
+        fromSearch: parameter(search, "from") === "search",
+        showTitle: (parameter(search, "name") || "").slice(0, 120) };
+    }
     var seasonText = parameter(search, "season");
     var episodeText = parameter(search, "episode");
     var season = seasonText === null ? 13 : /^[1-9][0-9]*$/.test(seasonText) ? Number(seasonText) : NaN;
@@ -54,6 +62,7 @@
       + (positive(tvdbId) ? "&tvdb=" + tvdbId : "");
   }
   function embedUrl(target) {
+    if (target && positive(target.movieId)) return "https://yapgrid.com/embed/movie/" + target.movieId;
     if (!target || !episodeFor(target.showId, target.season, target.episode)) return null;
     return "https://yapgrid.com/embed/tv/" + target.showId + "/" + target.season + "/" + target.episode;
   }

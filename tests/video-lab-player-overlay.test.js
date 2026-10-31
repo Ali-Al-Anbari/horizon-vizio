@@ -10,7 +10,7 @@ const catalogScript = readFileSync(new URL("../video-lab/episode-catalog.js", im
 const listHtml = readFileSync(new URL("../video-lab/episode-list-placeholder.html", import.meta.url), "utf8");
 const listScript = readFileSync(new URL("../video-lab/episode-list-placeholder.js", import.meta.url), "utf8");
 const playerScript = readFileSync(new URL("../video-lab/player-overlay.js", import.meta.url), "utf8");
-const ids = ["player-frame", "remote-capture", "overlay", "rewind", "rewind-label", "play-pause", "forward", "forward-label", "subtitles",
+const ids = ["player-frame", "player-loading", "remote-capture", "overlay", "rewind", "rewind-label", "play-pause", "forward", "forward-label", "subtitles",
   "episodes", "previous-episode", "next-episode", "manual-end", "show-title", "metadata-credit", "episode-caption", "up-next", "up-next-title", "up-next-countdown", "up-next-play", "up-next-cancel",
   "subtitle-menu", "subtitle-mode", "menu-title", "menu-description", "menu-cancel", "menu-change",
   "command-status", "screen-reader-status"];
@@ -58,6 +58,7 @@ function setup({ search = "?sub=on", adapter = null, animationFrame = true, epis
       set src(value) { source = String(value); element.sourceChanges += 1; },
       setAttribute(name, value) { attributes[name] = String(value); },
       addEventListener(name, handler) { (handlers[name] ||= []).push(handler); },
+      fire(name) { emit(handlers, name, { target: element }); },
       focus() { document.activeElement = element; emit(handlers, "focus", { target: element }); },
       click() { emit(handlers, "click", { target: element }); },
     };
@@ -824,6 +825,38 @@ test("search-launched TV keeps validated show ID and returns safely to fixed sea
   assert.deepEqual(app.navigation, [
     "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/?return=1&showId=1396&season=1&episode=2&sub=off"
   ]);
+});
+
+test("movie uses the same player shell with a TMDB movie URL and returns to Watch", () => {
+  const app = setup({ search: "?type=movie&id=550&from=search&name=Fight%20Club" });
+  assert.equal(app.get("player-frame").src, "https://yapgrid.com/embed/movie/550");
+  assert.equal(app.get("player-frame").sourceChanges, 1);
+  assert.equal(app.get("show-title").textContent, "Fight Club");
+  assert.equal(app.get("player-loading").textContent, "Opening movie…");
+  for (const id of ["previous-episode", "episodes", "next-episode", "subtitles"])
+    assert.equal(app.get(id).hidden, true);
+  app.key("ArrowDown");
+  assert.equal(app.document.activeElement.id, "play-pause");
+  app.key("ArrowDown");
+  assert.equal(app.document.activeElement.id, "play-pause", "movie focus cannot enter episode controls");
+  app.get("player-frame").fire("load");
+  assert.equal(app.get("player-loading").hidden, true);
+  app.key("Backspace");
+  app.key("Backspace");
+  assert.deepEqual(app.navigation, [previewOrigin.replace("video-lab-preview", "universal-search-preview")
+    + "/?return=1&type=movie&id=550"]);
+});
+
+test("movie provider failure and invalid ID do not claim playback", () => {
+  const app = setup({ search: "?type=movie&id=550&from=search" });
+  app.advance(12000);
+  assert.match(app.get("player-loading").textContent, /taking longer/);
+  app.get("player-frame").fire("error");
+  assert.match(app.get("player-loading").textContent, /could not load/);
+  assert.equal(app.get("player-loading").hidden, false);
+  const invalid = setup({ search: "?type=movie&id=0&from=search" });
+  assert.equal(invalid.get("player-frame").sourceChanges, 0);
+  assert.match(invalid.get("player-loading").textContent, /Invalid movie ID/);
 });
 
 test("search-launched real-show player uses the same full-size seek batch path", async () => {

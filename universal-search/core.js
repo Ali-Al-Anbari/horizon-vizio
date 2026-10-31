@@ -107,6 +107,11 @@
     return url + (safeText(title, 120) ? "&name=" + encodeURIComponent(safeText(title, 120)) : "")
       + (positive(tvdbId) ? "&tvdb=" + tvdbId : "");
   }
+  function moviePlayerUrl(id, title) {
+    if (!positive(id)) return null;
+    return PLAYER_ORIGIN + "/player-overlay.html?type=movie&id=" + id + "&from=search"
+      + (safeText(title, 120) ? "&name=" + encodeURIComponent(safeText(title, 120)) : "");
+  }
   function imageUrl(path, size) {
     return imagePath(path)
       ? "https://image.tmdb.org/t/p/" + (size === "hero" ? "w1280" : size === "backdrop" ? "w780"
@@ -165,12 +170,17 @@
     return positive(id) && positive(season) && positive(episode)
       ? { id: id, season: season, episode: episode, subtitle: params.get("sub") === "on" ? "on" : "off" } : null;
   }
+  function returnMovie(search) {
+    var params = new URLSearchParams(search || "");
+    var id = Number(params.get("id"));
+    return params.get("return") === "1" && params.get("type") === "movie" && positive(id) ? { id: id } : null;
+  }
   root.HorizonSearchCore = { PLAYER_ORIGIN: PLAYER_ORIGIN, LAUNCHER_ORIGIN: LAUNCHER_ORIGIN,
     HISTORY_KEY: HISTORY_KEY, PREFS_KEY: PREFS_KEY, SUBTITLE_KEY: SUBTITLE_KEY, STATE_KEY: STATE_KEY, item: item,
     readHistory: readHistory, writeHistory: writeHistory, clearHistory: clearHistory, groupedHistory: groupedHistory,
     homeRows: homeRows, rankResults: rankResults,
     readPrefs: readPrefs, writePrefs: writePrefs, readSubtitlePref: readSubtitlePref, writeSubtitlePref: writeSubtitlePref,
-    tvPlayerUrl: tvPlayerUrl, imageUrl: imageUrl, providerApp: providerApp, providerWatchUrl: providerWatchUrl,
-    websiteSearch: websiteSearch, returnEpisode: returnEpisode, providerIdentity: providerIdentity,
+    tvPlayerUrl: tvPlayerUrl, moviePlayerUrl: moviePlayerUrl, imageUrl: imageUrl, providerApp: providerApp, providerWatchUrl: providerWatchUrl,
+    websiteSearch: websiteSearch, returnEpisode: returnEpisode, returnMovie: returnMovie, providerIdentity: providerIdentity,
     groupProviders: groupProviders };
 })(typeof window !== "undefined" ? window : globalThis);

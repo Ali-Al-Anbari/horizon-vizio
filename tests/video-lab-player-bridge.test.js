@@ -8,9 +8,14 @@ const source = readFileSync(new URL("../video-lab-player-bridge.js", import.meta
   .replace(/^import .*\n/m, "")
   .replace("export class PlayerBridge", "class PlayerBridge")
   .replace("export { COMMANDS, LEASE_MS };", "globalThis.PlayerBridge = PlayerBridge;");
-const context = { crypto: webcrypto, Date, Promise, Map, Set, JSON, WebSocketPair: class {},
+const context = { crypto: webcrypto, Date, Promise, Map, Set, JSON,
+  WebSocketPair: class { constructor() {
+    this.client = {}; this.server = { sent: [], closed: [],
+      send(raw) { this.sent.push(JSON.parse(raw)); },
+      close(code) { this.closed.push(code); } };
+  } },
   DurableObject: class { constructor(ctx, env) { this.ctx = ctx; this.env = env; } },
-  setTimeout, clearTimeout, Response };
+  setTimeout, clearTimeout, Response: class { constructor(_body, init) { Object.assign(this, init); } } };
 runInNewContext(source, context);
 const { PlayerBridge } = context;
 const ID1 = "11111111-1111-4111-8111-111111111111";
@@ -23,6 +28,70 @@ function fixture() {
   bridge.controller = socket;
   return { bridge, socket, sent, dispose() { bridge.disconnect(); } };
 }
+
+test("idle heartbeat acknowledges the authenticated controller, including after a wake", async () => {
+  const f = fixture();
+  try {
+    await f.bridge.webSocketMessage(f.socket, JSON.stringify({ type: "bridge_heartbeat", nonce: 7 }));
+    assert.deepEqual(f.sent.at(-1), { type: "bridge_heartbeat_ack", nonce: 7 });
+    await f.bridge.webSocketMessage(f.socket, JSON.stringify({ type: "bridge_heartbeat", nonce: "7" }));
+    assert.equal(f.sent.length, 1);
+    const socket = { sent: [], attachment: { kind: "idle" },
+      send(raw) { this.sent.push(JSON.parse(raw)); }, close() {},
+      deserializeAttachment() { return this.attachment; },
+      serializeAttachment(value) { this.attachment = value; } };
+    const restored = new PlayerBridge({ getWebSockets: () => [socket] }, {});
+    await restored.webSocketMessage(socket, JSON.stringify({ type: "bridge_heartbeat", nonce: 8 }));
+    assert.equal(socket.sent[0].nonce, 8);
+    restored.disconnect();
+  } finally { f.dispose(); }
+});
+
+test("heartbeat leaves an active ready player session and command sequence intact", async () => {
+  const f = fixture();
+  try {
+    await f.bridge.open("owner-a");
+    const session = f.bridge.session.id;
+    await f.bridge.webSocketMessage(f.socket, JSON.stringify({ type: "session_ready", session, ready: true }));
+    const before = f.bridge.session.sequence;
+    await f.bridge.webSocketMessage(f.socket, JSON.stringify({ type: "bridge_heartbeat", nonce: 42 }));
+    assert.equal(f.bridge.session.id, session);
+    assert.equal(f.bridge.session.ready, true);
+    assert.equal(f.bridge.session.sequence, before);
+    assert.equal(f.sent.at(-1).type, "bridge_heartbeat_ack");
+  } finally { f.dispose(); }
+});
+
+test("authenticated reconnect replaces an orphaned socket and never replays a command", async () => {
+  const old = { closed: [], sent: [], send(raw) { this.sent.push(JSON.parse(raw)); },
+    close(code) { this.closed.push(code); } };
+  const accepted = [];
+  const bridge = new PlayerBridge({ getWebSockets: () => [], acceptWebSocket: socket => accepted.push(socket) }, {});
+  bridge.controller = old;
+  await bridge.open("owner-a");
+  const session = bridge.session.id;
+  await bridge.webSocketMessage(old, JSON.stringify({ type: "session_ready", session, ready: true }));
+  const command = bridge.command("owner-a", ID1, 1, "pause_toggle", Date.now());
+  const response = await bridge.fetch({ headers: new Headers({ Upgrade: "websocket" }) });
+  assert.equal(response.status, 101);
+  assert.equal((await command).error, "outcome_unknown");
+  assert.equal(old.closed[0], 1011);
+  assert.equal(accepted.length, 1);
+  assert.equal(bridge.controller, accepted[0]);
+  assert.equal((await bridge.open("owner-a")).state, "preparing");
+  assert.equal(old.sent.filter(v => v.type === "player_command").length, 1);
+  assert.equal(bridge.controller.sent.filter(v => v.type === "player_command").length, 0);
+  bridge.disconnect();
+});
+
+test("server close and error clear controller presence for a later reconnect", async () => {
+  for (const event of ["webSocketClose", "webSocketError"]) {
+    const f = fixture();
+    await f.bridge[event](f.socket);
+    assert.equal(f.bridge.controller, null);
+    assert.equal((await f.bridge.open("owner-a")).error, "controller_offline");
+  }
+});
 
 test("open prepares, read-only readiness gates ordered commands, and close releases session", async () => {
   const f = fixture();

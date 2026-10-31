@@ -65,19 +65,18 @@ TV command, or Pico upload is performed by the implementation work.
   back to Watch and updates that preference. A direct Vizio Home exit from the
   separate player origin cannot update Watch storage; no cross-origin storage
   access or subtitle-language detection is attempted.
-- Movie Watch in Horizon is present but reports that playback is unsupported
-  by the existing Video Lab player. YapGrid documents a movie embed pattern,
-  but no movie route, runtime behavior, or physical playback has been
-  integrated and verified in the existing player. No speculative movie URL
-  is launched. A future isolated movie adapter and physical test are needed.
+- Movies open the existing Video Lab player using the TMDB movie ID at
+  `https://yapgrid.com/embed/movie/{tmdbId}`. The movie route uses the same
+  focus, Back, and bridge controls; episode controls and the unverified movie
+  subtitle toggle are hidden. An iframe load does not prove that video played.
+  Physical Vizio playback and remote behavior still require verification.
 - Versioned local history stores **started** TV episodes, subtitle preference,
   and timestamp. The version 2 model retains up to 100 distinct
   started episodes and movies, deduplicated by TMDB ID and episode coordinates.
   The existing version 1 store is read and migrated when a new start is saved.
   Artwork paths and episode titles are validated before storage. No playback
-  position or completion is inferred. Movies are represented in the model,
-  but the current Video Lab movie adapter cannot initiate movie playback, so
-  this version creates no new movie starts.
+  position or completion is inferred. Movie starts update one record per TMDB
+  movie ID, and relaunch from History begins at the start.
 - Home and Watch are separate origins. On normal Watch → Home navigation,
   Watch sends only the six grouped, validated recent rows in a URL fragment.
   Home validates that snapshot and stores it in its own localStorage. The
@@ -175,9 +174,11 @@ return context without contacting the bridge or hardware.
 4. Use the player's normal Back exit, then verify Details or Episodes returns
    with focus, subtitle mode, and last selected episode intact. Confirm
    Continue Watching resumes that episode, without a progress percentage.
-5. Try a movie: metadata and providers should appear, while Watch in Horizon
-   explains the unverified movie-player capability without navigating to an
-   invented embed. Try empty and failed searches and the Retry action.
+5. Try a movie: metadata and providers should appear, and Play should open
+   the same Video Lab shell with YapGrid's movie URL. Confirm Back returns to
+   movie details, History contains one movie record, and a History relaunch
+   starts the same movie from the beginning. Try empty and failed searches
+   and the Retry action.
 
 If the browser traps focus after following an external site, physical Home
 and an approved Conjure relaunch remain the recovery path. TV remote handling,

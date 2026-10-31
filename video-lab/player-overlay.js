@@ -43,9 +43,10 @@
     var upNextButtons = [get("up-next-play"), get("up-next-cancel")];
     var catalog = root.HorizonEpisodes;
     var route = catalog.parse(nav.search);
-    var currentEpisode = route.current;
-    var manualEndEnabled = route.testEnd && currentEpisode.showId === 2190 && nav.origin === PREVIEW_ORIGIN;
-    var resolver = options && options.episodeResolver || (currentEpisode.showId === 2190 || route.tvdbId
+    var isMovie = route.mediaType === "movie";
+    var currentEpisode = route.current || {};
+    var manualEndEnabled = !isMovie && route.testEnd && currentEpisode.showId === 2190 && nav.origin === PREVIEW_ORIGIN;
+    var resolver = options && options.episodeResolver || (!isMovie && (currentEpisode.showId === 2190 || route.tvdbId)
       ? catalog.createResolver({ clock: clock, showId: currentEpisode.showId, tvdbId: route.tvdbId }) : {
         current: function () { return Promise.resolve(null); },
         resolve: function () { return Promise.resolve({ kind: "unknown", reason: "provider_metadata_unavailable" }); }
@@ -65,6 +66,7 @@
     var commandMessage = "";
     var commandStartedAt = null;
     var disposed = false;
+    var movieLoadTimer = null;
     var hideAfterCommand = false;
     var activeBatch = null;
     var batchPollTimer = null;
@@ -204,6 +206,10 @@
       get("screen-reader-status").textContent = "Controls hidden. Press an arrow or OK to show controls. Back exits to Video Lab.";
     }
     function navigate(key) {
+      if (isMovie && (key === "ArrowDown" || key === "ArrowUp")) {
+        if (key === "ArrowUp" && selected !== 1) focusControl(1);
+        return;
+      }
       var next = selected;
       if (key === "ArrowLeft") {
         if (selected === 1 || selected === 2 || (selected >= 4 && selected <= 6)) next -= 1;
@@ -548,6 +554,11 @@
     }
     function exitPlayer() {
       if (!route.fromSearch) { dispose(); nav.replace("embed-matrix.html"); return; }
+      if (isMovie) {
+        var movieReturn = "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/"
+          + (route.invalid ? "" : "?return=1&type=movie&id=" + currentEpisode.movieId);
+        dispose(); nav.replace(movieReturn); return;
+      }
       var url = "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/?return=1"
         + "&showId=" + currentEpisode.showId + "&season=" + currentEpisode.season
         + "&episode=" + currentEpisode.episode + "&sub=" + subtitleMode;
@@ -647,6 +658,7 @@
     }
     function activateControl() {
       var id = CONTROL_IDS[selected];
+      if (isMovie && !COMMANDS[id]) return;
       if (activeBatch) {
         get("command-status").textContent = "Seek in progress; wait for completion or timeout.";
         return;
@@ -713,6 +725,7 @@
     function dispose() {
       if (disposed) return;
       disposed = true;
+      if (movieLoadTimer !== null) { clock.clearTimeout(movieLoadTimer); movieLoadTimer = null; }
       overlay.classList.remove("is-quick-pause");
       episodeLookup += 1;
       clearIdle();
@@ -731,39 +744,67 @@
     }
 
     var playerUrl = catalog.embedUrl(currentEpisode);
-    var subtitleUrl = playerUrl + "?lang=en";
-    if (subtitleMode === "off") {
+    var subtitleUrl = isMovie ? playerUrl : playerUrl + "?lang=en";
+    if (!isMovie && subtitleMode === "off") {
       var origin = nav.origin && nav.origin !== "null" ? nav.origin : PREVIEW_ORIGIN;
       subtitleUrl = playerUrl + "?sub_url=" + encodeURIComponent(origin + "/empty.vtt")
         + "&sub_lang=en&sub_label=Off";
     }
-    frame.src = subtitleUrl; // One initial navigation; focus and overlay never reset it.
-    if (currentEpisode.showId !== 2190) {
-      get("show-title").textContent = route.showTitle || "TV Episode";
-      get("metadata-credit").textContent = "Episode metadata: TMDB selection · YapGrid playback availability is unverified";
-    } else if (route.showTitle) get("show-title").textContent = route.showTitle;
-    get("episode-caption").textContent = "Season " + currentEpisode.season + " · Episode "
-      + currentEpisode.episode;
-    get("previous-episode").setAttribute("aria-disabled", "false");
-    get("next-episode").setAttribute("aria-disabled", "false");
-    get("manual-end").hidden = !manualEndEnabled;
-    resolver.current(currentEpisode).then(function (found) {
-      if (!disposed && found && found.title) {
-        currentEpisode.title = found.title;
-        get("episode-caption").textContent += " · " + found.title;
+    if (isMovie) {
+      ["previous-episode", "episodes", "next-episode", "subtitles"].forEach(function (id) { get(id).hidden = true; });
+      get("show-title").textContent = route.showTitle || "Movie";
+      get("episode-caption").textContent = "Movie · playback position unavailable";
+      get("metadata-credit").textContent = "Movie selected by TMDB ID · YapGrid playback availability is unverified";
+      var loading = get("player-loading");
+      loading.hidden = false;
+      loading.textContent = playerUrl ? "Opening movie…" : "Invalid movie ID. Press Back to return to Horizon Watch.";
+      if (playerUrl) {
+        frame.addEventListener("load", function () {
+          if (movieLoadTimer !== null) { clock.clearTimeout(movieLoadTimer); movieLoadTimer = null; }
+          if (disposed) return;
+          loading.hidden = true;
+          get("screen-reader-status").textContent = "Movie frame loaded. Playback remains unverified. Press Back to return to Horizon Watch.";
+        });
+        frame.addEventListener("error", function () {
+          if (movieLoadTimer !== null) { clock.clearTimeout(movieLoadTimer); movieLoadTimer = null; }
+          if (disposed) return;
+          loading.hidden = false; loading.textContent = "Movie provider could not load. Press Back to return to Horizon Watch.";
+        });
+        frame.src = playerUrl;
+        movieLoadTimer = clock.setTimeout(function () {
+          movieLoadTimer = null;
+          if (!disposed) loading.textContent = "Movie loading is taking longer than expected. Press Back to return to Horizon Watch.";
+        }, 12000);
       }
-    });
-    [-1, 1].forEach(function (direction) {
-      resolver.resolve(currentEpisode, direction).then(function (result) {
-        if (disposed) return;
-        get(direction < 0 ? "previous-episode" : "next-episode")
-          .setAttribute("aria-disabled", result.kind === "none_known" ? "true" : "false");
-        if (direction === 1 && result.kind === "none_known" && manualEndEnabled) {
-          get("manual-end").hidden = true;
-          get("manual-end").tabIndex = -1;
+    } else {
+      frame.src = subtitleUrl; // One initial navigation; focus and overlay never reset it.
+      if (currentEpisode.showId !== 2190) {
+        get("show-title").textContent = route.showTitle || "TV Episode";
+        get("metadata-credit").textContent = "Episode metadata: TMDB selection · YapGrid playback availability is unverified";
+      } else if (route.showTitle) get("show-title").textContent = route.showTitle;
+      get("episode-caption").textContent = "Season " + currentEpisode.season + " · Episode "
+        + currentEpisode.episode;
+      get("previous-episode").setAttribute("aria-disabled", "false");
+      get("next-episode").setAttribute("aria-disabled", "false");
+      get("manual-end").hidden = !manualEndEnabled;
+      resolver.current(currentEpisode).then(function (found) {
+        if (!disposed && found && found.title) {
+          currentEpisode.title = found.title;
+          get("episode-caption").textContent += " · " + found.title;
         }
       });
-    });
+      [-1, 1].forEach(function (direction) {
+        resolver.resolve(currentEpisode, direction).then(function (result) {
+          if (disposed) return;
+          get(direction < 0 ? "previous-episode" : "next-episode")
+            .setAttribute("aria-disabled", result.kind === "none_known" ? "true" : "false");
+          if (direction === 1 && result.kind === "none_known" && manualEndEnabled) {
+            get("manual-end").hidden = true;
+            get("manual-end").tabIndex = -1;
+          }
+        });
+      });
+    }
     get("subtitle-mode").textContent = subtitleMode.toUpperCase();
     controls.forEach(function (button, index) {
       button.addEventListener("click", function () {

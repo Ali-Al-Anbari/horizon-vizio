@@ -157,7 +157,8 @@
         var art = landscapeArt(row);
         var meta = doc.createElement("span"); meta.className = "poster-meta";
         var title = doc.createElement("strong"); title.textContent = row.title;
-        var info = doc.createElement("small"); info.textContent = row.resume && row.type === "tv"
+        var info = doc.createElement("small"); info.textContent = row.resume && row.type === "movie"
+          ? "Movie · restarts from beginning" : row.resume && row.type === "tv"
           ? "S" + row.resume.season + " E" + row.resume.episode + (row.resume.episodeTitle ? " · " + row.resume.episodeTitle : "")
           : (row.type === "tv" ? "TV" : "Movie") + (row.date ? " · " + row.date.slice(0, 4) : "");
         meta.appendChild(title); meta.appendChild(info); card.appendChild(art); card.appendChild(meta);
@@ -233,7 +234,7 @@
       var history = core.readHistory(local || { getItem: function () { return null; } });
       renderResults(core.homeRows(history).map(function (row) { return { type: row.type, id: row.id, title: row.title,
         date: "", poster: row.poster, backdrop: row.backdrop, resume: row }; }));
-      text("search-status", history.length ? "Continue Watching · last selected episode, not playback position"
+      text("search-status", history.length ? "Continue Watching · episodes reopen at the last selection; movies restart from the beginning"
         : "Nothing in Continue Watching yet.");
       focus(get("continue-toggle"));
     }
@@ -249,7 +250,7 @@
         var meta = doc.createElement("span"); meta.className = "poster-meta";
         var name = doc.createElement("strong"); name.textContent = row.title;
         var detail = doc.createElement("small");
-        detail.textContent = row.type === "tv" ? "S" + row.season + " E" + row.episode : "Movie";
+        detail.textContent = row.type === "tv" ? "S" + row.season + " E" + row.episode : "Movie · starts from beginning";
         meta.appendChild(name); meta.appendChild(detail); card.textContent = "";
         card.appendChild(art); card.appendChild(meta); card.setAttribute("aria-label", label);
         list.appendChild(card);
@@ -268,8 +269,7 @@
     }
     function launchHistory(row) {
       if (row.type === "movie") {
-        openDetails(row);
-        text("detail-status", "Movie playback is not verified in Video Lab. No movie player was opened.");
+        state.detailSource = "history"; state.title = row; launchMovie();
         return;
       }
       state.detailSource = "history";
@@ -318,6 +318,10 @@
     }
     function renderActions() {
       var actions = get("detail-actions"); actions.replaceChildren();
+      if (state.title.type === "movie") {
+        actions.appendChild(button("Play movie", launchMovie, "detail-primary"));
+        return;
+      }
       if (state.title.type === "tv") {
         var recent = core.readHistory(local || { getItem: function () { return null; } })
           .find(function (row) { return row.type === "tv" && row.id === state.title.id; });
@@ -412,7 +416,7 @@
           ? detail.seasons.length + (detail.seasons.length === 1 ? " season" : " seasons") : "TV series");
         else meta.push("Movie");
         text("detail-year", meta.join("  ·  ") || (row.type === "tv" ? "TV Series" : "Movie"));
-        text("detail-status", row.type === "movie" ? "Movie playback is not supported by the current Video Lab player." : "");
+        text("detail-status", "");
         if (row.type === "tv") {
           var latest = core.readHistory(local || { getItem: function () { return null; } })
             .find(function (entry) { return entry.type === "tv" && entry.id === state.title.id; });
@@ -556,6 +560,22 @@
       }
       catch (_error) { launchingEpisode = false; text("episode-status", "Player could not open. Select the episode again."); }
     }
+    function launchMovie() {
+      if (launchingEpisode || !state.title || state.title.type !== "movie") return;
+      var url = player.movieUrl(state.title.id, state.title.title);
+      if (!url) { text("detail-status", "Invalid movie selection."); return; }
+      launchingEpisode = true;
+      text("detail-status", "Opening movie in Horizon Video…");
+      saveView();
+      try {
+        nav.assign(url);
+        core.writeHistory(local, core.item("movie", state.title.id, state.title.title, null, null,
+          "off", Date.now(), { poster: state.title.poster, backdrop: state.title.backdrop }));
+      } catch (_error) {
+        launchingEpisode = false;
+        text("detail-status", "Movie player could not open. Select Play to retry.");
+      }
+    }
     function openKeyboard() { focus(get("keyboard-keys").querySelector("button")); }
     function buildKeyboard() {
       var host = get("keyboard-keys");
@@ -694,6 +714,7 @@
     try {
       var saved = session && JSON.parse(session.getItem(core.STATE_KEY));
       var returned = core.returnEpisode(nav.search);
+      var returnedMovie = core.returnMovie(nav.search);
       if (returned) {
         core.writeSubtitlePref(local, returned.subtitle);
         pendingEpisodeFocus = { season: returned.season, episode: returned.episode };
@@ -720,7 +741,14 @@
           if (restoreEpisodes) browseEpisodes();
         }, function () { text("search-status", "Could not restore show details. Search for the show to continue."); });
       }
-      if (returned && root.history && root.history.replaceState) root.history.replaceState(null, "",
+      if (returnedMovie) {
+        api("/api/title/movie/" + returnedMovie.id).then(function (value) {
+          openDetails(value);
+          state.detailSource = saved && saved.source === "history" ? "history" : "search";
+          text("detail-status", "Movie restarts from the beginning when played again.");
+        }, function () { text("search-status", "Could not restore movie details. Search for the movie to continue."); });
+      }
+      if ((returned || returnedMovie) && root.history && root.history.replaceState) root.history.replaceState(null, "",
         useMock ? (nav.pathname + "?mock=1") : "/");
     } catch (_error) { /* Storage and history are optional on the TV browser. */ }
     setView("search"); focus(query);

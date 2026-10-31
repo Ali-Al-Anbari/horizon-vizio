@@ -226,7 +226,7 @@
       const copy = document.createElement("span"); copy.className = "watch-card-copy";
       const title = document.createElement("strong"); title.textContent = row.title;
       const detail = document.createElement("small"); detail.textContent = row.type === "tv"
-        ? `S${row.season} E${row.episode}${row.episodeTitle ? " · " + row.episodeTitle : ""}` : "Movie";
+        ? `S${row.season} E${row.episode}${row.episodeTitle ? " · " + row.episodeTitle : ""}` : "Movie · starts from beginning";
       copy.append(title, detail); card.append(art, copy);
       card.setAttribute("aria-label", row.title + ", " + detail.textContent);
       card.addEventListener("focus", () => { watchIndex = index; markFocused(card); });

@@ -17,15 +17,15 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ASSETS_DIR = path.join(ROOT, "frontend");
 const ACCOUNT_ID = "d5a1f0de26db9b9ab0166715a99df692";
 const WORKER = "horizon-vizio";
-const UI_VERSION = "161f0cd6-9377-4932-895a-cf5573a7fff9";
+const UI_VERSION = "3423c606-dbe7-447d-8cdb-8cc87263fec6";
 const SECRET_VERSION = "0bb797c6-6d50-413f-90a0-4ef322daa83a";
 const NAMESPACE_ID = "3e81b6c93f6f45fb8595e8280201fd7a";
 const SECRET_NAMES = ["ACCESS_AUD", "CONTROLLER_TOKEN", "OWNER_EMAIL", "TEAM_DOMAIN"];
 const UI_MODULE_SHA256 = "08440e92511f420e933e5a4239ad6567e0b59f1d43a03bd259fd06a227c7c68c";
-// Pinned from the local frontend snapshot inspected after the v28 upload.
+// Pinned from the current frontend snapshot after the inactive Home UI upload.
 const ASSET_COUNT = 53;
-const ASSET_MANIFEST_SHA256 = "5872f980795f102f3556779303b6ad5a452c62cc1d99037a6cd72434c7e534ed";
-const UI_UPLOADED_AT_MS = Date.parse("2026-10-29T04:57:00.729Z");
+const ASSET_MANIFEST_SHA256 = "1dc316c62c7056bde9bcd455f3d48d02b049cac7e88ead7eb546abae3660c47b";
+const UI_UPLOADED_AT_MS = Date.parse("2026-10-29T06:37:53.590Z");
 const API = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}`;
 
 function assert(condition, message) {
@@ -88,17 +88,25 @@ function verifyVersions(ui, secret) {
   assert(assetConfig.not_found_handling === "none", "Asset 404 handling changed");
   assert(JSON.stringify(assetConfig.run_worker_first) === JSON.stringify(["/api/*"]), "API asset routing changed");
   const uiBindings = bindingMap(ui);
-  assert(uiBindings.size === 2, "Unexpected UI binding set");
+  const expectedBindingNames = ["ASSETS", "LAUNCH_QUEUE", ...SECRET_NAMES].sort();
+  assert(uiBindings.size === expectedBindingNames.length &&
+    JSON.stringify([...uiBindings.keys()].sort()) === JSON.stringify(expectedBindingNames),
+  "Unexpected UI binding set");
   assert(uiBindings.get("ASSETS")?.type === "assets", "ASSETS binding missing");
   const queue = uiBindings.get("LAUNCH_QUEUE");
   assert(queue?.type === "durable_object_namespace" && queue.class_name === "LaunchQueue" && queue.namespace_id === NAMESPACE_ID,
     "LAUNCH_QUEUE binding changed");
+  for (const name of SECRET_NAMES) assert(uiBindings.get(name)?.type === "secret_text", `UI ${name} secret binding missing`);
   const secretBindings = bindingMap(secret);
   assert(secret.migration_tag === "v1", "Secret version migration tag changed");
-  assert(secretBindings.get("LAUNCH_QUEUE")?.namespace_id === NAMESPACE_ID, "Secret version namespace differs");
-  assert(secretBindings.size === 6, "Unexpected historical binding set");
-  for (const name of SECRET_NAMES) assert(secretBindings.get(name)?.type === "secret_text", `Historical ${name} secret binding missing`);
+  assert(secretBindings.size === expectedBindingNames.length &&
+    JSON.stringify([...secretBindings.keys()].sort()) === JSON.stringify(expectedBindingNames),
+  "Unexpected historical binding set");
   assert(secretBindings.get("ASSETS")?.type === "assets", "Historical ASSETS binding missing");
+  assert(secretBindings.get("LAUNCH_QUEUE")?.type === "durable_object_namespace" &&
+    secretBindings.get("LAUNCH_QUEUE")?.class_name === "LaunchQueue" &&
+    secretBindings.get("LAUNCH_QUEUE")?.namespace_id === NAMESPACE_ID, "Secret version namespace differs");
+  for (const name of SECRET_NAMES) assert(secretBindings.get(name)?.type === "secret_text", `Historical ${name} secret binding missing`);
   return { module, assetConfig, assetBinding: uiBindings.get("ASSETS"), queueBinding: queue };
 }
 
@@ -165,9 +173,14 @@ async function assetSnapshot() {
 
 async function main() {
   const mode = process.argv[2];
-  assert((["inspect", "create-inactive"].includes(mode) && process.argv.length === 3) ||
+  assert((["check-local", "inspect", "create-inactive"].includes(mode) && process.argv.length === 3) ||
     (mode === "verify-existing" && process.argv.length === 4 && /^[0-9a-f-]{36}$/.test(process.argv[3])),
-    "Usage: node maintenance/recover-horizon-worker.mjs inspect|create-inactive|verify-existing <version-id>");
+    "Usage: node maintenance/recover-horizon-worker.mjs check-local|inspect|create-inactive|verify-existing <version-id>");
+  if (mode === "check-local") {
+    const manifest = await assetSnapshot();
+    console.log(`PASS: ${Object.keys(manifest).length} current frontend assets match the pinned upload snapshot. No Cloudflare request was made.`);
+    return;
+  }
   const token = await getAuthToken();
   const [ui, secret] = await Promise.all([
     getVersion(token, UI_VERSION), getVersion(token, SECRET_VERSION),
@@ -182,7 +195,7 @@ async function main() {
   }
   const manifest = await assetSnapshot();
   const latest = await getVersion(token, "latest");
-  console.log(`Preflight passed: UI v${ui.number}, historical secrets v${secret.number}, ${Object.keys(manifest).length} pinned assets, namespace ${NAMESPACE_ID}. Latest uploaded version: ${latest.id}.`);
+  console.log(`Preflight passed: UI v${ui.number}, historical secrets v${secret.number}, ${Object.keys(manifest).length} current assets, namespace ${NAMESPACE_ID}. Latest uploaded version: ${latest.id}.`);
   if (mode === "inspect") {
     console.log("Read-only inspection complete. No asset session or Worker version was created.");
     return;
@@ -207,7 +220,7 @@ async function main() {
     compatibility_date: ui.compatibility_date,
     usage_model: ui.usage_model,
     bindings,
-    annotations: { "workers/message": "Inactive recovery: v28 UI/assets plus v19 encrypted bindings" },
+    annotations: { "workers/message": "Inactive Home checkpoint: current UI/assets plus historical encrypted bindings" },
   });
   assert(typeof created.id === "string", "Cloudflare created a version but returned no ID; inspect latest manually");
   const checked = await getVersion(token, created.id);

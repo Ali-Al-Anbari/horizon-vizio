@@ -11,7 +11,7 @@
     NATIVE_FOCUS: "NATIVE_FOCUS",
   };
   var PREVIEW_ORIGIN = "https://horizon-video-lab-preview.ali-al-anbari.workers.dev";
-  var CONTROL_IDS = ["rewind", "play-pause", "forward", "previous-episode", "subtitles", "episodes", "next-episode", "manual-end", "provider-choice", "unload-provider", "diagnostics-open", "recover-provider", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip", "experiment-back-fast", "experiment-forward-fast"];
+  var CONTROL_IDS = ["rewind", "play-pause", "forward", "previous-episode", "subtitles", "episodes", "next-episode", "manual-end", "provider-choice", "unload-provider", "diagnostics-open", "recover-provider", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip"];
   var COMMANDS = { rewind: "seek_backward", "play-pause": "pause_toggle", forward: "seek_forward" };
   var IDLE_MS = 5000;
   // A watchdog for a future acknowledged adapter, not a delay before sending.
@@ -50,7 +50,8 @@
       get("compat-autoplay"), get("compat-play"), get("compat-reset"),
       get("vidfast-autoplay"), get("vidfast-reset"),
       get("vidlink-default-off"), get("vidlink-default-on"), get("vidlink-jw-on"),
-      get("vidlink-focus-default"), get("vidbolt-autoplay-toggle"), get("vidbolt-auto-recover")];
+      get("vidlink-focus-default"), get("vidbolt-autoplay-toggle"), get("vidbolt-auto-recover"),
+      get("vidbolt-stop"), get("vidbolt-native-focus")];
     var menuButtons = [get("menu-cancel"), get("menu-change")];
     var upNextButtons = [get("up-next-play"), get("up-next-cancel")];
     var catalog = root.HorizonEpisodes;
@@ -84,6 +85,7 @@
     var boltRecoveryResultAt = null;
     var boltRecoveryGeneration = null;
     var boltRecoveryFromGeneration = null;
+    var boltRecoveryFromLoads = null;
     var boltRecoveryDecision = "no explicit failure signal";
     var riftState = null;
     var riftPosition = null;
@@ -145,6 +147,7 @@
 
     function providerLabel() { return providers.label(provider); }
     function isCommandProvider() { return provider === providers.VIDRIFT || provider === providers.VIDBOLT; }
+    function usesExperimentalRow() { return provider === providers.VIDRIFT; }
     function renderProviderChoice() {
       var next = providers.next(provider);
       var choice = get("provider-choice");
@@ -153,23 +156,20 @@
         + ". Press OK to switch to " + providers.label(next));
       var unloadBtn = get("unload-provider");
       if (unloadBtn) {
-        unloadBtn.hidden = provider === providers.PRIMARY;
+        unloadBtn.hidden = provider === providers.PRIMARY || provider === providers.VIDBOLT;
       }
       get("recover-provider").hidden = provider !== providers.VIDBOLT && provider !== providers.YAPGRID;
       get("recover-provider").textContent = provider === providers.YAPGRID ? "Reload Player" : "Recover Player";
-      get("experimental-controls").hidden = !isCommandProvider();
-      get("experiment-pause").hidden = provider === providers.VIDBOLT;
-      get("experiment-volume").hidden = provider === providers.VIDBOLT;
-      get("experiment-back-fast").hidden = provider !== providers.VIDBOLT;
-      get("experiment-forward-fast").hidden = provider !== providers.VIDBOLT;
+      get("experimental-controls").hidden = !usesExperimentalRow();
+      get("experiment-pause").hidden = false;
+      get("experiment-volume").hidden = false;
       get("experiment-unmute").hidden = provider !== providers.VIDRIFT;
-      get("experiment-focus").hidden = provider !== providers.VIDRIFT && provider !== providers.VIDBOLT;
-      get("experiment-focus").textContent = provider === providers.VIDBOLT
-        ? "Focus VidBolt player · 30s" : "Focus player · 12s";
+      get("experiment-focus").hidden = provider !== providers.VIDRIFT;
       get("experiment-skip").hidden = provider !== providers.VIDRIFT;
       ["rewind", "play-pause", "forward"].forEach(function (id) {
-        get(id).hidden = isCommandProvider();
+        get(id).hidden = usesExperimentalRow();
       });
+      get("subtitle-mode").textContent = provider === providers.VIDBOLT ? "NATIVE" : subtitleMode.toUpperCase();
       renderBoltPlayPause();
       renderSeekLabels();
     }
@@ -197,13 +197,18 @@
       if (boltControlTimer !== null) { clock.clearTimeout(boltControlTimer); boltControlTimer = null; }
     }
     function renderBoltPlayPause() {
-      if (provider !== providers.VIDBOLT) return;
-      var button = get("experiment-play");
+      var button = get("play-pause");
+      if (provider !== providers.VIDBOLT) {
+        get("play-pause-label").textContent = "Play / Pause";
+        button.setAttribute("aria-label", "Play / Pause");
+        return;
+      }
       var s = boltSession;
       var label = s && s.controlPending ? (s.controlPending.type === "pause" ? "Pause…" : "Play…")
-        : s && s.paused === false ? "Pause" : s && s.paused === true ? "Play" : "Play · state unknown";
-      button.textContent = label;
-      button.setAttribute("aria-label", "VidBolt " + label);
+        : s && s.paused === false ? "Pause" : s && s.paused === true ? "Play" : "Play / Pause";
+      get("play-pause-label").textContent = label;
+      button.setAttribute("aria-label", "VidBolt " + label
+        + (!s || s.paused === null && !s.controlPending ? "; state unknown" : ""));
     }
     function boltDiagnostic() {
       if (provider !== providers.VIDBOLT) return "VidBolt not selected.";
@@ -225,6 +230,7 @@
         + "; progress gap " + (s.advancedAt === null ? "unavailable" : boltAge(s.advancedAt))
         + "; iframe loads " + s.loadCount + ", last " + boltSinceStart(s.latestLoadAt, s)
         + "; parent URL assignments " + s.parentUrlAssignments
+        + "; provider error events no documented VidBolt message type"
         + "; mobile-panel messages " + s.mobilePanelCount + ", subtitle rows " + s.subtitleOptionCount
         + ", last " + boltAge(s.mobilePanelAt)
         + "; watchdog " + (boltRecoveryGeneration === s.generation && boltRecoveryResult === "awaiting position advance"
@@ -235,12 +241,14 @@
         + "; progress threshold in " + (s.suspected ? "0s" : Math.max(0, Math.ceil((s.healthy
           ? BOLT_STALL_GRACE_MS - (now() - Math.max(s.advancedAt, s.monitorSince, s.seekUntil))
           : boltStartupGraceMs - (now() - Math.max(s.createdAt, s.monitorSince))) / 1000)) + "s")
+        + "; last watchdog check " + boltAge(s.watchdogCheckedAt) + " (5s interval)"
         + "; auto recovery decision " + boltRecoveryDecision
         + "; suspicion began " + boltPageTime(s.suspectedAt) + " (" + boltAge(s.suspectedAt) + ")"
         + "; autoplay " + (s.autoplayRequested ? "requested" : "off diagnostic")
         + "; volume 100% " + (s.volumeSentAt === null ? "not sent" : "command sent " + boltAge(s.volumeSentAt) + ", no provider acknowledgement")
         + "; recovery " + boltRecoveryAttempts + " total, " + boltAutoAttempts + "/1 automatic; last " + boltLastRecoveryReason
         + "; generations " + (boltRecoveryFromGeneration === null ? "none" : boltRecoveryFromGeneration + "→" + boltRecoveryGeneration)
+        + "; previous iframe loads " + (boltRecoveryFromLoads === null ? "none" : boltRecoveryFromLoads)
         + "; started " + boltPageTime(boltRecoveryStartedAt)
         + "; result " + boltRecoveryResult + " at " + boltPageTime(boltRecoveryResultAt)
         + ". Picture, audio and volume effect require TV verification.";
@@ -257,6 +265,7 @@
         if (disposed || provider !== providers.VIDBOLT || !boltSession
             || boltSession.generation !== generation || frame.src === "about:blank") return;
         var s = boltSession;
+        s.watchdogCheckedAt = now();
         if (boltSeekPending && now() >= s.seekUntil) {
           boltSeekPending = false; s.seekTarget = null; s.seekUnconfirmed = true;
         }
@@ -384,6 +393,8 @@
         ? "" : "; " + boltSession.suspectedDetail)
         + (restore === null ? "; position unavailable" : "; resume " + restore + "s");
       boltRecoveryFromGeneration = boltSession.generation;
+      boltRecoveryFromLoads = boltSession.loadCount + " from " + boltSession.parentUrlAssignments
+        + " parent URL assignment(s)";
       unloadFrame();
       vidBoltAutoplay = true;
       loadProviderFrame(restore, true);
@@ -412,12 +423,6 @@
       get("forward-label").textContent = "+" + SEEK_LABELS[seekLevels.forward];
       get("rewind").setAttribute("aria-label", "Rewind " + SEEK_LABELS[seekLevels.rewind]);
       get("forward").setAttribute("aria-label", "Forward " + SEEK_LABELS[seekLevels.forward]);
-      if (provider === providers.VIDBOLT) {
-        get("experiment-back").textContent = "−" + SEEK_LABELS[seekLevels.rewind];
-        get("experiment-forward").textContent = "+" + SEEK_LABELS[seekLevels.forward];
-        get("experiment-back").setAttribute("aria-label", "VidBolt rewind " + SEEK_LABELS[seekLevels.rewind]);
-        get("experiment-forward").setAttribute("aria-label", "VidBolt forward " + SEEK_LABELS[seekLevels.forward]);
-      }
     }
     function resetSeekSelection() {
       seekLevels.rewind = 0; seekLevels.forward = 0;
@@ -433,7 +438,8 @@
           ? Math.max(0, Math.min(boltDuration !== null && boltDuration > 0 ? boltDuration : Infinity,
             boltPosition + delta)) : null;
         return label + " · target " + (target === null ? "unavailable until fresh position" : boltClock(target))
-          + " · " + arrows + " · OK seeks once · Up/Down Diagnostics";
+          + " · " + arrows + " · OK seeks · Up Play/Pause · Down "
+          + (id === "forward" ? "Next Episode" : "Previous Episode");
       }
       return label + " · " + arrows + " · OK seeks · Up Play/Pause · Down "
         + (id === "forward" ? "Next Episode" : "Previous Episode");
@@ -472,7 +478,7 @@
       overlay.setAttribute("aria-hidden", visible ? "false" : "true");
       controls.forEach(function (button, index) {
         if (button) button.tabIndex = visible && !button.hidden
-          && (index < 12 || isCommandProvider()) ? 0 : -1;
+          && (index < 12 || usesExperimentalRow()) ? 0 : -1;
       });
     }
     function focusControl(index) {
@@ -485,16 +491,14 @@
       var id = CONTROL_IDS[selected];
       if (controls[selected]) focus(controls[selected]);
       if (state === STATES.CONTROLS_VISIBLE && !activeBatch
-          && (id === "rewind" || id === "forward"
-            || (provider === providers.VIDBOLT && (id === "experiment-back" || id === "experiment-forward")))) {
-        get("command-status").textContent = seekHint(id === "experiment-back" ? "rewind"
-          : id === "experiment-forward" ? "forward" : id);
+          && (id === "rewind" || id === "forward")) {
+        get("command-status").textContent = seekHint(id);
       }
     }
     function showControls() {
       if (disposed || state !== STATES.PLAYBACK_HIDDEN) return;
       state = STATES.CONTROLS_VISIBLE;
-      selected = isCommandProvider() ? 12 : 1;
+      selected = usesExperimentalRow() ? 12 : 1;
       setOverlayVisible(true);
       focusControl(selected);
       markPause("overlayAt");
@@ -544,28 +548,31 @@
       state = STATES.PLAYBACK_HIDDEN;
       focus(capture);
       showControls();
-      focusControl(9); // Stop / Unload remains reachable even if the child swallowed Back.
-      get("command-status").textContent = "Native input trial ended. Stop / Unload is focused; playback remains unverified.";
+      focusControl(provider === providers.VIDBOLT ? 10 : 9);
+      get("command-status").textContent = provider === providers.VIDBOLT
+        ? "Native input trial ended. Diagnostics is focused; Stop / Unload remains there. CC access is unverified."
+        : "Native input trial ended. Stop / Unload is focused; playback remains unverified.";
     }
     function startNativeFocus() {
       var fromVidLinkDiagnostics = provider === providers.VIDLINK
         && vidLinkMode !== "jwOn" && state === STATES.DIAGNOSTICS_OPEN;
       var fromVidRiftControls = provider === providers.VIDRIFT && state === STATES.CONTROLS_VISIBLE;
-      var fromVidBoltControls = provider === providers.VIDBOLT && state === STATES.CONTROLS_VISIBLE;
-      if ((!fromVidLinkDiagnostics && !fromVidRiftControls && !fromVidBoltControls) || route.invalid) return;
+      var fromVidBoltDiagnostics = provider === providers.VIDBOLT && state === STATES.DIAGNOSTICS_OPEN;
+      if ((!fromVidLinkDiagnostics && !fromVidRiftControls && !fromVidBoltDiagnostics) || route.invalid) return;
       if (!frameLoaded || frame.src === "about:blank") {
-        get(fromVidLinkDiagnostics ? "vidlink-compat-status" : "command-status").textContent =
+        get(fromVidLinkDiagnostics ? "vidlink-compat-status"
+          : fromVidBoltDiagnostics ? "vidbolt-compat-status" : "command-status").textContent =
           "Wait for iframe load before trying native input.";
         return;
       }
-      if (fromVidLinkDiagnostics) closeDiagnostics();
+      if (fromVidLinkDiagnostics || fromVidBoltDiagnostics) closeDiagnostics();
       hideControls();
       state = STATES.NATIVE_FOCUS;
       focusAttempts = Math.min(999, focusAttempts + 1);
       parentKeysDuringFocus = 0;
       frame.tabIndex = 0;
       get("player-shell").classList.add("native-focus-trial");
-      var trialSeconds = fromVidBoltControls ? 30 : 12;
+      var trialSeconds = fromVidBoltDiagnostics ? 30 : 12;
       nativeFocusTimer = clock.setTimeout(function () { endNativeFocus("timeout"); }, trialSeconds * 1000);
       try {
         focus(frame);
@@ -576,19 +583,11 @@
       }
       if (state === STATES.NATIVE_FOCUS) get("screen-reader-status").textContent =
         "Trying native " + providerLabel() + " input for " + trialSeconds
-        + " seconds. Horizon will restore Stop / Unload automatically.";
+        + " seconds. Horizon will restore its controls automatically.";
     }
     function navigate(key) {
-      if (isCommandProvider()) {
+      if (usesExperimentalRow()) {
         if (selected >= 12) {
-          if (provider === providers.VIDBOLT) {
-            var boltControls = [12, 14, 15, 20, 21, 18];
-            var index = boltControls.indexOf(selected);
-            if (key === "ArrowLeft") focusControl(boltControls[(index + boltControls.length - 1) % boltControls.length]);
-            else if (key === "ArrowRight") focusControl(boltControls[(index + 1) % boltControls.length]);
-            else if (key === "ArrowUp" || key === "ArrowDown") focusControl(10);
-            return;
-          }
           var last = provider === providers.VIDRIFT ? 19 : 16;
           if (key === "ArrowLeft") focusControl(selected === 12 ? last : selected - 1);
           else if (key === "ArrowRight") focusControl(selected === last ? 12 : selected + 1);
@@ -602,12 +601,12 @@
         if (key === "ArrowDown" || key === "ArrowUp") {
           if (key === "ArrowDown") {
             if (selected <= 2) focusControl(8);
-            else if (selected === 8) focusControl(provider !== providers.PRIMARY ? 9 : 10);
+            else if (selected === 8) focusControl(!get("unload-provider").hidden ? 9 : 10);
             else if (selected === 9) focusControl(10);
             else if (selected === 10 && !get("recover-provider").hidden) focusControl(11);
           } else {
             if (selected === 11) focusControl(10);
-            else if (selected === 10) focusControl(provider !== providers.PRIMARY ? 9 : 8);
+            else if (selected === 10) focusControl(!get("unload-provider").hidden ? 9 : 8);
             else if (selected === 9) focusControl(8);
             else if (selected === 8) focusControl(1);
             else if (selected !== 1) focusControl(1);
@@ -617,13 +616,13 @@
         if (key === "ArrowLeft") {
           if (selected === 1 || selected === 2) focusControl(selected - 1);
           else if (selected === 11) focusControl(10);
-          else if (selected === 10) focusControl(provider !== providers.PRIMARY ? 9 : 8);
+          else if (selected === 10) focusControl(!get("unload-provider").hidden ? 9 : 8);
           else if (selected === 9) focusControl(8);
           return;
         }
         if (key === "ArrowRight") {
           if (selected === 0 || selected === 1) focusControl(selected + 1);
-          else if (selected === 8) focusControl(provider !== providers.PRIMARY ? 9 : 10);
+          else if (selected === 8) focusControl(!get("unload-provider").hidden ? 9 : 10);
           else if (selected === 9) focusControl(10);
           else if (selected === 10 && !get("recover-provider").hidden) focusControl(11);
           return;
@@ -634,17 +633,17 @@
         if (selected === 1 || selected === 2 || (selected >= 4 && selected <= 6)) next -= 1;
         else if (selected === 9) next = 8;
         else if (selected === 11) next = 10;
-        else if (selected === 10) next = provider !== providers.PRIMARY ? 9 : 8;
+        else if (selected === 10) next = !get("unload-provider").hidden ? 9 : 8;
       } else if (key === "ArrowRight") {
         if (selected === 0 || selected === 1 || (selected >= 3 && selected <= 5)) next += 1;
-        else if (selected === 8) next = provider !== providers.PRIMARY ? 9 : 10;
+        else if (selected === 8) next = !get("unload-provider").hidden ? 9 : 10;
         else if (selected === 9) next = 10;
         else if (selected === 10 && !get("recover-provider").hidden) next = 11;
       } else if (key === "ArrowDown") {
         if (selected <= 2) next = [3, 4, 6][selected];
         else if (selected >= 3 && selected <= 6) next = manualEndEnabled ? 7 : 8;
         else if (selected === 7) next = 8;
-        else if (selected === 8) next = provider !== providers.PRIMARY ? 9 : 10;
+        else if (selected === 8) next = !get("unload-provider").hidden ? 9 : 10;
         else if (selected === 9) next = 10;
         else if (selected === 10 && !get("recover-provider").hidden) next = 11;
       } else if (key === "ArrowUp") {
@@ -654,7 +653,7 @@
         else if (selected === 8) next = manualEndEnabled ? 7 : 1;
         else if (selected === 9) next = 8;
         else if (selected === 11) next = 10;
-        else if (selected === 10) next = provider !== providers.PRIMARY ? 9 : 8;
+        else if (selected === 10) next = !get("unload-provider").hidden ? 9 : 8;
       }
       if (next !== selected) focusControl(next);
     }
@@ -1172,21 +1171,8 @@
     }
     function activateExperimental(id) {
       if (id === "experiment-focus") { startNativeFocus(); return; }
-      if (!isCommandProvider() || !frameLoaded || frame.src === "about:blank") {
+      if (!usesExperimentalRow() || !frameLoaded || frame.src === "about:blank") {
         get("command-status").textContent = "Wait for the experimental iframe to load; no command sent.";
-        return;
-      }
-      if (provider === providers.VIDBOLT && !providerReady && !providerPlaying
-          && (!boltSession || boltSession.paused !== true)) {
-        get("command-status").textContent = "Wait for VidBolt ready; no command sent.";
-        return;
-      }
-      if (provider === providers.VIDBOLT) {
-        if (id === "experiment-play") toggleBoltPlayPause();
-        else if (id === "experiment-back") sendBoltSeek(-10 * SEEK_COUNTS[seekLevels.rewind]);
-        else if (id === "experiment-forward") sendBoltSeek(10 * SEEK_COUNTS[seekLevels.forward]);
-        else if (id === "experiment-back-fast") sendBoltSeek(-600);
-        else if (id === "experiment-forward-fast") sendBoltSeek(600);
         return;
       }
       var command = id.slice(11);
@@ -1260,7 +1246,16 @@
     function activateControl() {
       var id = CONTROL_IDS[selected];
       if (id.indexOf("experiment-") === 0) { activateExperimental(id); return; }
-      if (isCommandProvider() && selected <= 2) return;
+      if (usesExperimentalRow() && selected <= 2) return;
+      if (provider === providers.VIDBOLT && selected <= 2) {
+        if (selected === 1) {
+          if (frameLoaded && (providerReady || providerPlaying || boltSession && boltSession.paused === true))
+            toggleBoltPlayPause();
+          else get("command-status").textContent = "Wait for VidBolt ready; no command sent.";
+        } else sendBoltSeek((selected === 2 ? 1 : -1) * 10
+          * SEEK_COUNTS[seekLevels[selected === 2 ? "forward" : "rewind"]]);
+        return;
+      }
       if (id === "diagnostics-open") { openDiagnostics(); return; }
       if (id === "provider-choice") { switchProvider(); return; }
       if (id === "unload-provider") { stopAndUnloadProvider(); return; }
@@ -1312,11 +1307,12 @@
       }
       if (state === STATES.PLAYBACK_HIDDEN) {
         if (key === "Back") { if (!event.repeat) exitPlayer(); }
-        else if (key === "OK" && !event.repeat && !isCommandProvider()) {
-          pauseTrace = { inputAt: now(), hidden: true };
+        else if (key === "OK" && !event.repeat && (!isCommandProvider() || provider === providers.VIDBOLT)) {
+          if (provider !== providers.VIDBOLT) pauseTrace = { inputAt: now(), hidden: true };
           overlay.classList.add("is-quick-pause");
           showControls();
-          requestCommand("play-pause");
+          if (provider === providers.VIDBOLT) activateControl();
+          else requestCommand("play-pause");
         } else if (!event.repeat || key.indexOf("Arrow") === 0) showControls();
         return;
       }
@@ -1358,10 +1354,10 @@
           focusDiagnostic(diagnosticSelected === (vidLinkMode === "jwOn" ? 9 : 10) ? 7 : diagnosticSelected + 1);
         else if (provider === providers.VIDLINK && key === "ArrowLeft" && diagnosticSelected >= 7)
           focusDiagnostic(diagnosticSelected === 7 ? (vidLinkMode === "jwOn" ? 9 : 10) : diagnosticSelected - 1);
-        else if (provider === providers.VIDBOLT && key === "ArrowRight" && diagnosticSelected === 11)
-          focusDiagnostic(12);
-        else if (provider === providers.VIDBOLT && key === "ArrowLeft" && diagnosticSelected === 12)
-          focusDiagnostic(11);
+        else if (provider === providers.VIDBOLT && key === "ArrowRight" && diagnosticSelected >= 11)
+          focusDiagnostic(diagnosticSelected === 14 ? 11 : diagnosticSelected + 1);
+        else if (provider === providers.VIDBOLT && key === "ArrowLeft" && diagnosticSelected >= 11)
+          focusDiagnostic(diagnosticSelected === 11 ? 14 : diagnosticSelected - 1);
         else if (provider === providers.VIDBOLT && key === "ArrowDown" && diagnosticSelected === 0)
           focusDiagnostic(11);
         return;
@@ -1369,10 +1365,6 @@
       resetIdle();
       if (key === "Back") { if (!event.repeat) { if (activeBatch) cancelActiveBatch(); else hideControls(); } }
       else if (key === "OK") { if (!event.repeat) activateControl(); }
-      else if (provider === providers.VIDBOLT && (selected === 14 || selected === 15)
-          && (key === "ArrowLeft" || key === "ArrowRight")) {
-        if (!adjustSeek(selected === 14 ? "rewind" : "forward", key)) navigate(key);
-      }
       else if ((selected === 0 || selected === 2)
           && (key === "ArrowLeft" || key === "ArrowRight")) {
         if (!adjustSeek(CONTROL_IDS[selected], key)) navigate(key);
@@ -1461,6 +1453,15 @@
     }
     function activateDiagnostic() {
       if (diagnosticSelected === 0) { closeDiagnostics(); return; }
+      if (provider === providers.VIDBOLT && diagnosticSelected === 14) {
+        startNativeFocus();
+        return;
+      }
+      if (provider === providers.VIDBOLT && diagnosticSelected === 13) {
+        closeDiagnostics();
+        stopAndUnloadProvider();
+        return;
+      }
       if (provider === providers.VIDBOLT && diagnosticSelected === 12) {
         boltAutoRecover = !boltAutoRecover;
         get("vidbolt-compat-status").textContent = "Auto Recover " + (boltAutoRecover ? "ON" : "OFF")
@@ -1535,7 +1536,7 @@
           || (provider === providers.VIDFAST && index >= 5 && index <= 6)
           || (provider === providers.VIDLINK && index >= 7
             && index <= 10 && (index < 10 || vidLinkMode !== "jwOn"))
-          || (provider === providers.VIDBOLT && (index === 11 || index === 12)) ? 0 : -1;
+          || (provider === providers.VIDBOLT && index >= 11 && index <= 14) ? 0 : -1;
       });
       focusDiagnostic(0);
       tickDiagnostics();
@@ -1652,7 +1653,7 @@
           position: null, positionAt: null, progressReference: null, advancedAt: null,
           duration: null, endedAt: null,
           paused: null, pauseIntent: false, controlPending: null, controlLastSentAt: null,
-          healthy: false, suspected: null, suspectedDetail: null,
+          healthy: false, suspected: null, suspectedDetail: null, watchdogCheckedAt: null,
           suspectedAt: null, seekUntil: 0, seekTarget: null,
           seekUnconfirmed: false,
           monitorSince: now(),
@@ -1732,7 +1733,8 @@
           telemetry.textContent = providerLabel() + " reports " + Math.floor(message.currentTime)
             + "s" + (message.duration !== null && message.duration !== undefined
               ? " / " + Math.floor(message.duration) + "s" : "") + "; check picture and sound on TV.";
-          telemetry.classList.add("is-visible");
+          if (provider === providers.VIDBOLT) telemetry.classList.remove("is-visible");
+          else telemetry.classList.add("is-visible");
         } else if (message.type === "vidrift:command-error") {
           get("command-status").textContent = "VidRift refused " + message.command
             + (message.field ? " (" + message.field + ")" : "") + ": " + message.reason + "."
@@ -1880,6 +1882,7 @@
       boltRecoveryResultAt = null;
       boltRecoveryGeneration = null;
       boltRecoveryFromGeneration = null;
+      boltRecoveryFromLoads = null;
       boltRecoveryDecision = "no explicit failure signal";
       boltLastConfirmed = null;
       get("compat-status").textContent = "Each choice reloads CineSrc with one changed setting. Play is a separate manual command.";
@@ -2009,11 +2012,12 @@
     }
     renderProviderChoice();
     loadProviderFrame();
-    get("subtitle-mode").textContent = subtitleMode.toUpperCase();
+    get("subtitle-mode").textContent = provider === providers.VIDBOLT ? "NATIVE" : subtitleMode.toUpperCase();
     controls.forEach(function (button, index) {
       if (!button) return;
       button.addEventListener("click", function () {
         if (disposed || state !== STATES.CONTROLS_VISIBLE) return;
+        if (button.hidden || (index >= 12 && !usesExperimentalRow())) return;
         if (selected !== index) {
           pendingEpisode = null;
           episodeLookup += 1;
@@ -2029,7 +2033,7 @@
         if (state !== STATES.DIAGNOSTICS_OPEN || (index > 0 && index < 5 && provider !== providers.CINESRC)
             || (index >= 5 && index <= 6 && provider !== providers.VIDFAST)
             || (index >= 7 && index <= 10 && provider !== providers.VIDLINK)
-            || ((index === 11 || index === 12) && provider !== providers.VIDBOLT)) return;
+            || (index >= 11 && provider !== providers.VIDBOLT)) return;
         diagnosticSelected = index;
         activateDiagnostic();
       });

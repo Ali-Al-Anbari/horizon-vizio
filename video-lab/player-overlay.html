@@ -30,7 +30,7 @@
           <p id="provider-telemetry" class="telemetry">Playback time and progress are unavailable from this embedded player.</p>
           <div class="control-row primary" aria-label="Playback actions">
             <button id="rewind" type="button" tabindex="-1"><span aria-hidden="true">↶</span><small id="rewind-label">−10s</small></button>
-            <button id="play-pause" type="button" tabindex="-1"><span aria-hidden="true">⏯</span><small>Play / Pause</small></button>
+            <button id="play-pause" type="button" tabindex="-1"><span aria-hidden="true">⏯</span><small id="play-pause-label">Play / Pause</small></button>
             <button id="forward" type="button" tabindex="-1"><span aria-hidden="true">↷</span><small id="forward-label">+10s</small></button>
           </div>
           <div class="control-row secondary" aria-label="More playback options">
@@ -52,8 +52,6 @@
             <button id="experiment-back" type="button" tabindex="-1">−10s</button>
             <button id="experiment-forward" type="button" tabindex="-1">+10s</button>
             <button id="experiment-volume" type="button" tabindex="-1">Volume 50%</button>
-            <button id="experiment-back-fast" type="button" tabindex="-1" hidden>−10m</button>
-            <button id="experiment-forward-fast" type="button" tabindex="-1" hidden>+10m</button>
             <button id="experiment-unmute" type="button" tabindex="-1">Unmute</button>
             <button id="experiment-focus" type="button" tabindex="-1">Focus player · 12s</button>
             <button id="experiment-skip" type="button" tabindex="-1">Test Skip +10s</button>
@@ -108,6 +106,8 @@
             <p id="diag-vidbolt-mode">VidBolt test: autoPlay=true (default)</p>
             <button id="vidbolt-autoplay-toggle" type="button" tabindex="-1">Test autoplay off</button>
             <button id="vidbolt-auto-recover" type="button" tabindex="-1">Auto Recover: ON</button>
+            <button id="vidbolt-stop" type="button" tabindex="-1">Stop / Unload</button>
+            <button id="vidbolt-native-focus" type="button" tabindex="-1">Try native CC menu · 30s</button>
             <span id="vidbolt-compat-status" role="status">Auto Recover responds only to an active iframe error, once per title. Playback stalls stay diagnostic; use Recover Player manually.</span>
           </div>
           <div class="diagnostics-grid">

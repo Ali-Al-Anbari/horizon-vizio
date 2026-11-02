@@ -308,3 +308,20 @@ test("experimental events validate origin, source, identity, payloads, and error
   assert.equal(providers.acceptEvent(bolt({ type: "timeupdate", time: "12" }), frame, "vidbolt"), null);
   assert.equal(providers.acceptEvent(bolt({ type: "ready" }), frame, "vidrift", movie), null);
 });
+
+test("VidBolt mobile-panel diagnostics validate the frame and expose counts only", () => {
+  const source = {};
+  const frame = { contentWindow: source };
+  const event = { origin: "https://vidbolt.xyz", source,
+    data: { type: "mobile-panel", initialGroup: "Subtitles", options: [
+      { option: "subtitles", group: "Subtitles", label: "English", value: "0" },
+      { option: "subtitles", group: "Subtitles", label: "Off", value: "-1" },
+      { option: "audio", group: "Audio", label: "English", value: "en" },
+    ] } };
+  assert.equal(JSON.stringify(providers.acceptEvent(event, frame, "vidbolt")),
+    '{"type":"vidbolt:mobile-panel","optionCount":3,"subtitleOptionCount":2}');
+  assert.equal(providers.acceptEvent({ ...event, source: {} }, frame, "vidbolt"), null);
+  assert.equal(providers.acceptEvent({ ...event, origin: "https://example.test" }, frame, "vidbolt"), null);
+  assert.equal(providers.acceptEvent({ ...event, data: { type: "mobile-panel", options: null } }, frame, "vidbolt"), null);
+  assert.equal(providers.acceptEvent({ ...event, data: { type: "error" } }, frame, "vidbolt"), null);
+});

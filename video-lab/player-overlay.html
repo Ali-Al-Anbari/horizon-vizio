@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.tvmaze.com; frame-src https://yapgrid.com; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.tvmaze.com; frame-src https://yapgrid.com https://cinesrc.st https://vidfast.vc https://vidlink.pro https://embed.vidrift.net https://vidbolt.xyz; object-src 'none'; form-action 'none'; base-uri 'none'" />
     <meta name="color-scheme" content="dark" />
     <title>Horizon Video Lab · Player Overlay</title>
     <link rel="icon" href="data:," />
@@ -11,11 +11,13 @@
     <script src="focus-lease.js" defer></script>
     <script src="player-bridge-client.js" defer></script>
     <script src="episode-catalog.js" defer></script>
+    <script src="playback-providers.js" defer></script>
+    <script src="player-diagnostics.js" defer></script>
     <script src="player-overlay.js" defer></script>
   </head>
   <body>
     <main id="player-shell" class="player-shell">
-      <iframe id="player-frame" title="YapGrid video player" allow="autoplay; fullscreen"
+      <iframe id="player-frame" title="YapGrid video player" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen
         referrerpolicy="no-referrer" tabindex="-1"></iframe>
       <p id="player-loading" class="player-loading" role="status" hidden></p>
       <button id="remote-capture" type="button" tabindex="0" aria-label="Horizon video remote control"></button>
@@ -24,8 +26,8 @@
           <p class="brand">HORIZON VIDEO</p>
           <h1 id="show-title">South Park</h1>
           <p id="episode-caption" class="episode">Season 13 · Episode 2</p>
-          <p id="metadata-credit" class="metadata-credit">Episode metadata: <a href="https://www.tvmaze.com/shows/112/south-park" tabindex="-1">TVmaze</a> · YapGrid playback availability is unverified</p>
-          <p class="telemetry">Playback time and progress are unavailable from this embedded player.</p>
+          <p id="metadata-credit" class="metadata-credit">Episode metadata: <a href="https://www.tvmaze.com/shows/112/south-park" tabindex="-1">TVmaze</a> · <span id="metadata-provider-credit">YapGrid playback availability is unverified</span></p>
+          <p id="provider-telemetry" class="telemetry">Playback time and progress are unavailable from this embedded player.</p>
           <div class="control-row primary" aria-label="Playback actions">
             <button id="rewind" type="button" tabindex="-1"><span aria-hidden="true">↶</span><small id="rewind-label">−10s</small></button>
             <button id="play-pause" type="button" tabindex="-1"><span aria-hidden="true">⏯</span><small>Play / Pause</small></button>
@@ -37,7 +39,25 @@
             <button id="episodes" type="button" tabindex="-1">Episode List</button>
             <button id="next-episode" type="button" tabindex="-1">Next Episode</button>
           </div>
-          <div class="control-row test-row"><button id="manual-end" type="button" tabindex="-1" hidden>Test: episode ended</button></div>
+          <div class="control-row test-row">
+            <button id="manual-end" type="button" tabindex="-1" hidden>Test: episode ended</button>
+            <button id="provider-choice" type="button" tabindex="-1" aria-label="Playback provider: YapGrid. Press OK to switch to VidBolt">Provider: YapGrid</button>
+            <button id="unload-provider" type="button" tabindex="-1" hidden>Stop / Unload</button>
+            <button id="diagnostics-open" type="button" tabindex="-1">Diagnostics</button>
+            <button id="recover-provider" type="button" tabindex="-1" hidden>Recover Player</button>
+          </div>
+          <div id="experimental-controls" class="control-row experimental" aria-label="Experimental provider controls" hidden>
+            <button id="experiment-play" type="button" tabindex="-1">Play</button>
+            <button id="experiment-pause" type="button" tabindex="-1">Pause</button>
+            <button id="experiment-back" type="button" tabindex="-1">−10s</button>
+            <button id="experiment-forward" type="button" tabindex="-1">+10s</button>
+            <button id="experiment-volume" type="button" tabindex="-1">Volume 50%</button>
+            <button id="experiment-back-fast" type="button" tabindex="-1" hidden>−10m</button>
+            <button id="experiment-forward-fast" type="button" tabindex="-1" hidden>+10m</button>
+            <button id="experiment-unmute" type="button" tabindex="-1">Unmute</button>
+            <button id="experiment-focus" type="button" tabindex="-1">Focus player · 12s</button>
+            <button id="experiment-skip" type="button" tabindex="-1">Test Skip +10s</button>
+          </div>
           <section id="up-next" class="up-next" aria-label="Up Next" hidden>
             <p class="brand">UP NEXT</p>
             <h2 id="up-next-title"></h2>
@@ -58,6 +78,52 @@
           </section>
           <p id="command-status" class="command-status" role="status" aria-live="polite"></p>
         </div>
+        <section id="diagnostics-panel" class="diagnostics-panel" aria-label="Video Lab diagnostics" hidden>
+          <div class="diagnostics-header"><h2>Video Lab diagnostics</h2><button id="diagnostics-close" type="button" tabindex="-1">Close · Back</button></div>
+          <p class="diagnostics-note">Local browser probes and experimental provider status. Provider media requests are not inspected.</p>
+          <div id="compat-controls" class="compat-controls" hidden>
+            <p id="diag-variant">CineSrc test: Baseline</p>
+            <button id="compat-quality" type="button" tabindex="-1">Quality 480</button>
+            <button id="compat-autoplay" type="button" tabindex="-1">Autoplay off</button>
+            <button id="compat-play" type="button" tabindex="-1">Send play</button>
+            <button id="compat-reset" type="button" tabindex="-1">Reset default</button>
+            <span id="compat-status" role="status">Each choice reloads CineSrc with one changed setting. Play is a separate manual command.</span>
+          </div>
+          <div id="vidfast-compat-controls" class="compat-controls" hidden>
+            <p id="diag-vidfast-mode">VidFast test: Baseline</p>
+            <button id="vidfast-autoplay" type="button" tabindex="-1">Try autoPlay=true</button>
+            <button id="vidfast-reset" type="button" tabindex="-1">Reset VidFast default</button>
+            <span id="vidfast-compat-status" role="status">Iframe loading, provider status, and visible playback are separate results.</span>
+          </div>
+          <div id="vidlink-compat-controls" class="compat-controls" hidden>
+            <p id="diag-vidlink-mode">VidLink test: Default · autoplay=false</p>
+            <button id="vidlink-default-off" type="button" tabindex="-1">Default · autoplay off</button>
+            <button id="vidlink-default-on" type="button" tabindex="-1">Default · autoplay on</button>
+            <button id="vidlink-jw-on" type="button" tabindex="-1">JWPlayer · autoplay on</button>
+            <button id="vidlink-focus-default" type="button" tabindex="-1">Try native Play input · 12s</button>
+            <span id="vidlink-compat-status" role="status">Choose one setting, then check picture and audio on the TV. Each choice unloads the previous player.</span>
+            <span id="vidlink-focus-status">Input trial: none. Iframe focus does not prove the player received a key.</span>
+          </div>
+          <div id="vidbolt-compat-controls" class="compat-controls" hidden>
+            <p id="diag-vidbolt-mode">VidBolt test: autoPlay=true (default)</p>
+            <button id="vidbolt-autoplay-toggle" type="button" tabindex="-1">Test autoplay off</button>
+            <button id="vidbolt-auto-recover" type="button" tabindex="-1">Auto Recover: ON</button>
+            <span id="vidbolt-compat-status" role="status">Auto Recover responds only to an active iframe error, once per title. Playback stalls stay diagnostic; use Recover Player manually.</span>
+          </div>
+          <div class="diagnostics-grid">
+            <p><strong>User agent</strong><span id="diag-user-agent"></span></p>
+            <p><strong>MediaSource / MSE</strong><span id="diag-media-source"></span></p>
+            <p><strong>Native HLS</strong><span id="diag-native-hls"></span></p>
+            <p><strong>HTML5 H.264 / AAC</strong><span id="diag-html5"></span></p>
+            <p><strong>Iframe permissions</strong><span id="diag-permissions"></span></p>
+            <p><strong>Iframe load / error</strong><span id="diag-frame-events"></span></p>
+            <p><strong>Provider messages</strong><span id="diag-events"></span><span id="diag-message-checks"></span></p>
+            <p><strong>Server IDs in order</strong><span id="diag-sources"></span></p>
+            <p><strong>Unconfirmed playback time</strong><span id="diag-elapsed"></span></p>
+            <p><strong>VidBolt session</strong><span id="diag-vidbolt-session"></span></p>
+          </div>
+          <p class="diagnostics-assessment"><strong>Assessment</strong><span id="diag-assessment"></span></p>
+        </section>
       </section>
       <p id="screen-reader-status" class="screen-reader-only" role="status" aria-live="polite">Video playing. Press an arrow or OK to show controls. Back exits to Video Lab.</p>
     </main>

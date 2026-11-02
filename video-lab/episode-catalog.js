@@ -27,6 +27,11 @@
     try { return decodeURIComponent(match[1]); }
     catch (_error) { return ""; }
   }
+  function providerParameter(search) {
+    var value = parameter(search, "provider");
+    return value === "yapgrid" || value === "vidrift" || value === "vidbolt"
+      || value === "vidlink" || value === "vidfast" ? value : null;
+  }
   function parse(search) {
     if (parameter(search, "type") === "movie") {
       var movieText = parameter(search, "id");
@@ -34,6 +39,7 @@
       var movie = positive(movieId) ? { movieId: movieId } : null;
       return { mediaType: "movie", current: movie, invalid: !movie, subtitle: "off",
         fromSearch: parameter(search, "from") === "search",
+        provider: providerParameter(search),
         showTitle: (parameter(search, "name") || "").slice(0, 120) };
     }
     var seasonText = parameter(search, "season");
@@ -47,19 +53,24 @@
       subtitle: parameter(search, "sub") === "on" ? "on" : "off",
       testEnd: parameter(search, "testEnd") === "1",
       fromSearch: parameter(search, "from") === "search",
+      provider: providerParameter(search),
       showTitle: (parameter(search, "name") || "").slice(0, 120),
       tvdbId: /^[1-9][0-9]*$/.test(parameter(search, "tvdb") || "")
         ? Number(parameter(search, "tvdb")) : null };
   }
-  function pageUrl(target, subtitle, testEnd, page, fromSearch, showTitle, tvdbId) {
+  function pageUrl(target, subtitle, testEnd, page, fromSearch, showTitle, tvdbId, provider) {
     if (!target || !episodeFor(target.showId, target.season, target.episode)) return null;
+    var primary = root.HorizonPlaybackProviders ? root.HorizonPlaybackProviders.PRIMARY : "yapgrid";
     var destination = page === "list" ? "episode-list-placeholder.html" : "player-overlay.html";
     return destination + "?season=" + target.season + "&episode=" + target.episode
       + "&sub=" + (subtitle === "on" ? "on" : "off") + (testEnd ? "&testEnd=1" : "")
       + (target.showId === SHOW_ID ? "" : "&showId=" + target.showId)
       + (fromSearch ? "&from=search" : "")
       + (showTitle ? "&name=" + encodeURIComponent(showTitle.slice(0, 120)) : "")
-      + (positive(tvdbId) ? "&tvdb=" + tvdbId : "");
+      + (positive(tvdbId) ? "&tvdb=" + tvdbId : "")
+      + ((provider === "vidrift" || provider === "vidbolt" || provider === "vidlink"
+        || provider === "vidfast" || provider === "yapgrid") && provider !== primary
+        ? "&provider=" + provider : "");
   }
   function embedUrl(target) {
     if (target && positive(target.movieId)) return "https://yapgrid.com/embed/movie/" + target.movieId;

@@ -30,7 +30,7 @@ function fixtureResolver() {
 }
 
 function setup({ search = "?sub=on", adapter = null, animationFrame = true, episodeResolver = fixtureResolver(),
-  desktop = false, fullscreenOutcome = "allow" } = {}) {
+  desktop = false, fullscreenOutcome = "allow", progressStorage = null } = {}) {
   const nodes = new Map();
   const documentEvents = {};
   const windowEvents = {};
@@ -119,11 +119,11 @@ function setup({ search = "?sub=on", adapter = null, animationFrame = true, epis
   runInNewContext(diagnosticsScript, { window });
   runInNewContext(playerScript, { window });
   const player = window.HorizonPlayerOverlay.createPlayer(document, location, window,
-    { commandAdapter: adapter, episodeResolver });
+    { commandAdapter: adapter, episodeResolver, progressStorage });
   // The script auto-initializes in a browser. In this harness, its exported
   // creator is called explicitly because the VM context has no global document.
   return {
-    get: id => nodes.get(id), document, navigation, timers, player, posted,
+    get: id => nodes.get(id), document, navigation, timers, player, posted, progressStorage,
     state() { return player.getState(); },
     key(name, repeat = false) {
       if (document.activeElement === nodes.get("player-frame")) return { delivered: false };
@@ -959,6 +959,12 @@ test("catalog validates positive provider route inputs without hardcoded season 
   assert.equal(episodes.parse("?season=-1&episode=0&sub=off").current.episode, 2);
   assert.equal(episodes.parse("?season=13&episode=2").subtitle, "off");
   assert.equal(episodes.parse("?season=13&episode=2&sub=on").subtitle, "on");
+  const resumeRoute = episodes.parse("?type=movie&id=550&resume=120&duration=600&resumeUpdated=1700000000000&handoff=session_abc123");
+  assert.equal(resumeRoute.resumePosition, 120);
+  assert.equal(resumeRoute.resumeDuration, 600);
+  assert.equal(resumeRoute.resumeUpdatedAt, 1700000000000);
+  assert.equal(resumeRoute.handoff, "session_abc123");
+  assert.equal(episodes.parse("?type=movie&id=550&startOver=1").startOver, true);
   assert.equal(episodes.parse("?season=%ZZ&episode=3").invalid, true);
   const generic = episodes.parse("?showId=1396&season=1&episode=2&sub=off&from=search&name=Breaking%20Bad");
   assert.equal(generic.current.showId, 1396);
@@ -1739,6 +1745,109 @@ function boltDiagnostics(app) {
   return app.get("diag-vidbolt-session").textContent;
 }
 
+function progressStorage(initial = []) {
+  let value = JSON.stringify({ version: 1, items: initial });
+  return { getItem() { return value; }, setItem(_key, next) { value = String(next); },
+    read() { return JSON.parse(value); } };
+}
+
+test("VidBolt saves only confirmed progress by movie and exact episode identity", () => {
+  const saved = progressStorage();
+  const movie = setup({ search: "?type=movie&id=550&provider=vidbolt", progressStorage: saved });
+  movie.message({ type: "durationchange", duration: 100 }, "https://vidbolt.xyz");
+  movie.message({ type: "play" }, "https://vidbolt.xyz");
+  movie.message({ type: "timeupdate", time: 20 }, "https://vidbolt.xyz");
+  assert.equal(saved.read().items.length, 0, "one initial position does not establish actual progress");
+  movie.advance(1000);
+  movie.message({ type: "timeupdate", time: 21 }, "https://vidbolt.xyz");
+  let items = saved.read().items;
+  assert.equal(items[0].identity, "movie:550");
+  assert.equal(items[0].position, 21);
+  assert.equal(items[0].duration, 100);
+  movie.message({ type: "pause" }, "https://vidbolt.xyz");
+  assert.equal(saved.read().items[0].position, 21, "pause flushes the latest confirmed point");
+
+  const episode = setup({ search: "?showId=1396&season=1&episode=4&provider=vidbolt", progressStorage: saved });
+  episode.message({ type: "durationchange", duration: 200 }, "https://vidbolt.xyz");
+  episode.message({ type: "play" }, "https://vidbolt.xyz");
+  episode.message({ type: "timeupdate", time: 30 }, "https://vidbolt.xyz");
+  episode.advance(1000);
+  episode.message({ type: "timeupdate", time: 31 }, "https://vidbolt.xyz");
+  items = saved.read().items;
+  assert.deepEqual(items.map(item => item.identity).sort(), ["movie:550", "tv:1396:1:4"]);
+});
+
+test("VidBolt resume waits for ready, rewinds ten seconds, and confirms the absolute seek", () => {
+  const saved = progressStorage([{ identity: "movie:550", position: 50, duration: 100,
+    updatedAt: 1700000000000, provider: "vidbolt", completed: false }]);
+  const app = setup({ search: "?type=movie&id=550&provider=vidbolt&resume=50&duration=100&resumeUpdated=1700000000000",
+    progressStorage: saved });
+  assert.equal(app.posted.length, 0, "no command is sent before provider readiness");
+  app.message({ type: "ready" }, "https://vidbolt.xyz");
+  assert.deepEqual(JSON.parse(JSON.stringify(app.posted.map(entry => entry.data))), [
+    { type: "volume", volume: 1 }, { type: "seek", time: 40 }
+  ]);
+  app.message({ type: "timeupdate", time: 40, duration: 100 }, "https://vidbolt.xyz");
+  assert.match(app.get("command-status").textContent, /Resume position confirmed/);
+  assert.equal(saved.read().items[0].position, 50, "the contextual rewind does not replace the saved place");
+});
+
+test("manual Recover during pending resume restores the saved place exactly once without the recap rewind", () => {
+  const saved = progressStorage([{ identity: "movie:550", position: 50, duration: 100,
+    updatedAt: 1700000000000, provider: "vidbolt", completed: false }]);
+  const app = setup({ search: "?type=movie&id=550&provider=vidbolt", progressStorage: saved });
+  const firstFrame = app.get("player-frame");
+  app.message({ type: "ready" }, "https://vidbolt.xyz");
+  assert.equal(app.posted.at(-1).data.time, 40);
+  app.key("ArrowDown"); app.get("recover-provider").click();
+  assert.notEqual(app.get("player-frame"), firstFrame);
+  app.message({ type: "ready" }, "https://vidbolt.xyz");
+  assert.equal(app.posted.at(-1).data.time, 50);
+  assert.equal(app.posted.filter(item => item.data.type === "seek").length, 2,
+    "one initial resume seek and one exact recovery seek are issued");
+});
+
+test("VidBolt Start Over clears the old position and does not seek it again", () => {
+  const saved = progressStorage([{ identity: "movie:550", position: 65, duration: 100,
+    updatedAt: 1700000000000, provider: "vidbolt", completed: false }]);
+  const app = setup({ search: "?type=movie&id=550&provider=vidbolt&startOver=1", progressStorage: saved });
+  assert.equal(saved.read().items.length, 0);
+  app.message({ type: "ready" }, "https://vidbolt.xyz");
+  assert.deepEqual(JSON.parse(JSON.stringify(app.posted.map(entry => entry.data))), [{ type: "volume", volume: 1 }]);
+  app.message({ type: "durationchange", duration: 100 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 0 }, "https://vidbolt.xyz");
+  assert.equal(saved.read().items.length, 0);
+});
+
+test("VidBolt startup position zero never overwrites a saved resume point", () => {
+  const saved = progressStorage([{ identity: "movie:550", position: 65, duration: 100,
+    updatedAt: 1700000000000, provider: "vidbolt", completed: false }]);
+  const app = setup({ search: "?type=movie&id=550&provider=vidbolt", progressStorage: saved });
+  app.message({ type: "durationchange", duration: 100 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 0 }, "https://vidbolt.xyz");
+  assert.equal(saved.read().items[0].position, 65);
+  app.message({ type: "ready" }, "https://vidbolt.xyz");
+  assert.equal(app.posted.at(-1).data.time, 55);
+  assert.equal(saved.read().items[0].position, 65);
+});
+
+test("VidBolt completion requires ended or natural confirmed progress; a seek preview is never completion", () => {
+  const saved = progressStorage();
+  const app = setup({ search: "?type=movie&id=550&provider=vidbolt", progressStorage: saved });
+  app.get("player-frame").fire("load");
+  app.message({ type: "ready" }, "https://vidbolt.xyz");
+  app.message({ type: "durationchange", duration: 100 }, "https://vidbolt.xyz");
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 85 }, "https://vidbolt.xyz");
+  app.get("forward").click();
+  assert.equal(app.posted.at(-1).data.time, 95, JSON.stringify({ status: app.get("command-status").textContent,
+    state: app.state(), posted: app.posted.map(entry => entry.data), position: app.get("timeline-current").textContent }));
+  app.message({ type: "timeupdate", time: 95 }, "https://vidbolt.xyz");
+  assert.equal(saved.read().items[0].completed, false, "confirmed seek position is still not completion");
+  app.message({ type: "ended" }, "https://vidbolt.xyz");
+  assert.equal(saved.read().items[0].completed, true, "provider ended signal marks the history record complete");
+});
+
 test("VidBolt initializes internal volume once after ready, or after play if ready was missed", () => {
   for (const order of [["ready", "play"], ["play", "ready"]]) {
     const app = boltApp();
@@ -1910,8 +2019,10 @@ test("VidBolt playback stall stays diagnostic, then iframe error recovers once w
   assert.match(boltDiagnostics(app), /suspected-playback-stall/);
   oldFrame.fire("error");
   assert.notEqual(app.get("player-frame"), oldFrame);
-  assert.equal(app.get("player-frame").src,
-    "https://vidbolt.xyz/movie/550?autoPlay=true&startAt=5");
+  assert.equal(app.get("player-frame").src, "https://vidbolt.xyz/movie/550?autoPlay=true");
+  app.message({ type: "ready" }, "https://vidbolt.xyz");
+  assert.equal(app.posted.at(-1).data.type, "seek");
+  assert.equal(app.posted.at(-1).data.time, 5);
   assert.match(app.get("diag-vidbolt-session").textContent,
     /1\/1 automatic; last iframe-error; position stopped advancing; resume 5s/);
   app.advance(60000);
@@ -2015,12 +2126,13 @@ test("VidBolt manual recovery restores only confirmed same-title position and re
   app.get("recover-provider").focus();
   assert.equal(app.document.activeElement.id, "recover-provider");
   app.key("Enter");
-  assert.equal(app.get("player-frame").src, "https://vidbolt.xyz/movie/550?autoPlay=true&startAt=11.5");
+  assert.equal(app.get("player-frame").src, "https://vidbolt.xyz/movie/550?autoPlay=true");
   assert.equal(oldFrame.src, "about:blank");
   app.message({ type: "ready" }, "https://vidbolt.xyz", oldFrame.contentWindow);
   assert.equal(app.posted.length, sentBeforeRecovery);
   app.message({ type: "ready" }, "https://vidbolt.xyz");
-  assert.equal(JSON.stringify(app.posted.at(-1).data), '{"type":"volume","volume":1}');
+  assert.equal(JSON.stringify(app.posted.at(-2).data), '{"type":"volume","volume":1}');
+  assert.deepEqual(JSON.parse(JSON.stringify(app.posted.at(-1).data)), { type: "seek", time: 11.5 });
   app.get("diagnostics-open").click();
   app.get("vidbolt-stop").click();
   assert.equal(app.get("player-frame").src, "about:blank");
@@ -2032,7 +2144,9 @@ test("VidBolt episode identity and provider switches never reuse another positio
   const episode = boltApp("?showId=1396&season=1&episode=2&provider=vidbolt");
   boltProgress(episode, 34, 35);
   episode.get("recover-provider").focus(); episode.key("Enter");
-  assert.match(episode.get("player-frame").src, /\/tv\/1396\/1\/2\?autoPlay=true&startAt=35$/);
+  assert.equal(episode.get("player-frame").src, "https://vidbolt.xyz/tv/1396/1/2?autoPlay=true");
+  episode.message({ type: "ready" }, "https://vidbolt.xyz");
+  assert.equal(episode.posted.at(-1).data.time, 35);
   const next = boltApp("?showId=1396&season=1&episode=3&provider=vidbolt");
   assert.equal(next.get("player-frame").src, "https://vidbolt.xyz/tv/1396/1/3?autoPlay=true");
   const old = next.get("player-frame");

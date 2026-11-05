@@ -40,6 +40,14 @@
       return { mediaType: "movie", current: movie, invalid: !movie, subtitle: "off",
         fromSearch: parameter(search, "from") === "search",
         provider: providerParameter(search),
+        resumePosition: parameter(search, "resume") !== null
+          && finiteNonnegative(Number(parameter(search, "resume"))) ? Number(parameter(search, "resume")) : null,
+        resumeDuration: parameter(search, "duration") !== null
+          && finitePositive(Number(parameter(search, "duration"))) ? Number(parameter(search, "duration")) : null,
+        resumeUpdatedAt: parameter(search, "resumeUpdated") !== null
+          && finiteTimestamp(Number(parameter(search, "resumeUpdated"))) ? Number(parameter(search, "resumeUpdated")) : null,
+        startOver: parameter(search, "startOver") === "1",
+        handoff: /^[A-Za-z0-9_-]{8,80}$/.test(parameter(search, "handoff") || "") ? parameter(search, "handoff") : null,
         showTitle: (parameter(search, "name") || "").slice(0, 120) };
     }
     var seasonText = parameter(search, "season");
@@ -54,10 +62,21 @@
       testEnd: parameter(search, "testEnd") === "1",
       fromSearch: parameter(search, "from") === "search",
       provider: providerParameter(search),
+      resumePosition: parameter(search, "resume") !== null
+        && finiteNonnegative(Number(parameter(search, "resume"))) ? Number(parameter(search, "resume")) : null,
+      resumeDuration: parameter(search, "duration") !== null
+        && finitePositive(Number(parameter(search, "duration"))) ? Number(parameter(search, "duration")) : null,
+      resumeUpdatedAt: parameter(search, "resumeUpdated") !== null
+        && finiteTimestamp(Number(parameter(search, "resumeUpdated"))) ? Number(parameter(search, "resumeUpdated")) : null,
+      startOver: parameter(search, "startOver") === "1",
+      handoff: /^[A-Za-z0-9_-]{8,80}$/.test(parameter(search, "handoff") || "") ? parameter(search, "handoff") : null,
       showTitle: (parameter(search, "name") || "").slice(0, 120),
       tvdbId: /^[1-9][0-9]*$/.test(parameter(search, "tvdb") || "")
         ? Number(parameter(search, "tvdb")) : null };
   }
+  function finiteNonnegative(value) { return typeof value === "number" && isFinite(value) && value >= 0; }
+  function finitePositive(value) { return typeof value === "number" && isFinite(value) && value > 0 && value <= 10000000; }
+  function finiteTimestamp(value) { return typeof value === "number" && isFinite(value) && value > 0 && value <= 8640000000000000; }
   function pageUrl(target, subtitle, testEnd, page, fromSearch, showTitle, tvdbId, provider) {
     if (!target || !episodeFor(target.showId, target.season, target.episode)) return null;
     var primary = root.HorizonPlaybackProviders ? root.HorizonPlaybackProviders.PRIMARY : "yapgrid";

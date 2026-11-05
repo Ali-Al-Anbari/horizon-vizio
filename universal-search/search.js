@@ -38,6 +38,29 @@
     var cache = new Map(), disposed = false, returningHome = false, pendingEpisodeFocus = null,
       launchingEpisode = false, clearPending = false;
     function text(id, value) { get(id).textContent = value; }
+    function createPlaybackHandoff(type, id) {
+      var token = "";
+      try {
+        if (clock.crypto && typeof clock.crypto.getRandomValues === "function") {
+          var bytes = new Uint32Array(3); clock.crypto.getRandomValues(bytes);
+          token = Array.prototype.map.call(bytes, function (value) { return value.toString(36); }).join("");
+        }
+      } catch (_error) {}
+      if (!token) return "";
+      token = token.slice(0, 48);
+      session.setItem(core.HANDOFF_KEY, JSON.stringify({ token: token, type: type, id: id, at: Date.now() }));
+      return token;
+    }
+    function consumePlaybackHandoff(returned, type) {
+      if (!returned || !returned.handoff) return false;
+      try {
+        var saved = JSON.parse(session.getItem(core.HANDOFF_KEY) || "null");
+        if (!saved || saved.token !== returned.handoff || saved.type !== type || saved.id !== returned.id
+            || !Number.isFinite(saved.at) || Date.now() - saved.at > 86400000) return false;
+        session.setItem(core.HANDOFF_KEY, "");
+        return true;
+      } catch (_error) { return false; }
+    }
     function syncRail() {
       get("search-toggle").classList.toggle("is-current", state.view !== "history" && !state.continueMode);
       get("continue-toggle").classList.toggle("is-current", state.view !== "history" && state.continueMode);
@@ -198,8 +221,12 @@
         var meta = doc.createElement("span"); meta.className = "poster-meta";
         var title = doc.createElement("strong"); title.textContent = row.title;
         var info = doc.createElement("small"); info.textContent = row.resume && row.type === "movie"
-          ? "Movie · restarts from beginning" : row.resume && row.type === "tv"
+          ? row.resume.progress && !row.resume.progress.completed
+            ? "Movie · " + Math.round(row.resume.progress.position / row.resume.progress.duration * 100) + "% watched"
+            : "Movie" : row.resume && row.type === "tv"
           ? "S" + row.resume.season + " E" + row.resume.episode + (row.resume.episodeTitle ? " · " + row.resume.episodeTitle : "")
+            + (row.resume.progress && !row.resume.progress.completed
+              ? " · " + Math.round(row.resume.progress.position / row.resume.progress.duration * 100) + "% watched" : "")
           : (row.type === "tv" ? "TV" : "Movie") + (row.date ? " · " + row.date.slice(0, 4) : "");
         meta.appendChild(title); meta.appendChild(info); card.appendChild(art); card.appendChild(meta);
         card.setAttribute("aria-label", row.title + ", " + info.textContent);
@@ -272,9 +299,9 @@
       searchToken += 1; if (activeAbort) activeAbort.abort();
       state.continueMode = true; setView("search");
       var history = core.readHistory(local || { getItem: function () { return null; } });
-      renderResults(core.homeRows(history).map(function (row) { return { type: row.type, id: row.id, title: row.title,
+      renderResults(core.continueRows(history).map(function (row) { return { type: row.type, id: row.id, title: row.title,
         date: "", poster: row.poster, backdrop: row.backdrop, resume: row }; }));
-      text("search-status", history.length ? "Continue Watching · episodes reopen at the last selection; movies restart from the beginning"
+      text("search-status", history.length ? "Continue Watching · saved VidBolt positions resume with a 10-second rewind"
         : "Nothing in Continue Watching yet.");
       focus(get("continue-toggle"));
     }
@@ -285,13 +312,19 @@
       rows.forEach(function (row) {
         var label = row.title + (row.type === "tv" ? " · S" + row.season + " E" + row.episode
           + (row.episodeTitle ? " · " + row.episodeTitle : "") : "")
+          + (row.progress && !row.progress.completed
+            ? " · " + Math.round(row.progress.position / row.progress.duration * 100) + "% watched" : "")
           + " · " + new Date(row.at).toLocaleDateString();
         var card = button(label, function () { launchHistory(row); }, "poster-card history-card");
         var art = verticalPosterArt(row);
         var meta = doc.createElement("span"); meta.className = "poster-meta";
         var name = doc.createElement("strong"); name.textContent = row.title;
         var detail = doc.createElement("small");
-        detail.textContent = row.type === "tv" ? "S" + row.season + " E" + row.episode : "Movie · starts from beginning";
+        detail.textContent = row.type === "tv" ? "S" + row.season + " E" + row.episode
+          + (row.progress && !row.progress.completed ? " · "
+            + Math.round(row.progress.position / row.progress.duration * 100) + "% watched" : "")
+          : row.progress && !row.progress.completed ? "Movie · "
+            + Math.round(row.progress.position / row.progress.duration * 100) + "% watched" : "Movie";
         meta.appendChild(name); meta.appendChild(detail); card.textContent = "";
         card.appendChild(art); card.appendChild(meta); card.setAttribute("aria-label", label);
         list.appendChild(card);
@@ -363,24 +396,38 @@
         ? "detail-secondary" : actions.contains(doc.activeElement) ? "detail-primary" : null;
       actions.replaceChildren();
       if (state.title.type === "movie") {
-        actions.appendChild(button("Play movie", launchMovie, "detail-primary"));
-        if (focusedClass) focus(actions.querySelector(".detail-primary"));
+        var movieHistory = core.readHistory(local).find(function (row) {
+          return row.type === "movie" && row.id === state.title.id;
+        });
+        var movieProgress = movieHistory && movieHistory.progress && !movieHistory.progress.completed
+          ? movieHistory.progress : null;
+        actions.appendChild(button(movieProgress ? "Resume movie" : "Play movie",
+          function () { launchMovie(false); }, "detail-primary"));
+        if (movieProgress) actions.appendChild(button("Start Over", function () { launchMovie(true); }, "detail-secondary"));
+        if (focusedClass) focus(actions.querySelector("." + focusedClass));
         return;
       }
       if (state.title.type === "tv") {
         var recent = core.readHistory(local || { getItem: function () { return null; } })
           .find(function (row) { return row.type === "tv" && row.id === state.title.id; });
-        var primary = button(recent ? "Continue S" + recent.season + " E" + recent.episode : "Start watching",
+        var resumable = recent && recent.progress && !recent.progress.completed ? recent.progress : null;
+        var primary = button(resumable ? "Resume S" + recent.season + " E" + recent.episode
+          : recent && recent.progress && recent.progress.completed ? "Play S" + recent.season + " E" + recent.episode
+            : recent ? "Continue S" + recent.season + " E" + recent.episode : "Start watching",
           function () {
-            if (recent) launchEpisode(recent.season, recent.episode);
+            if (recent) launchEpisode(recent.season, recent.episode, false);
             else if (state.season && state.episodes.length) launchEpisode(state.season, state.episodes[0].number);
           }, "detail-primary");
         primary.disabled = !recent && !state.episodes.length;
-        primary.setAttribute("aria-label", recent ? "Continue Season " + recent.season + ", Episode " + recent.episode
+        primary.setAttribute("aria-label", resumable ? "Resume Season " + recent.season + ", Episode " + recent.episode
+          : recent ? "Continue Season " + recent.season + ", Episode " + recent.episode
           : state.episodes.length ? "Play Season " + state.season + ", Episode " + state.episodes[0].number
             : "Start watching when episode metadata loads");
         if (!recent && state.episodes.length) primary.textContent = "Play S" + state.season + " E" + state.episodes[0].number;
         actions.appendChild(primary);
+        if (resumable) actions.appendChild(button("Start Over", function () {
+          launchEpisode(recent.season, recent.episode, true);
+        }, "detail-secondary"));
         actions.appendChild(button("Episode List", browseEpisodes, "detail-secondary"));
         if (focusedClass) focus(primary.disabled ? actions.querySelector(".detail-secondary")
           : actions.querySelector("." + focusedClass));
@@ -591,10 +638,17 @@
         else { var mark = art.querySelector(".episode-started"); if (mark) mark.remove(); }
       });
     }
-    function launchEpisode(season, episode) {
+    function launchEpisode(season, episode, startOver) {
       if (launchingEpisode || !state.title || state.title.type !== "tv") return;
-      var url = player.tvUrl(state.title.id, season, episode, state.subtitle, state.title.title, state.title.tvdbId);
+      var matching = core.readHistory(local).find(function (row) { return row.type === "tv" && row.id === state.title.id
+        && row.season === season && row.episode === episode; });
+      var progress = matching && matching.progress && !matching.progress.completed ? matching.progress : null;
+      startOver = !!startOver || !!(matching && matching.progress && matching.progress.completed);
+      var handoff = createPlaybackHandoff("tv", state.title.id);
+      var url = player.tvUrl(state.title.id, season, episode, state.subtitle, state.title.title, state.title.tvdbId,
+        startOver ? null : progress, !!startOver, handoff);
       if (!url) { text("detail-status", "Invalid episode selection."); return; }
+      if (startOver) core.clearProgress(local, "tv", state.title.id, season, episode);
       launchingEpisode = true;
       saveView();
       try { nav.assign(url);
@@ -607,10 +661,15 @@
       }
       catch (_error) { launchingEpisode = false; text("episode-status", "Player could not open. Select the episode again."); }
     }
-    function launchMovie() {
+    function launchMovie(startOver) {
       if (launchingEpisode || !state.title || state.title.type !== "movie") return;
-      var url = player.movieUrl(state.title.id, state.title.title);
+      var record = core.readHistory(local).find(function (row) { return row.type === "movie" && row.id === state.title.id; });
+      var progress = record && record.progress && !record.progress.completed ? record.progress : null;
+      startOver = !!startOver || !!(record && record.progress && record.progress.completed);
+      var handoff = createPlaybackHandoff("movie", state.title.id);
+      var url = player.movieUrl(state.title.id, state.title.title, startOver ? null : progress, !!startOver, handoff);
       if (!url) { text("detail-status", "Invalid movie selection."); return; }
+      if (startOver) core.clearProgress(local, "movie", state.title.id);
       launchingEpisode = true;
       text("detail-status", "Opening movie in Horizon Video…");
       saveView();
@@ -780,13 +839,21 @@
       var returned = core.returnEpisode(nav.search);
       var returnedMovie = core.returnMovie(nav.search);
       if (returned) {
+        var acceptedEpisodeProgress = consumePlaybackHandoff(returned, "tv") ? returned.progress : null;
         core.writeSubtitlePref(local, returned.subtitle);
         pendingEpisodeFocus = { season: returned.season, episode: returned.episode };
         var old = core.readHistory(local || { getItem: function () { return null; } })
           .find(function (row) { return row.type === "tv" && row.id === returned.id; });
-        if (old && (old.season !== returned.season || old.episode !== returned.episode))
-          core.writeHistory(local, core.item("tv", old.id, old.title, returned.season,
-            returned.episode, returned.subtitle, Date.now(), old));
+        var episodeRow = core.readHistory(local).find(function (row) { return row.type === "tv" && row.id === returned.id
+          && row.season === returned.season && row.episode === returned.episode; });
+        if (old || acceptedEpisodeProgress) {
+          var returnedArtwork = Object.assign({}, old || {}, episodeRow || {});
+          returnedArtwork.episodeTitle = episodeRow && episodeRow.episodeTitle || returned.episodeTitle || "";
+          returnedArtwork.progress = acceptedEpisodeProgress || episodeRow && episodeRow.progress || null;
+          core.writeHistory(local, core.item("tv", returned.id,
+            old && old.title || "TV Show", returned.season, returned.episode,
+            returned.subtitle, Date.now(), returnedArtwork));
+        }
       }
       if (saved && saved.version === 1 && ["all", "movie", "tv"].indexOf(saved.filter) >= 0) {
         state.detailSource = saved.source === "history" ? "history" : "search";
@@ -807,10 +874,18 @@
         }, function () { text("search-status", "Could not restore show details. Search for the show to continue."); });
       }
       if (returnedMovie) {
+        var acceptedMovieProgress = consumePlaybackHandoff(returnedMovie, "movie") ? returnedMovie.progress : null;
         api("/api/title/movie/" + returnedMovie.id).then(function (value) {
+          var existingMovie = core.readHistory(local).find(function (row) { return row.type === "movie"
+            && row.id === returnedMovie.id; });
+          if (acceptedMovieProgress || existingMovie) core.writeHistory(local, core.item("movie", returnedMovie.id,
+            value.title, null, null, "off", Date.now(), Object.assign({}, existingMovie || {}, {
+              poster: existingMovie && existingMovie.poster || value.poster,
+              backdrop: existingMovie && existingMovie.backdrop || value.backdrop,
+              progress: acceptedMovieProgress || existingMovie && existingMovie.progress || null
+            })));
           openDetails(value);
           state.detailSource = saved && saved.source === "history" ? "history" : "search";
-          text("detail-status", "Movie restarts from the beginning when played again.");
         }, function () { text("search-status", "Could not restore movie details. Search for the movie to continue."); });
       }
       if ((returned || returnedMovie) && root.history && root.history.replaceState) root.history.replaceState(null, "",

@@ -19,7 +19,7 @@ test("TV player URL uses validated show ID, selected episode, subtitle, and fixe
   assert.equal(core.tvPlayerUrl(1396, 1, 0, "on", "Breaking Bad"), null);
   assert.equal(core.tvPlayerUrl(-1, 1, 1, "on", "Bad"), null);
   assert.deepEqual(JSON.parse(JSON.stringify(core.returnEpisode("?return=1&showId=1396&season=1&episode=4&sub=off"))),
-    { id: 1396, season: 1, episode: 4, subtitle: "off" });
+    { id: 1396, season: 1, episode: 4, subtitle: "off", episodeTitle: "", handoff: null, progress: null });
 });
 
 test("TVDB identity survives history and player URL without changing YapGrid show ID", () => {
@@ -35,7 +35,8 @@ test("movie adapter routes validated TMDB movie IDs to VidBolt with YapGrid sele
     "https://horizon-video-lab-preview.ali-al-anbari.workers.dev/player-overlay.html?type=movie&id=550&from=search&provider=vidbolt&name=Fight%20Club");
   assert.equal(player.movieUrl(-1, "Bad"), null);
   assert.equal(player.movieUrl(0, "Bad"), null);
-  assert.deepEqual(JSON.parse(JSON.stringify(core.returnMovie("?return=1&type=movie&id=550"))), { id: 550 });
+  assert.deepEqual(JSON.parse(JSON.stringify(core.returnMovie("?return=1&type=movie&id=550"))),
+    { id: 550, handoff: null, progress: null });
   assert.equal(core.returnMovie("?return=1&type=tv&id=550"), null);
   assert.equal(player.tvUrl(2190, 13, 2, "off", "South Park"),
     core.tvPlayerUrl(2190, 13, 2, "off", "South Park"));
@@ -80,6 +81,42 @@ test("movie starts replace the same TMDB movie and transfer as one Home row", ()
   assert.deepEqual(Array.from(core.homeRows(rows), row => row.type + ":" + row.id), ["movie:550", "tv:2190"]);
   core.clearHistory(store);
   assert.equal(core.readHistory(store).length, 0);
+});
+
+test("Watch history preserves validated VidBolt progress and keeps completed rows out of Continue Watching", () => {
+  const store = storage();
+  const partial = { position: 125.5, duration: 600, updatedAt: 1700000000000, provider: "vidbolt", completed: false };
+  const row = core.item("movie", 550, "Fight Club", null, null, "off", 200,
+    { poster: "/poster.jpg", progress: partial });
+  core.writeHistory(store, row);
+  core.writeHistory(store, core.item("movie", 550, "Fight Club", null, null, "off", 300,
+    { poster: "/poster.jpg" }));
+  assert.deepEqual(JSON.parse(JSON.stringify(core.readHistory(store)[0].progress)), partial);
+  assert.equal(core.continueRows(core.readHistory(store)).length, 1);
+  core.writeHistory(store, core.item("movie", 550, "Fight Club", null, null, "off", 400,
+    { progress: Object.assign({}, partial, { updatedAt: 1700000001000, completed: true }) }));
+  assert.equal(core.continueRows(core.readHistory(store)).length, 0);
+  assert.equal(core.readHistory(store).length, 1, "completed title remains in History");
+  assert.equal(core.clearProgress(store, "movie", 550), true, "Start Over clears only resume metadata");
+  assert.equal(core.readHistory(store)[0].progress, null);
+  assert.equal(core.readHistory(store).length, 1, "clearing progress does not erase History");
+});
+
+test("progress records and Watch return handoffs reject invalid or mismatched fields", () => {
+  const saved = { position: 20, duration: 100, updatedAt: 1700000000000, provider: "vidbolt", completed: false };
+  assert.equal(core.progressRecord(Object.assign({}, saved, { position: 105 })), null);
+  assert.equal(core.progressRecord(Object.assign({}, saved, { provider: "yapgrid" })), null);
+  const record = core.item("tv", 1396, "Breaking Bad", 1, 4, "off", 1,
+    { progress: saved });
+  const url = core.tvPlayerUrl(record.id, record.season, record.episode, record.subtitle, record.title,
+    null, record.progress, false, "session_abc123");
+  assert.match(url, /resume=20&duration=100&resumeUpdated=1700000000000&handoff=session_abc123$/);
+  const returned = core.returnEpisode("?return=1&showId=1396&season=1&episode=4&handoff=session_abc123"
+    + "&position=20&duration=100&updated=1700000000000&progressProvider=vidbolt");
+  assert.equal(returned.progress.position, 20);
+  assert.equal(returned.handoff, "session_abc123");
+  assert.equal(core.returnEpisode("?return=1&showId=1396&season=1&episode=4&position=20&duration=100&updated=1"
+    + "&progressProvider=yapgrid").progress, null);
 });
 
 test("Home history groups shows, keeps movies, orders newest first, and limits to six", () => {

@@ -86,6 +86,7 @@
     var boltSession = null;
     var boltWatchdogTimer = null;
     var boltLastConfirmed = null;
+    var boltRestoreRequest = null;
     var boltPosition = null;
     var boltPositionAt = 0;
     var boltDuration = null;
@@ -114,6 +115,97 @@
     var diagnosticSelected = 0;
     var isMovie = route.mediaType === "movie";
     var currentEpisode = route.current || {};
+    var PLAYER_PROGRESS_KEY = "horizon-video-lab-progress-v1";
+    var playerProgressStorage = options && options.progressStorage;
+    try { if (!playerProgressStorage) playerProgressStorage = root.localStorage; } catch (_error) { playerProgressStorage = null; }
+    var initialSavedProgress = route.startOver ? null : route.resumePosition !== null && route.resumeDuration !== null
+      && route.resumePosition > 0 && route.resumePosition <= route.resumeDuration + 2
+      ? { position: Math.min(route.resumePosition, route.resumeDuration), duration: route.resumeDuration,
+        updatedAt: route.resumeUpdatedAt || 1, provider: "vidbolt", completed: false } : null;
+    var initialRestoreTarget = null;
+    var initialRestoreConsumed = false;
+    var progressLastWriteAt = 0;
+    function readPlayerProgress(identity) {
+      try {
+        var parsed = JSON.parse(playerProgressStorage && playerProgressStorage.getItem(PLAYER_PROGRESS_KEY) || "null");
+        var record = parsed && parsed.version === 1 && Array.isArray(parsed.items)
+          ? parsed.items.find(function (entry) { return entry && entry.identity === identity; }) : null;
+        if (!record || !Number.isFinite(record.position) || record.position <= 0
+            || !Number.isFinite(record.duration) || record.duration <= 0 || record.duration > 10000000
+            || record.position > record.duration + 2
+            || !Number.isFinite(record.updatedAt) || record.provider !== "vidbolt") return null;
+        return { position: Math.min(record.position, record.duration), duration: record.duration,
+          updatedAt: record.updatedAt, provider: "vidbolt", completed: record.completed === true };
+      } catch (_error) { return null; }
+    }
+    function clearPlayerProgress(identity) {
+      if (!playerProgressStorage) return;
+      try {
+        var parsed = JSON.parse(playerProgressStorage.getItem(PLAYER_PROGRESS_KEY) || "null");
+        var items = parsed && parsed.version === 1 && Array.isArray(parsed.items) ? parsed.items : [];
+        playerProgressStorage.setItem(PLAYER_PROGRESS_KEY, JSON.stringify({ version: 1,
+          items: items.filter(function (entry) { return entry && entry.identity !== identity; }) }));
+      } catch (_error) {}
+    }
+    function storePlayerProgress(position, duration, completed, force, allowRegression) {
+      if (provider !== providers.VIDBOLT || !playerProgressStorage || !Number.isFinite(position)
+          || !Number.isFinite(duration) || duration <= 0 || duration > 10000000
+          || position <= 0 || position > duration + 2) return null;
+      var stamp = Date.now();
+      if (!force && stamp - progressLastWriteAt < 5000) return null;
+      var record = { identity: boltIdentity(), position: Math.min(position, duration), duration: duration,
+        updatedAt: stamp, provider: "vidbolt", completed: completed === true };
+      try {
+        var parsed = JSON.parse(playerProgressStorage.getItem(PLAYER_PROGRESS_KEY) || "null");
+        var items = parsed && parsed.version === 1 && Array.isArray(parsed.items) ? parsed.items : [];
+        var existing = items.find(function (entry) { return entry && entry.identity === record.identity; });
+        if (existing && Number.isFinite(existing.position) && Number.isFinite(existing.duration)
+            && record.position + 1 < existing.position && !allowRegression) {
+          if (!completed) return null;
+          record.position = Math.min(existing.position, existing.duration);
+          record.duration = existing.duration;
+        }
+        items = items.filter(function (entry) { return entry && entry.identity !== record.identity; });
+        items.unshift(record); items = items.slice(0, 100);
+        playerProgressStorage.setItem(PLAYER_PROGRESS_KEY, JSON.stringify({ version: 1, items: items }));
+        progressLastWriteAt = stamp;
+        return record;
+      } catch (_error) { return null; }
+    }
+    function confirmedProgressRecord() {
+      if (provider !== providers.VIDBOLT || !boltSession || boltSession.identity !== boltIdentity()) return null;
+      var position = boltLastConfirmed && boltLastConfirmed.identity === boltIdentity()
+        ? boltLastConfirmed.position : boltPosition;
+      if (boltSession.restoreKind === "resume" && boltSession.restoreResult === "position confirmed"
+          && boltSession.advancedAt === null && boltSession.restoreBaseline) return boltSession.restoreBaseline;
+      if (!Number.isFinite(position) || !Number.isFinite(boltDuration) || boltDuration <= 0 || boltDuration > 10000000
+          || position <= 0 || position > boltDuration + 2) return null;
+      return { position: Math.min(position, boltDuration), duration: boltDuration,
+        updatedAt: Date.now(), provider: "vidbolt", completed: boltSession.endedAt !== null };
+    }
+    function markStoredProgressComplete() {
+      var identity = boltIdentity();
+      var saved = readPlayerProgress(identity);
+      if (!saved || !playerProgressStorage) return;
+      saved.completed = true; saved.updatedAt = Date.now();
+      try {
+        var parsed = JSON.parse(playerProgressStorage.getItem(PLAYER_PROGRESS_KEY) || "null");
+        var items = parsed && Array.isArray(parsed.items) ? parsed.items.filter(function (entry) {
+          return entry && entry.identity !== identity;
+        }) : [];
+        items.unshift(Object.assign({ identity: identity }, saved));
+        playerProgressStorage.setItem(PLAYER_PROGRESS_KEY, JSON.stringify({ version: 1, items: items.slice(0, 100) }));
+      } catch (_error) {}
+    }
+    if (route.startOver) clearPlayerProgress(isMovie ? "movie:" + currentEpisode.movieId
+      : "tv:" + currentEpisode.showId + ":" + currentEpisode.season + ":" + currentEpisode.episode);
+    if (!route.startOver) {
+      var cachedProgress = readPlayerProgress(isMovie ? "movie:" + currentEpisode.movieId
+        : "tv:" + currentEpisode.showId + ":" + currentEpisode.season + ":" + currentEpisode.episode);
+      var selectedProgress = initialSavedProgress && (!cachedProgress || initialSavedProgress.updatedAt >= cachedProgress.updatedAt)
+        ? initialSavedProgress : cachedProgress;
+      if (selectedProgress && !selectedProgress.completed) initialRestoreTarget = Math.max(0, selectedProgress.position - 10);
+    }
     var manualEndEnabled = !isMovie && route.testEnd && currentEpisode.showId === 2190 && nav.origin === PREVIEW_ORIGIN;
     var resolver = options && options.episodeResolver || (!isMovie && (currentEpisode.showId === 2190 || route.tvdbId)
       ? catalog.createResolver({ clock: clock, showId: currentEpisode.showId, tvdbId: route.tvdbId }) : {
@@ -254,6 +346,7 @@
           ? boltLastConfirmed.position + "s" : "unavailable")
         + "; last advance " + boltAge(s.advancedAt) + " (" + boltPageTime(s.advancedAt) + ")"
         + "; duration " + (s.duration === null ? "unavailable" : s.duration + "s")
+        + "; position restore " + (s.restoreResult || "none")
         + "; state " + (s.endedAt !== null ? "ended" : s.paused === true ? "paused"
           : s.pauseIntent ? "pause requested, unconfirmed" : s.paused === false ? "playing" : "unknown")
         + "; ended " + boltAge(s.endedAt) + "; iframe error " + boltAge(s.frameErrorAt)
@@ -299,6 +392,10 @@
         s.watchdogCheckedAt = now();
         if (boltSeekPending && now() >= s.seekUntil) {
           boltSeekPending = false; s.seekTarget = null; s.seekUnconfirmed = true;
+          if (s.restoreSent && s.restoreResult === "awaiting position confirmation") {
+            s.restoreResult = "not confirmed; playback remains available";
+            get("command-status").textContent = "VidBolt did not confirm the saved position; playback remains available from its current position.";
+          }
         }
         var reason = null;
         if (!transitionStarted && !episodeLookupPending
@@ -336,6 +433,27 @@
         diagnostics.recordCommand("volume100");
       }
     }
+    function issueBoltRestore(s) {
+      if (!s || s.restoreTarget === null || s.restoreAttempted || provider !== providers.VIDBOLT
+          || s.identity !== boltIdentity()) return;
+      s.restoreAttempted = true;
+      var target = s.duration > 0 ? Math.min(s.restoreTarget, s.duration) : s.restoreTarget;
+      if (!providers.sendCommand(frame, "seek", [target], provider)) {
+        s.restoreResult = "seek command could not be sent";
+        get("command-status").textContent = "Saved position is unavailable to VidBolt; playback continues from its current position.";
+        return;
+      }
+      s.restoreSent = true;
+      s.restoreSentAt = now();
+      s.seekTarget = target;
+      s.seekUntil = now() + BOLT_SEEK_GRACE_MS;
+      s.seekUnconfirmed = true;
+      s.restoreResult = "awaiting position confirmation";
+      boltSeekPending = true;
+      diagnostics.recordCommand("seek");
+      get("command-status").textContent = (s.restoreKind === "recovery" ? "Recovery position" : "Resume position")
+        + " requested at " + boltClock(target) + "; awaiting VidBolt confirmation.";
+    }
     function recordBoltEvent(message) {
       var s = boltSession;
       if (!s) return;
@@ -343,6 +461,7 @@
       if (message.type === "vidbolt:ready") {
         if (s.readyAt === null) s.readyAt = time;
         initializeBoltVolume();
+        issueBoltRestore(s);
       } else if (message.type === "vidbolt:play") {
         if (s.playAt === null) s.playAt = time;
         if (s.controlPending && s.controlPending.type === "pause"
@@ -358,6 +477,7 @@
           clearUpNext();
         }
         initializeBoltVolume(); // ready may have been missed.
+        issueBoltRestore(s);
       } else if (message.type === "vidbolt:pause") {
         if (s.controlPending && s.controlPending.type === "play"
             && time - s.controlPending.at < BOLT_CONTROL_PENDING_MS) return;
@@ -367,6 +487,9 @@
         if (movieLoadTimer !== null) { clock.clearTimeout(movieLoadTimer); movieLoadTimer = null; }
         get("player-loading").classList.remove("is-warning");
         get("player-loading").hidden = true;
+        var pausedProgress = confirmedProgressRecord();
+        if (pausedProgress) storePlayerProgress(pausedProgress.position, pausedProgress.duration,
+          pausedProgress.completed, true);
       } else if (message.type === "vidbolt:ended") {
         s.controlPending = null;
         clearBoltControlTimer();
@@ -375,6 +498,9 @@
         if (movieLoadTimer !== null) { clock.clearTimeout(movieLoadTimer); movieLoadTimer = null; }
         get("player-loading").classList.remove("is-warning");
         get("player-loading").hidden = true;
+        var endedProgress = confirmedProgressRecord();
+        if (endedProgress) storePlayerProgress(endedProgress.position, endedProgress.duration, true, true);
+        else markStoredProgressComplete();
       } else if (message.type === "vidbolt:durationchange") {
         s.duration = message.duration;
       } else if (message.type === "vidbolt:mobile-panel") {
@@ -392,7 +518,23 @@
             || s.seekUnconfirmed || message.currentTime < s.progressReference)
           s.progressReference = message.currentTime;
         if (s.seekUnconfirmed) s.seekUnconfirmed = false;
-        if (seekArrival) { s.seekTarget = null; s.seekUntil = time + 5000; }
+        if (seekArrival) {
+          s.seekTarget = null; s.seekUntil = time + 5000;
+          if (s.restoreSent) {
+            s.restoreResult = "position confirmed";
+            if (s.restoreKind === "recovery") {
+              boltLastConfirmed = { identity: s.identity, position: message.currentTime };
+              storePlayerProgress(message.currentTime, s.duration, false, true, true);
+            }
+            get("command-status").textContent = (s.restoreKind === "recovery" ? "Recovery" : "Resume")
+              + " position confirmed by VidBolt timeupdate.";
+            s.restoreTarget = null;
+            s.restoreSent = false;
+          } else {
+            boltLastConfirmed = { identity: s.identity, position: message.currentTime };
+            storePlayerProgress(message.currentTime, s.duration, false, true, true);
+          }
+        }
         if (!seekArrival && s.seekTarget === null && time >= s.seekUntil
             && message.currentTime > s.progressReference + 0.25) {
           s.advancedAt = time;
@@ -404,6 +546,9 @@
           providerFailed = false;
           s.progressReference = message.currentTime;
           boltLastConfirmed = { identity: s.identity, position: message.currentTime };
+          storePlayerProgress(message.currentTime, s.duration, false, false);
+          if (s.duration > 0 && message.currentTime / s.duration >= 0.95)
+            storePlayerProgress(message.currentTime, s.duration, true, true);
           if (s.volumeSentAt === null) initializeBoltVolume(); // Both ready and play may be missed.
           if (boltRecoveryGeneration === s.generation && boltRecoveryResult === "awaiting position advance") {
             boltRecoveryResult = "position advancing (picture/audio unverified)";
@@ -415,6 +560,9 @@
         }
         s.position = message.currentTime;
         s.positionAt = time;
+        boltPosition = message.currentTime;
+        boltPositionAt = time;
+        boltDuration = s.duration;
         // A provider timeupdate is the confirmed position. Seek preview targets
         // never reach this check, so a validated seek to the completion range
         // is eligible just like any other reported position.
@@ -425,8 +573,13 @@
     function recoverBolt(reason) {
       if (disposed || provider !== providers.VIDBOLT || route.invalid || !boltSession || activeBatch) return;
       if (reason !== "manual" && boltAutoAttempts >= 1) return;
+      var last = confirmedProgressRecord();
       var restore = boltLastConfirmed && boltLastConfirmed.identity === boltIdentity()
-        ? boltLastConfirmed.position : null;
+        ? boltLastConfirmed.position : last && last.position;
+      if (restore === null && boltSession.restoreBaseline
+          && boltSession.restoreBaseline.provider === "vidbolt") restore = boltSession.restoreBaseline.position;
+      if (restore === null && boltSession.restoreTarget !== null
+          && boltSession.identity === boltIdentity()) restore = boltSession.restoreTarget;
       if (reason !== "manual") boltAutoAttempts += 1;
       boltRecoveryAttempts += 1;
       boltLastRecoveryAt = now();
@@ -440,9 +593,11 @@
       boltRecoveryFromGeneration = boltSession.generation;
       boltRecoveryFromLoads = boltSession.loadCount + " from " + boltSession.parentUrlAssignments
         + " parent URL assignment(s)";
+      boltRestoreRequest = restore !== null && Number.isFinite(restore) && restore >= 0
+        ? { identity: boltIdentity(), target: restore, kind: "recovery" } : null;
       unloadFrame();
       vidBoltAutoplay = true;
-      loadProviderFrame(restore, true);
+      loadProviderFrame(null, true);
       boltRecoveryGeneration = boltSession ? boltSession.generation : null;
       boltRecoveryDecision = reason === "manual" ? "manual recovery requested" : "active iframe error; automatic recovery used";
       get("command-status").textContent = "VidBolt recovery " + boltRecoveryAttempts + ": " + boltLastRecoveryReason
@@ -894,8 +1049,8 @@
         focus(menuButtons[0]);
         return;
       }
-      transitionTo(catalog.pageUrl(currentEpisode, subtitleMode === "on" ? "off" : "on",
-        manualEndEnabled, null, route.fromSearch, route.showTitle, route.tvdbId, provider));
+      transitionTo(appendHandoff(catalog.pageUrl(currentEpisode, subtitleMode === "on" ? "off" : "on",
+        manualEndEnabled, null, route.fromSearch, route.showTitle, route.tvdbId, provider)));
     }
     function restoreFromCommand(reason, late, parentFocused) {
       if (disposed || state !== STATES.COMMAND_IN_PROGRESS) return;
@@ -1186,25 +1341,34 @@
     }
     function episodeListUrl() {
       if (route.fromSearch && !isMovie && !route.invalid) {
-        return "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/?return=1&episodes=1"
-          + "&showId=" + currentEpisode.showId + "&season=" + currentEpisode.season
-          + "&episode=" + currentEpisode.episode + "&sub=" + subtitleMode;
+        return watchReturnUrl(true);
       }
       return catalog.pageUrl(currentEpisode, subtitleMode, manualEndEnabled, "list", route.fromSearch, route.showTitle, route.tvdbId, provider);
     }
+    function watchReturnUrl(episodes) {
+      var query = isMovie ? "?return=1&type=movie&id=" + currentEpisode.movieId
+        : "?return=1" + (episodes ? "&episodes=1" : "") + "&showId=" + currentEpisode.showId
+          + "&season=" + currentEpisode.season + "&episode=" + currentEpisode.episode + "&sub=" + subtitleMode;
+      if (!isMovie && currentEpisode.title) query += "&episodeTitle=" + encodeURIComponent(String(currentEpisode.title).slice(0, 160));
+      if (route.handoff) query += "&handoff=" + encodeURIComponent(route.handoff);
+      var saved = confirmedProgressRecord() || readPlayerProgress(boltIdentity());
+      if (saved && saved.provider === "vidbolt") query += "&position=" + encodeURIComponent(saved.position)
+        + "&duration=" + encodeURIComponent(saved.duration) + "&updated=" + encodeURIComponent(saved.updatedAt)
+        + "&progressProvider=vidbolt" + (saved.completed ? "&completed=1" : "");
+      return "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/" + query;
+    }
     function launchEpisode(target) {
-      transitionTo(catalog.pageUrl(target, subtitleMode, manualEndEnabled, null, route.fromSearch, route.showTitle, route.tvdbId, provider));
+      transitionTo(appendHandoff(catalog.pageUrl(target, subtitleMode, manualEndEnabled, null,
+        route.fromSearch, route.showTitle, route.tvdbId, provider)));
+    }
+    function appendHandoff(url) {
+      return url && route.handoff ? url + (url.indexOf("?") >= 0 ? "&" : "?")
+        + "handoff=" + encodeURIComponent(route.handoff) : url;
     }
     function exitPlayer() {
       if (!route.fromSearch) { dispose(); nav.replace("embed-matrix.html"); return; }
-      if (isMovie) {
-        var movieReturn = "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/"
-          + (route.invalid ? "" : "?return=1&type=movie&id=" + currentEpisode.movieId);
-        dispose(); nav.replace(movieReturn); return;
-      }
-      var url = "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/?return=1"
-        + "&showId=" + currentEpisode.showId + "&season=" + currentEpisode.season
-        + "&episode=" + currentEpisode.episode + "&sub=" + subtitleMode;
+      var url = isMovie && route.invalid ? "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/"
+        : watchReturnUrl(false);
       dispose(); nav.replace(url);
     }
     function transitionEpisode(direction) {
@@ -1845,6 +2009,11 @@
       resetIdle();
     }
     function unloadFrame() {
+      if (provider === providers.VIDBOLT) {
+        var unloadedProgress = confirmedProgressRecord();
+        if (unloadedProgress) storePlayerProgress(unloadedProgress.position, unloadedProgress.duration,
+          unloadedProgress.completed, true);
+      }
       clearBoltControlTimer();
       clearBoltWatchdog();
       boltSession = null;
@@ -1918,7 +2087,7 @@
         nav.origin, catalog, provider === providers.VIDFAST ? vidFastMode
           : provider === providers.VIDLINK ? vidLinkMode
           : provider === providers.VIDBOLT ? (vidBoltAutoplay ? "autoPlayTrue" : "autoPlayOff")
-          : compatibilityMode, provider === providers.VIDBOLT && recovering ? resumeAt : null);
+          : compatibilityMode, null);
       if (!url) {
         loading(isMovie ? "Invalid movie ID. Press Back to return to Horizon Watch."
           : "Invalid episode ID. Press Back to return to Horizon Watch.");
@@ -1939,6 +2108,15 @@
       }
       frame.src = url;
       if (provider === providers.VIDBOLT) {
+        var restoreForSession = null;
+        if (boltRestoreRequest && boltRestoreRequest.identity === boltIdentity()) {
+          restoreForSession = boltRestoreRequest;
+          boltRestoreRequest = null;
+        } else if (!recovering && !initialRestoreConsumed && initialRestoreTarget !== null) {
+          restoreForSession = { identity: boltIdentity(), target: initialRestoreTarget, kind: "resume" };
+          initialRestoreConsumed = true;
+          initialRestoreTarget = null;
+        }
         boltSession = { generation: ++boltGeneration, identity: boltIdentity(), createdAt: now(),
           loadedAt: null, latestLoadAt: null, loadCount: 0, parentUrlAssignments: 1,
           frameErrorAt: null, readyAt: null, playAt: null, pauseAt: null,
@@ -1952,7 +2130,12 @@
           suspectedAt: null, seekUntil: 0, seekTarget: null,
           seekUnconfirmed: false,
           monitorSince: now(),
-          autoplayRequested: vidBoltAutoplay, volumeSentAt: null, volumeAttempts: 0 };
+          autoplayRequested: vidBoltAutoplay, volumeSentAt: null, volumeAttempts: 0,
+          restoreTarget: restoreForSession ? restoreForSession.target : null,
+          restoreKind: restoreForSession ? restoreForSession.kind : null,
+          restoreBaseline: restoreForSession && restoreForSession.kind === "resume" ? selectedProgress : null,
+          restoreAttempted: false, restoreSent: false, restoreSentAt: null,
+          restoreResult: restoreForSession ? "waiting for ready" : "none" };
         renderBoltPlayPause();
         scheduleBoltWatchdog();
       } else boltSession = null;

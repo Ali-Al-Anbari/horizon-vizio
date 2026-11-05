@@ -6,23 +6,35 @@
   var PREFS_KEY = "horizon-universal-search-providers-v1";
   var SUBTITLE_KEY = "horizon-watch-subtitles-v1";
   var STATE_KEY = "horizon-universal-search-view-v1";
+  var HANDOFF_KEY = "horizon-watch-player-handoff-v1";
   var APP_NAMES = { "Amazon Prime Video": "Prime Video", "Disney Plus": "Disney+",
     "Plex": "Plex", "YouTube": "YouTube" };
   function positive(value) { return typeof value === "number" && isFinite(value) && value % 1 === 0
     && value > 0 && value <= 999999999; }
   function safeText(value, max) { return typeof value === "string" ? value.slice(0, max) : ""; }
+  function progressRecord(value) {
+    if (!value || typeof value !== "object") return null;
+    var position = Number(value.position), duration = Number(value.duration), updatedAt = Number(value.updatedAt);
+    if (!Number.isFinite(position) || position <= 0 || !Number.isFinite(duration) || duration <= 0 || duration > 10000000
+        || position > duration + 2 || !Number.isFinite(updatedAt) || updatedAt <= 0
+        || updatedAt > 8640000000000000 || value.provider !== "vidbolt") return null;
+    return { position: Math.min(position, duration), duration: duration, updatedAt: updatedAt,
+      provider: "vidbolt", completed: value.completed === true };
+  }
   function imagePath(path) { return typeof path === "string" && /^\/[a-zA-Z0-9._-]{1,90}$/.test(path) ? path : null; }
   function item(type, id, title, season, episode, subtitle, at, artwork) {
     if ((type !== "tv" && type !== "movie") || !positive(id) || !safeText(title, 160)
         || !Number.isFinite(at) || at < 0 || at > 8640000000000000) return null;
     if (type === "tv" && (!positive(season) || !positive(episode))) return null;
     artwork = artwork || {};
+    var progress = progressRecord(artwork.progress);
     return { type: type, id: id, title: safeText(title, 160),
       season: type === "tv" ? season : null, episode: type === "tv" ? episode : null,
       subtitle: subtitle === "on" ? "on" : "off", at: at,
       poster: imagePath(artwork.poster), backdrop: imagePath(artwork.backdrop),
       episodeTitle: type === "tv" ? safeText(artwork.episodeTitle, 160) : "",
-      tvdbId: type === "tv" && positive(artwork.tvdbId) ? artwork.tvdbId : null };
+      tvdbId: type === "tv" && positive(artwork.tvdbId) ? artwork.tvdbId : null,
+      progress: progress };
   }
   function historyKey(row) { return row.type + ":" + row.id + (row.type === "tv" ? ":" + row.season + ":" + row.episode : ""); }
   function readHistory(storage) {
@@ -43,6 +55,10 @@
     if (!entry) return readHistory(storage);
     entry = item(entry.type, entry.id, entry.title, entry.season, entry.episode, entry.subtitle, entry.at, entry);
     if (!entry) return readHistory(storage);
+    var previous = readHistory(storage).find(function (row) { return historyKey(row) === historyKey(entry); });
+    if (!entry.progress && previous && previous.progress) entry.progress = previous.progress;
+    if (entry.progress && previous && previous.progress
+        && previous.progress.updatedAt > entry.progress.updatedAt) entry.progress = previous.progress;
     var rows = readHistory(storage).filter(function (row) { return historyKey(row) !== historyKey(entry); });
     rows.unshift(entry); rows.sort(function (a, b) { return b.at - a.at; }); rows = rows.slice(0, 100);
     try { storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: rows })); }
@@ -50,6 +66,15 @@
     return rows;
   }
   function clearHistory(storage) { try { storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: [] })); } catch (_error) {} }
+  function clearProgress(storage, type, id, season, episode) {
+    var rows = readHistory(storage);
+    var target = rows.find(function (row) { return row.type === type && row.id === id
+      && (type !== "tv" || row.season === season && row.episode === episode); });
+    if (!target) return false;
+    target.progress = null;
+    try { storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: rows })); return true; }
+    catch (_error) { return false; }
+  }
   function groupedHistory(rows) {
     var seen = {};
     return rows.filter(function (row) { var key = row.type + ":" + row.id;
@@ -58,6 +83,9 @@
     });
   }
   function homeRows(rows) { return groupedHistory(rows).slice(0, 6); }
+  function continueRows(rows) { return groupedHistory(rows).filter(function (row) {
+    return !row.progress || row.progress.completed !== true;
+  }).slice(0, 6); }
   function rankResults(rows, query) {
     var q = String(query || "").toLocaleLowerCase().trim();
     if (!q) return rows.slice();
@@ -100,17 +128,26 @@
     if (mode !== "on" && mode !== "off") return;
     try { storage.setItem(SUBTITLE_KEY, JSON.stringify({ version: 1, mode: mode })); } catch (_error) {}
   }
-  function tvPlayerUrl(id, season, episode, subtitle, title, tvdbId) {
+  function playerResumeParams(progress, startOver) {
+    if (startOver) return "&startOver=1";
+    var record = progressRecord(progress);
+    return record ? "&resume=" + Math.floor(record.position) + "&duration=" + Math.floor(record.duration)
+      + "&resumeUpdated=" + Math.floor(record.updatedAt) : "";
+  }
+  function tvPlayerUrl(id, season, episode, subtitle, title, tvdbId, progress, startOver, handoff) {
     if (!positive(id) || !positive(season) || !positive(episode)) return null;
     var url = PLAYER_ORIGIN + "/player-overlay.html?season=" + season + "&episode=" + episode
       + "&sub=" + (subtitle === "on" ? "on" : "off") + "&showId=" + id + "&from=search&provider=vidbolt";
     return url + (safeText(title, 120) ? "&name=" + encodeURIComponent(safeText(title, 120)) : "")
-      + (positive(tvdbId) ? "&tvdb=" + tvdbId : "");
+      + (positive(tvdbId) ? "&tvdb=" + tvdbId : "") + playerResumeParams(progress, startOver)
+      + (typeof handoff === "string" && /^[A-Za-z0-9_-]{8,80}$/.test(handoff) ? "&handoff=" + handoff : "");
   }
-  function moviePlayerUrl(id, title) {
+  function moviePlayerUrl(id, title, progress, startOver, handoff) {
     if (!positive(id)) return null;
     return PLAYER_ORIGIN + "/player-overlay.html?type=movie&id=" + id + "&from=search&provider=vidbolt"
-      + (safeText(title, 120) ? "&name=" + encodeURIComponent(safeText(title, 120)) : "");
+      + (safeText(title, 120) ? "&name=" + encodeURIComponent(safeText(title, 120)) : "")
+      + playerResumeParams(progress, startOver)
+      + (typeof handoff === "string" && /^[A-Za-z0-9_-]{8,80}$/.test(handoff) ? "&handoff=" + handoff : "");
   }
   function imageUrl(path, size) {
     return imagePath(path)
@@ -167,18 +204,29 @@
     if (params.get("return") !== "1") return null;
     var id = Number(params.get("showId")), season = Number(params.get("season"));
     var episode = Number(params.get("episode"));
-    return positive(id) && positive(season) && positive(episode)
-      ? { id: id, season: season, episode: episode, subtitle: params.get("sub") === "on" ? "on" : "off" } : null;
+    if (!positive(id) || !positive(season) || !positive(episode)) return null;
+    return { id: id, season: season, episode: episode, subtitle: params.get("sub") === "on" ? "on" : "off",
+      episodeTitle: safeText(params.get("episodeTitle"), 160),
+      handoff: /^[A-Za-z0-9_-]{8,80}$/.test(params.get("handoff") || "") ? params.get("handoff") : null,
+      progress: progressRecord({ position: Number(params.get("position")), duration: Number(params.get("duration")),
+        updatedAt: Number(params.get("updated")), provider: params.get("progressProvider"),
+        completed: params.get("completed") === "1" }) };
   }
   function returnMovie(search) {
     var params = new URLSearchParams(search || "");
     var id = Number(params.get("id"));
-    return params.get("return") === "1" && params.get("type") === "movie" && positive(id) ? { id: id } : null;
+    return params.get("return") === "1" && params.get("type") === "movie" && positive(id) ? { id: id,
+      handoff: /^[A-Za-z0-9_-]{8,80}$/.test(params.get("handoff") || "") ? params.get("handoff") : null,
+      progress: progressRecord({ position: Number(params.get("position")), duration: Number(params.get("duration")),
+        updatedAt: Number(params.get("updated")), provider: params.get("progressProvider"),
+        completed: params.get("completed") === "1" }) } : null;
   }
   root.HorizonSearchCore = { PLAYER_ORIGIN: PLAYER_ORIGIN, LAUNCHER_ORIGIN: LAUNCHER_ORIGIN,
-    HISTORY_KEY: HISTORY_KEY, PREFS_KEY: PREFS_KEY, SUBTITLE_KEY: SUBTITLE_KEY, STATE_KEY: STATE_KEY, item: item,
-    readHistory: readHistory, writeHistory: writeHistory, clearHistory: clearHistory, groupedHistory: groupedHistory,
-    homeRows: homeRows, rankResults: rankResults,
+    HISTORY_KEY: HISTORY_KEY, PREFS_KEY: PREFS_KEY, SUBTITLE_KEY: SUBTITLE_KEY, STATE_KEY: STATE_KEY,
+    HANDOFF_KEY: HANDOFF_KEY, progressRecord: progressRecord, item: item,
+    readHistory: readHistory, writeHistory: writeHistory, clearHistory: clearHistory,
+    clearProgress: clearProgress, groupedHistory: groupedHistory,
+    homeRows: homeRows, continueRows: continueRows, rankResults: rankResults,
     readPrefs: readPrefs, writePrefs: writePrefs, readSubtitlePref: readSubtitlePref, writeSubtitlePref: writeSubtitlePref,
     tvPlayerUrl: tvPlayerUrl, moviePlayerUrl: moviePlayerUrl, imageUrl: imageUrl, providerApp: providerApp, providerWatchUrl: providerWatchUrl,
     websiteSearch: websiteSearch, returnEpisode: returnEpisode, returnMovie: returnMovie, providerIdentity: providerIdentity,

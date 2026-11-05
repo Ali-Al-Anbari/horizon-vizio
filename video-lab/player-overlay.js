@@ -159,6 +159,7 @@
         var parsed = JSON.parse(playerProgressStorage.getItem(PLAYER_PROGRESS_KEY) || "null");
         var items = parsed && parsed.version === 1 && Array.isArray(parsed.items) ? parsed.items : [];
         var existing = items.find(function (entry) { return entry && entry.identity === record.identity; });
+        if (existing && existing.completed === true) record.completed = true;
         if (existing && Number.isFinite(existing.position) && Number.isFinite(existing.duration)
             && record.position + 1 < existing.position && !allowRegression) {
           if (!completed) return null;
@@ -1351,7 +1352,12 @@
           + "&season=" + currentEpisode.season + "&episode=" + currentEpisode.episode + "&sub=" + subtitleMode;
       if (!isMovie && currentEpisode.title) query += "&episodeTitle=" + encodeURIComponent(String(currentEpisode.title).slice(0, 160));
       if (route.handoff) query += "&handoff=" + encodeURIComponent(route.handoff);
-      var saved = confirmedProgressRecord() || readPlayerProgress(boltIdentity());
+      var confirmed = confirmedProgressRecord();
+      var prior = readPlayerProgress(boltIdentity());
+      var flushed = confirmed && boltSession && boltSession.advancedAt !== null
+        ? storePlayerProgress(confirmed.position, confirmed.duration,
+          confirmed.completed || !!(prior && prior.completed), true) : null;
+      var saved = flushed || readPlayerProgress(boltIdentity()) || confirmed;
       if (saved && saved.provider === "vidbolt") query += "&position=" + encodeURIComponent(saved.position)
         + "&duration=" + encodeURIComponent(saved.duration) + "&updated=" + encodeURIComponent(saved.updatedAt)
         + "&progressProvider=vidbolt" + (saved.completed ? "&completed=1" : "");

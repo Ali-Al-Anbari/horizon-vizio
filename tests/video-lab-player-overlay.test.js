@@ -1792,6 +1792,40 @@ test("VidBolt resume waits for ready, rewinds ten seconds, and confirms the abso
   assert.equal(saved.read().items[0].position, 50, "the contextual rewind does not replace the saved place");
 });
 
+test("Watch return flushes the newest confirmed absolute episode position after a second session", () => {
+  const saved = progressStorage([{ identity: "tv:1396:1:4", position: 300, duration: 1800,
+    updatedAt: 1700000000000, provider: "vidbolt", completed: false }]);
+  const app = setup({ search: "?showId=1396&season=1&episode=4&provider=vidbolt&from=search&handoff=session_abc123",
+    progressStorage: saved });
+  app.message({ type: "ready" }, "https://vidbolt.xyz");
+  assert.equal(app.posted.at(-1).data.time, 290, "Resume uses the ten-second context rewind");
+  app.message({ type: "timeupdate", time: 290, duration: 1800 }, "https://vidbolt.xyz");
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.advance(6000);
+  app.message({ type: "timeupdate", time: 899, duration: 1800 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 900, duration: 1800 }, "https://vidbolt.xyz");
+  app.key("ArrowDown");
+  app.get("watch-exit").click();
+  const returned = new URL(app.navigation.at(-1));
+  assert.equal(Number(returned.searchParams.get("position")), 900);
+  assert.equal(saved.read().items[0].position, 900, "exit flushes the latest confirmed point");
+  assert.equal(returned.searchParams.get("episode"), "4");
+});
+
+test("exit flushing does not undo an already confirmed completion", () => {
+  const saved = progressStorage([{ identity: "movie:550", position: 96, duration: 100,
+    updatedAt: 1700000000000, provider: "vidbolt", completed: true }]);
+  const app = setup({ search: "?type=movie&id=550&provider=vidbolt&from=search&handoff=session_abc123",
+    progressStorage: saved });
+  app.message({ type: "ready" }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 30, duration: 100 }, "https://vidbolt.xyz");
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 31, duration: 100 }, "https://vidbolt.xyz");
+  app.get("watch-exit").click();
+  assert.equal(saved.read().items[0].completed, true);
+  assert.equal(saved.read().items[0].position, 96);
+});
+
 test("manual Recover during pending resume restores the saved place exactly once without the recap rewind", () => {
   const saved = progressStorage([{ identity: "movie:550", position: 50, duration: 100,
     updatedAt: 1700000000000, provider: "vidbolt", completed: false }]);

@@ -7,10 +7,13 @@
   var SUBTITLE_KEY = "horizon-watch-subtitles-v1";
   var STATE_KEY = "horizon-universal-search-view-v1";
   var HANDOFF_KEY = "horizon-watch-player-handoff-v1";
+  var BROWSED_SEASONS_KEY = "horizon-watch-browsed-seasons-v1";
   var APP_NAMES = { "Amazon Prime Video": "Prime Video", "Disney Plus": "Disney+",
     "Plex": "Plex", "YouTube": "YouTube" };
   function positive(value) { return typeof value === "number" && isFinite(value) && value % 1 === 0
     && value > 0 && value <= 999999999; }
+  function validSeason(value) { return typeof value === "number" && isFinite(value) && value % 1 === 0
+    && value >= 0 && value <= 10000; }
   function safeText(value, max) { return typeof value === "string" ? value.slice(0, max) : ""; }
   function progressRecord(value) {
     if (!value || typeof value !== "object") return null;
@@ -20,6 +23,12 @@
         || updatedAt > 8640000000000000 || value.provider !== "vidbolt") return null;
     return { position: Math.min(position, duration), duration: duration, updatedAt: updatedAt,
       provider: "vidbolt", completed: value.completed === true };
+  }
+  function validHandoff(saved, returned, type, now) {
+    return !!(saved && returned && /^[A-Za-z0-9_-]{8,80}$/.test(saved.token || "")
+      && saved.token === returned.handoff && saved.type === type && saved.id === returned.id
+      && (type !== "tv" || saved.season === returned.season && saved.episode === returned.episode)
+      && Number.isFinite(saved.at) && now - saved.at >= 0 && now - saved.at <= 86400000);
   }
   function imagePath(path) { return typeof path === "string" && /^\/[a-zA-Z0-9._-]{1,90}$/.test(path) ? path : null; }
   function item(type, id, title, season, episode, subtitle, at, artwork) {
@@ -34,7 +43,8 @@
       poster: imagePath(artwork.poster), backdrop: imagePath(artwork.backdrop),
       episodeTitle: type === "tv" ? safeText(artwork.episodeTitle, 160) : "",
       tvdbId: type === "tv" && positive(artwork.tvdbId) ? artwork.tvdbId : null,
-      progress: progress };
+      progress: progress, manualWatched: typeof artwork.manualWatched === "boolean" ? artwork.manualWatched : null,
+      manualOnly: artwork.manualOnly === true };
   }
   function historyKey(row) { return row.type + ":" + row.id + (row.type === "tv" ? ":" + row.season + ":" + row.episode : ""); }
   function readHistory(storage) {
@@ -57,8 +67,15 @@
     if (!entry) return readHistory(storage);
     var previous = readHistory(storage).find(function (row) { return historyKey(row) === historyKey(entry); });
     if (!entry.progress && previous && previous.progress) entry.progress = previous.progress;
+    if (entry.manualWatched === null && previous) entry.manualWatched = previous.manualWatched;
+    if (previous && previous.manualOnly) entry.manualOnly = true;
     if (entry.progress && previous && previous.progress
-        && previous.progress.updatedAt > entry.progress.updatedAt) entry.progress = previous.progress;
+        && (previous.progress.updatedAt > entry.progress.updatedAt
+          || previous.progress.updatedAt === entry.progress.updatedAt
+            && previous.progress.position > entry.progress.position)) {
+      entry.progress = previous.progress;
+      entry.at = Math.min(entry.at, previous.at);
+    }
     var rows = readHistory(storage).filter(function (row) { return historyKey(row) !== historyKey(entry); });
     rows.unshift(entry); rows.sort(function (a, b) { return b.at - a.at; }); rows = rows.slice(0, 100);
     try { storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: rows })); }
@@ -75,17 +92,63 @@
     try { storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: rows })); return true; }
     catch (_error) { return false; }
   }
+  function lastWatchedEpisode(rows, showId) {
+    var episodes = rows.filter(function (row) { return row.type === "tv" && row.id === showId; });
+    var confirmed = episodes.filter(function (row) { return row.progress && row.progress.provider === "vidbolt"; });
+    var candidates = confirmed.length ? confirmed : episodes;
+    return candidates.sort(function (a, b) { return (b.progress ? b.progress.updatedAt : b.at)
+      - (a.progress ? a.progress.updatedAt : a.at) || b.at - a.at; })[0] || null;
+  }
   function groupedHistory(rows) {
-    var seen = {};
-    return rows.filter(function (row) { var key = row.type + ":" + row.id;
-      if (seen[key]) return false;
-      seen[key] = true; return true;
+    var groups = {}, result = [];
+    rows.forEach(function (row) { var key = row.type + ":" + row.id;
+      if (!groups[key]) { groups[key] = []; result.push(key); }
+      groups[key].push(row);
     });
+    return result.map(function (key) {
+      return groups[key][0].type === "tv" ? lastWatchedEpisode(groups[key], groups[key][0].id) : groups[key][0];
+    }).sort(function (a, b) { return (b.progress ? b.progress.updatedAt : b.at)
+      - (a.progress ? a.progress.updatedAt : a.at); });
   }
   function homeRows(rows) { return groupedHistory(rows).slice(0, 6); }
   function continueRows(rows) { return groupedHistory(rows).filter(function (row) {
-    return !row.progress || row.progress.completed !== true;
+    return row.type === "tv" || row.manualWatched === false || row.manualWatched !== true
+      && (!row.progress || row.progress.completed !== true);
   }).slice(0, 6); }
+  function readBrowsedSeason(storage, showId) {
+    if (!positive(showId)) return null;
+    try { var data = JSON.parse(storage.getItem(BROWSED_SEASONS_KEY));
+      var value = data && data.version === 1 && data.shows && data.shows[String(showId)];
+      return validSeason(value) ? value : null;
+    } catch (_error) { return null; }
+  }
+  function writeBrowsedSeason(storage, showId, season) {
+    if (!positive(showId) || !validSeason(season)) return false;
+    try { var data = JSON.parse(storage.getItem(BROWSED_SEASONS_KEY));
+      var shows = data && data.version === 1 && data.shows && typeof data.shows === "object" ? data.shows : {};
+      shows[String(showId)] = season;
+      storage.setItem(BROWSED_SEASONS_KEY, JSON.stringify({ version: 1, shows: shows })); return true;
+    } catch (_error) { return false; }
+  }
+  function nextConfirmedEpisode(current, currentEpisodes, nextSeason, nextEpisodes) {
+    if (!current || !positive(current.id) || !positive(current.season) || !positive(current.episode)
+        || !Array.isArray(currentEpisodes) || !currentEpisodes.some(function (row) {
+          return row && row.number === current.episode;
+        })) return null;
+    var next = currentEpisodes.find(function (row) { return row && row.number === current.episode + 1; });
+    if (next) return { season: current.season, episode: next.number, title: safeText(next.title, 160) };
+    if (currentEpisodes.some(function (row) { return row && row.number > current.episode; })
+        || !validSeason(nextSeason) || nextSeason <= current.season || !Array.isArray(nextEpisodes)) return null;
+    var first = nextEpisodes.find(function (row) { return row && row.number === 1; });
+    return first ? { season: nextSeason, episode: 1, title: safeText(first.title, 160) } : null;
+  }
+  function episodeProgressFraction(row) {
+    if (!row) return 0;
+    if (row.manualWatched === true || row.manualWatched !== false
+        && row.progress && row.progress.completed) return 1;
+    return row.progress && row.progress.duration > 0
+      ? Math.max(0, Math.min(1, row.progress.position / row.progress.duration)) : 0;
+  }
   function rankResults(rows, query) {
     var q = String(query || "").toLocaleLowerCase().trim();
     if (!q) return rows.slice();
@@ -223,10 +286,14 @@
   }
   root.HorizonSearchCore = { PLAYER_ORIGIN: PLAYER_ORIGIN, LAUNCHER_ORIGIN: LAUNCHER_ORIGIN,
     HISTORY_KEY: HISTORY_KEY, PREFS_KEY: PREFS_KEY, SUBTITLE_KEY: SUBTITLE_KEY, STATE_KEY: STATE_KEY,
-    HANDOFF_KEY: HANDOFF_KEY, progressRecord: progressRecord, item: item,
+    HANDOFF_KEY: HANDOFF_KEY, BROWSED_SEASONS_KEY: BROWSED_SEASONS_KEY,
+    readBrowsedSeason: readBrowsedSeason, writeBrowsedSeason: writeBrowsedSeason,
+    progressRecord: progressRecord, validHandoff: validHandoff, item: item,
     readHistory: readHistory, writeHistory: writeHistory, clearHistory: clearHistory,
     clearProgress: clearProgress, groupedHistory: groupedHistory,
-    homeRows: homeRows, continueRows: continueRows, rankResults: rankResults,
+    homeRows: homeRows, continueRows: continueRows, lastWatchedEpisode: lastWatchedEpisode,
+    nextConfirmedEpisode: nextConfirmedEpisode, episodeProgressFraction: episodeProgressFraction,
+    rankResults: rankResults,
     readPrefs: readPrefs, writePrefs: writePrefs, readSubtitlePref: readSubtitlePref, writeSubtitlePref: writeSubtitlePref,
     tvPlayerUrl: tvPlayerUrl, moviePlayerUrl: moviePlayerUrl, imageUrl: imageUrl, providerApp: providerApp, providerWatchUrl: providerWatchUrl,
     websiteSearch: websiteSearch, returnEpisode: returnEpisode, returnMovie: returnMovie, providerIdentity: providerIdentity,

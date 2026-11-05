@@ -101,7 +101,7 @@ try {
   await until("document.querySelector('#results button')?.textContent.includes('South Park')", "search after Back clear");
   await evaluate(`window.HorizonSearchMock.title=(type,id)=>({type,id,title:'South Park',date:'1997-08-13',
     overview:'Four friends navigate life in the small town of South Park. This deliberately long synopsis checks that the details copy remains readable and never pushes the episode rail below the screen.',
-    genres:['Animation','Comedy'],backdrop:'/south-park-backdrop.jpg',poster:'/south-park-poster.jpg',
+    genres:['Animation','Comedy'],cast:['Trey Parker','Matt Stone'],creators:['Trey Parker','Matt Stone'],networks:['Comedy Central'],status:'Returning Series',originalLanguage:'en',rating:'TV-MA',episodeRuntime:22,backdrop:'/south-park-backdrop.jpg',poster:'/south-park-poster.jpg',
     seasons:[{number:13,count:14,name:'Season 13'},{number:14,count:14,name:'Season 14'}]});
     window.HorizonSearchMock.providers=()=>({link:'https://www.themoviedb.org/tv/2190/watch?locale=US',
       stream:[{id:531,name:'Paramount+ Essential',logo:'/paramount.jpg'},{id:532,name:'Paramount+ Premium',logo:'/paramount.jpg'},
@@ -112,47 +112,31 @@ try {
       {number:3,title:'Margaritaville',date:'2009-03-25',still:'/episode-three.jpg'}]:[
       {number:1,title:'Episode 1',date:'2010-03-17',still:null}]});`);
   await evaluate("document.querySelector('#results button').click()");
-  await until("document.querySelector('#detail-title').textContent === 'South Park' && document.querySelectorAll('#providers button').length === 2 && document.querySelectorAll('#detail-episodes button').length === 3", "TV details, provider icons, and episode rail");
+  await until("document.querySelector('#detail-title').textContent === 'South Park' && document.querySelector('#detail-actions .detail-primary')?.textContent === 'Play S13 E1'", "TV details and episode routing");
   assert.equal(await evaluate("document.querySelector('#detail-art img')?.src.includes('/w1280/south-park-backdrop.jpg')"), true);
   assert.equal(await evaluate("getComputedStyle(document.querySelector('#detail-art img')).objectFit"), "cover");
   assert.equal(await evaluate("document.querySelector('#detail-summary').textContent.includes('deliberately long synopsis')"), true);
-  assert.equal(await evaluate("document.querySelectorAll('#providers button').length"), 2, "Paramount subscription plans and rent listing collapse to one service icon");
-  assert.equal(await evaluate("document.querySelector('#providers').textContent.includes('Mark subscribed')"), false);
-  assert.equal(await evaluate("document.querySelector('#providers button').dataset.availability"), "stream,rent");
-  await until("Array.from(document.querySelectorAll('#providers img')).every(image => image.complete)", "provider logo fallbacks");
-  assert.equal(await evaluate("Array.from(document.querySelectorAll('#providers .provider-icon')).every(icon => icon.classList.contains('has-name-fallback') && icon.textContent.trim().length > 1)"), true,
-    "failed provider logos become readable names rather than empty or single-letter marks");
-  assert.equal(await evaluate("document.querySelector('#detail-actions').textContent.includes('Search the web')"), false);
-  assert.equal(await evaluate("document.querySelector('#detail-actions .detail-primary').textContent"), "Play S13 E1");
-  assert.equal(await evaluate("document.querySelector('#detail-season-toggle').textContent"), "Season 13 ▾");
-  assert.equal(await evaluate("document.querySelectorAll('#detail-episodes .detail-episode-art').length"), 3);
-  assert.equal(await evaluate("document.querySelector('#detail-episodes button').getAttribute('aria-label')"), "Season 13, episode 1: The Ring");
+  assert.equal(await evaluate("document.querySelector('#detail-episode-section') === null && document.querySelector('#providers') === null"), true);
+  assert.equal(await evaluate("document.querySelector('#detail-actions').textContent.includes('Episodes')"), true);
+  assert.equal(await evaluate("document.querySelector('#detail-information').textContent.includes('Featured cast')"), true);
+  await evaluate("document.querySelector('#details-back').focus(); document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))");
+  assert.equal(await evaluate("document.activeElement.classList.contains('detail-primary')"), true,
+    "Down from Back reaches the playback action rather than the Home rail");
+  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true}))");
+  assert.equal(await evaluate("document.activeElement.id"), "details-back");
   for (const viewport of [{ width: 1920, height: 1080 }, { width: 1440, height: 900 },
     { width: 1280, height: 720 }, { width: 1024, height: 720 }]) {
     await send("Emulation.setDeviceMetricsOverride", { ...viewport, deviceScaleFactor: 1, mobile: false });
     const geometry = await evaluate(`(() => { const h=innerHeight, view=document.querySelector('#details-view').getBoundingClientRect(),
-      episodes=document.querySelector('#detail-episode-section').getBoundingClientRect(), title=document.querySelector('#detail-title').getBoundingClientRect(),
-      primary=document.querySelector('#detail-actions .detail-primary').getBoundingClientRect();
-      return {height:h, width:document.documentElement.scrollWidth, document:document.documentElement.scrollHeight, body:document.body.scrollHeight,
-        viewBottom:view.bottom, episodeTop:episodes.top, episodeBottom:episodes.bottom, titleBottom:title.bottom, primaryBottom:primary.bottom}; })()`);
-    assert.ok(geometry.document <= viewport.height && geometry.body <= viewport.height, `no vertical page scroll at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+      title=document.querySelector('#detail-title').getBoundingClientRect(), actions=document.querySelector('#detail-actions').getBoundingClientRect(),
+      back=document.querySelector('#details-back').getBoundingClientRect();
+      return {height:h, width:document.documentElement.scrollWidth, document:document.documentElement.scrollHeight,
+        viewBottom:view.bottom, titleBottom:title.bottom, actionBottom:actions.bottom, backLeft:back.left}; })()`);
+    assert.ok(geometry.document <= viewport.height, `no vertical page scroll at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
     assert.ok(geometry.width <= viewport.width, `no horizontal page scroll at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
-    assert.ok(geometry.episodeTop < viewport.height && geometry.episodeBottom <= viewport.height, `episode row fits at ${viewport.width}x${viewport.height}`);
-    assert.ok(geometry.titleBottom < geometry.episodeTop && geometry.primaryBottom < geometry.episodeTop, `show information and action remain above episodes at ${viewport.width}x${viewport.height}`);
-    if (viewport.height <= 800) {
-      await evaluate("document.querySelector('#detail-season-toggle').click()");
-      const menu = await evaluate("(() => {const r=document.querySelector('#detail-season-menu').getBoundingClientRect();return {top:r.top,bottom:r.bottom,hidden:document.querySelector('#detail-season-menu').hidden}})()");
-      assert.ok(!menu.hidden && menu.top >= 0 && menu.bottom <= viewport.height, `season menu remains fully visible at ${viewport.width}x${viewport.height}: ${JSON.stringify(menu)}`);
-      await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
-    }
+    assert.ok(geometry.actionBottom < viewport.height && geometry.backLeft >= 0, `details actions fit at ${viewport.width}x${viewport.height}`);
   }
   await send("Emulation.setDeviceMetricsOverride", { width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false });
-  await evaluate(`document.querySelector('#detail-actions .detail-primary').focus(); let steps=0;
-    while (!document.activeElement.closest('#detail-episodes') && steps++ < 5)
-      document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));`);
-  assert.equal(await evaluate("document.activeElement.closest('#detail-episodes') !== null"), true, "D-pad can move from actions through providers to the episode rail");
-  await evaluate("document.querySelector('#detail-episodes button').focus(); document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}))");
-  assert.equal(await evaluate("document.activeElement.dataset.episode"), "2", "Right advances through the horizontal episode row");
   await evaluate("window.HorizonSearchCore.writeSubtitlePref(localStorage,'on')");
   await evaluate("document.querySelector('#details-back').click()");
   await until("history.state?.horizonWatchView === 'search'", "browser history returns to search");
@@ -171,30 +155,21 @@ try {
   assert.equal(await evaluate("document.querySelector('#details-view').hidden"), true);
   await until("history.state?.horizonWatchView === 'search'", "Escape completes browser history transition");
   await evaluate("document.querySelector('#results button').click()");
-  await until("document.querySelector('#detail-title').textContent === 'South Park' && document.querySelectorAll('#detail-episodes button').length === 3", "restored TV details");
+  await until("document.querySelector('#detail-title').textContent === 'South Park' && document.querySelector('#detail-actions').textContent.includes('Episodes')", "restored TV details");
   assert.equal(await evaluate("window.HorizonSearchCore.readSubtitlePref(localStorage)"), "on", "details navigation retains the stored subtitle preference");
-  await evaluate("document.querySelector('#detail-season-toggle').click()");
-  assert.equal(await evaluate("document.querySelector('#detail-season-toggle').getAttribute('aria-expanded')"), "true");
-  assert.equal(await evaluate("document.querySelectorAll('#detail-season-menu button').length"), 2);
   await evaluate("window.HorizonSearchCore.writeHistory(localStorage,window.HorizonSearchCore.item('tv',2190,'South Park',13,2,'off',100)); window.HorizonSearchCore.writeHistory(localStorage,window.HorizonSearchCore.item('tv',2190,'South Park',14,1,'off',200))");
-  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))");
-  assert.equal(await evaluate("document.activeElement.dataset.season"), "14");
-  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
-  assert.equal(await evaluate("document.activeElement.id"), "detail-season-toggle");
-  await evaluate("document.querySelector('#detail-season-toggle').click(); document.querySelector('#detail-season-menu [data-season=\\\"14\\\"]').click()");
-  await until("document.querySelectorAll('#detail-episodes button').length === 1", "season change updates inline episode rail");
-  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('#detail-episodes button')).filter(b=>b.querySelector('.episode-started')).map(b=>b.dataset.episode)"), ["1"]);
-  await evaluate("document.querySelector('#detail-season-toggle').click(); document.querySelector('#detail-season-menu [data-season=\\\"13\\\"]').click()");
-  await until("document.querySelectorAll('#detail-episodes button').length === 3", "restore first season");
-  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('#detail-episodes button')).filter(b=>b.querySelector('.episode-started')).map(b=>b.dataset.episode)"), ["2"]);
-  await evaluate("window.HorizonSearchCore.clearHistory(localStorage); document.querySelector('#detail-season-toggle').click(); document.querySelector('#detail-season-menu [data-season=\"14\"]').click()");
-  await until("document.querySelectorAll('#detail-episodes button').length === 1", "season 14 after clear");
-  assert.equal(await evaluate("document.querySelectorAll('#detail-episodes .episode-started').length"), 0);
-  await evaluate("document.querySelector('#detail-season-toggle').click(); document.querySelector('#detail-season-menu [data-season=\"13\"]').click()");
-  await until("document.querySelectorAll('#detail-episodes button').length === 3", "season 13 after clear");
   await evaluate("document.querySelector('#detail-actions .detail-secondary').click()");
-  await until("document.querySelectorAll('#seasons button').length === 2 && document.querySelectorAll('#episode-list button').length === 3", "episodes");
+  await until("document.querySelectorAll('#seasons button').length === 2 && document.querySelectorAll('#episode-list .episode-play').length === 3", "episodes");
   assert.equal(await evaluate("document.querySelectorAll('#episode-list .episode-art').length"), 3);
+  await evaluate("document.querySelector('#episodes-back').focus(); document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))");
+  assert.equal(await evaluate("document.activeElement.dataset.season"), "13");
+  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}))");
+  assert.equal(await evaluate("document.activeElement.dataset.season"), "14");
+  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}))");
+  assert.equal(await evaluate("document.activeElement.dataset.season"), "13");
+  const focusBounds = await evaluate("(() => {const view=document.querySelector('#episodes-view').getBoundingClientRect(), back=document.querySelector('#episodes-back').getBoundingClientRect(), season=document.activeElement.getBoundingClientRect();return {viewLeft:view.left,backLeft:back.left,seasonLeft:season.left,viewRight:view.right,seasonRight:season.right}})()");
+  assert.ok(focusBounds.backLeft - focusBounds.viewLeft >= 16 && focusBounds.seasonLeft - focusBounds.viewLeft >= 16
+    && focusBounds.viewRight - focusBounds.seasonRight >= 16, "Details and season focus aura fit inside the episode viewport");
   await evaluate("document.querySelector('#episodes-back').click()");
   assert.equal(await evaluate("document.activeElement.id"), "details-back");
   await until("history.state?.horizonWatchView === 'details'", "episodes Back completes");
@@ -206,10 +181,7 @@ try {
   await evaluate("document.querySelector('#results button').click()");
   await until("document.querySelector('#detail-title').textContent === 'Fight Club'", "movie details");
   assert.equal(await evaluate("document.querySelector('#detail-actions .detail-primary')?.textContent"), "Play movie");
-  assert.equal(await evaluate("document.querySelector('#detail-episode-section').hidden"), true);
-  assert.equal(await evaluate("document.querySelector('.provider-link') === null"), true);
-  assert.equal(await evaluate("document.querySelectorAll('#providers button').length"), 0, "invalid title link leaves provider icons informational");
-  assert.equal(await evaluate("document.querySelectorAll('#providers .provider-informational').length"), 2);
+  assert.equal(await evaluate("document.querySelector('#detail-episode-section') === null && document.querySelector('#providers') === null"), true);
   await evaluate("document.querySelector('#detail-actions .detail-primary').click()");
   await until("location.origin === 'https://horizon-video-lab-preview.ali-al-anbari.workers.dev' || location.href.startsWith('chrome-error:')", "movie player navigation");
   const movieLaunch = requests.find(url => url.includes("/player-overlay.html?type=movie&id=550"));
@@ -265,9 +237,9 @@ try {
   returnUrl.searchParams.set("season", "13"); returnUrl.searchParams.set("episode", "3");
   returnUrl.searchParams.set("sub", "off");
   await send("Page.navigate", { url: returnUrl.href });
-  await until("!document.querySelector('#episodes-view')?.hidden && document.querySelectorAll('#episode-list button').length === 3", "return to episode selection");
+  await until("!document.querySelector('#episodes-view')?.hidden && document.querySelectorAll('#episode-list .episode-play').length === 3", "return to episode selection");
   assert.equal(await evaluate("JSON.parse(localStorage.getItem(window.HorizonSearchCore.HISTORY_KEY)).items[0].episode"), 3);
-  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('#episode-list button')).filter(b=>b.querySelector('.episode-started')).map(b=>b.dataset.episode)"), ["2", "3"]);
+  assert.equal(await evaluate("document.querySelectorAll('#episode-list .episode-progress').length"), 0);
   assert.equal(await evaluate("JSON.parse(localStorage.getItem(window.HorizonSearchCore.HISTORY_KEY)).items[0].subtitle"), "off");
   await evaluate("document.querySelector('#episodes-back').click()");
   assert.equal(await evaluate("window.HorizonSearchCore.readSubtitlePref(localStorage)"), "off");
@@ -279,7 +251,7 @@ try {
   await until("document.querySelector('#results button')?.textContent.includes('South Park')", "search after return");
   await evaluate("document.querySelector('#results button').click(); document.querySelector('#detail-actions .detail-secondary').click()");
   await until("document.querySelector('#episode-status').textContent === 'Loading season metadata…'", "early episode browsing waits for metadata");
-  await until("document.querySelectorAll('#episode-list button').length === 3", "early episode browsing recovers");
+  await until("document.querySelectorAll('#episode-list .episode-play').length === 3", "early episode browsing recovers");
   await evaluate("localStorage.setItem(window.HorizonSearchCore.HISTORY_KEY,JSON.stringify({version:2,items:[{type:'tv',id:2190,title:'South Park',season:13,episode:2,subtitle:'on',at:100},{type:'tv',id:2190,title:'South Park',season:13,episode:3,subtitle:'off',at:300},{type:'movie',id:550,title:'Fight Club',at:200}]})); sessionStorage.clear()");
   const historyUrl = new URL(base); historyUrl.searchParams.set("run", "history-" + Date.now());
   await navigate(historyUrl.href);
@@ -362,7 +334,7 @@ try {
         document.querySelector('#query').dispatchEvent(new Event('input',{bubbles:true}));`);
       await until("document.querySelector('#results button')?.textContent.includes('The Boys')", "visual QA title result");
       await evaluate("document.querySelector('#results button').click()");
-      await until("document.querySelector('#detail-title').textContent === 'The Boys' && document.querySelectorAll('#detail-episodes button').length === 4", "visual QA details and episodes");
+      await until("document.querySelector('#detail-title').textContent === 'The Boys' && document.querySelector('#detail-actions').textContent.includes('Episodes')", "visual QA details and episodes");
       if (fields.backdrop) {
         await evaluate("document.querySelector('#detail-art img').src=" + JSON.stringify(backdrop));
         await evaluate("document.querySelector('#detail-art img').decode()");
@@ -375,21 +347,14 @@ try {
     await openVisualTitle("BoysBackdrop", { backdrop: "/qa-boys-backdrop.jpg", poster: "/qa-boys-poster.jpg" });
     for (const viewport of [{ width: 1920, height: 1080 }, { width: 1536, height: 960 }, { width: 1024, height: 768 }]) {
       await send("Emulation.setDeviceMetricsOverride", { ...viewport, deviceScaleFactor: 1, mobile: false });
-      await evaluate(`(() => { document.querySelector('.detail-primary').focus(); let steps=0;
-        while (!document.activeElement.closest('#detail-episodes') && steps++ < 5)
-          document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));
-        if (document.activeElement.dataset.episode === '1')
-          document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true})); })();`);
-      const focusStyle = await evaluate("(() => {const e=document.activeElement,s=getComputedStyle(e);return {tag:e.tagName,classes:e.className,focused:e===document.querySelector('#detail-episodes button[data-episode=\"2\"]'),outline:s.outline,boxShadow:s.boxShadow}})()");
-      assert.ok(focusStyle.focused && focusStyle.classes.includes("is-focused") && focusStyle.outline.includes("solid"),
-        `episode focus has a visible outline before screenshot capture: ${JSON.stringify(focusStyle)}`);
+      const focusStyle = await evaluate("(() => {const e=document.querySelector('.detail-primary');e.focus();const s=getComputedStyle(e);return {focused:document.activeElement===e,outline:s.outline,boxShadow:s.boxShadow}})()");
+      assert.ok(focusStyle.focused && focusStyle.outline.includes("solid"),
+        `primary action has a visible outline before screenshot capture: ${JSON.stringify(focusStyle)}`);
       const state = await evaluate(`(() => ({height:innerHeight,scroll:document.documentElement.scrollHeight,
-        episodeTop:document.querySelector('#detail-episode-section').getBoundingClientRect().top,
-        episodeBottom:document.querySelector('#detail-episode-section').getBoundingClientRect().bottom,
         title:document.querySelector('#detail-title').getBoundingClientRect().bottom,
         action:document.querySelector('#detail-actions').getBoundingClientRect().bottom}))()`);
-      assert.ok(state.scroll <= viewport.height && state.episodeTop < viewport.height && state.episodeBottom <= viewport.height
-        && state.title < state.episodeTop && state.action < state.episodeTop, `visual QA fits at ${viewport.width}x${viewport.height}`);
+      assert.ok(state.scroll <= viewport.height && state.action <= viewport.height,
+        `visual QA fits at ${viewport.width}x${viewport.height}`);
       await capture(join(captureDir, `horizon-show-details-${viewport.width}x${viewport.height}.png`));
     }
     await openVisualTitle("BoysPoster", { poster: "/qa-boys-poster.jpg" });
@@ -399,11 +364,11 @@ try {
     await send("Emulation.setDeviceMetricsOverride", { width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false });
     await capture(join(captureDir, "horizon-show-details-no-art.png"));
     await evaluate(`document.querySelector('#detail-title').textContent='The Incredibly Long Fictional Title for a Drama Series';
-      document.querySelector('#detail-summary').textContent='This synopsis is intentionally very long so the preview can confirm readable clipping, stable hierarchy and a one-screen layout even for unusually verbose source metadata. The artwork area remains clear, the actions stay reachable, and the episode strip remains visible.';
+      document.querySelector('#detail-summary').textContent='This synopsis is intentionally very long so the preview can confirm readable clipping, stable hierarchy and a one-screen layout even for unusually verbose source metadata. The artwork area remains clear, the actions stay reachable, and the information section remains visible.';
       document.querySelector('.detail-primary').focus();`);
     await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 768, deviceScaleFactor: 1, mobile: false });
     await capture(join(captureDir, "horizon-show-details-long-copy-1024x768.png"));
   }
   assert.deepEqual(errors.map(value => value.exception?.description || value.text), []);
-  console.log("Browser E2E passed: keyboard/repeat guard, explicit short search, debounce/cache/abort/stale response, 429 feedback, details/providers, seasons, player return/history/subtitle, movie capability.");
+  console.log("Browser E2E passed: keyboard/repeat guard, explicit short search, debounce/cache/abort/stale response, 429 feedback, cinematic details, seasons, player return/history/subtitle, movie capability.");
 } finally { socket.close(); }

@@ -429,10 +429,6 @@ body.details-active .topbar, body.details-active footer { display: none; }
 }
 .details-back:focus, .details-back.is-focused,
 .detail-actions button:focus, .detail-actions button.is-focused,
-.provider-icon:focus, .provider-icon.is-focused,
-.detail-season-toggle:focus, .detail-season-toggle.is-focused,
-.season-option:focus, .season-option.is-focused,
-.detail-episodes button:focus, .detail-episodes button.is-focused,
 .episodes-view .back-button:focus, .episodes-view .back-button.is-focused,
 .episodes-view .seasons button:focus, .episodes-view .seasons button.is-focused,
 .episodes-view .episode-list button:focus, .episodes-view .episode-list button.is-focused {
@@ -443,11 +439,11 @@ body.details-active .topbar, body.details-active footer { display: none; }
 .detail-copy {
   position: absolute;
   z-index: 2;
-  top: clamp(76px, 10vh, 118px);
+  top: clamp(90px, 12vh, 134px);
   left: clamp(34px, 5.2vw, 98px);
-  width: min(46vw, 780px);
-  max-height: 60%;
-  overflow: hidden;
+  width: min(56vw, 850px);
+  max-height: 55%;
+  overflow: visible;
 }
 .detail-kind {
   display: none;
@@ -497,7 +493,8 @@ body.details-active .topbar, body.details-active footer { display: none; }
   flex-wrap: wrap;
   gap: clamp(10px, 1.3vw, 22px);
   min-height: 52px;
-  margin: 0 0 clamp(12px, 1.8vh, 20px);
+  margin: 0;
+  padding: 10px 12px 15px;
 }
 .detail-actions button {
   min-height: 48px;
@@ -524,230 +521,93 @@ body.details-active .topbar, body.details-active footer { display: none; }
   background: transparent;
   color: rgba(255,255,255,.94);
 }
-.provider-strip {
-  display: flex;
-  align-items: center;
-  gap: clamp(12px, 1.45vw, 24px);
-  min-height: 38px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-}
-.provider-strip::-webkit-scrollbar { display: none; }
-.provider-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
-  padding: 2px;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
-}
-.provider-icon img {
-  display: block;
-  width: 34px;
-  height: 34px;
-  object-fit: contain;
-  border-radius: 4px;
-}
-.provider-name-fallback {
-  max-width: 100px;
-  overflow: hidden;
-  color: rgba(255,255,255,.92);
-  font-size: clamp(12px, .78vw, 14px);
-  line-height: 1.1;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.provider-icon.has-name-fallback { width: auto; min-width: 52px; max-width: 110px; flex-basis: auto; padding: 0 .35rem; }
-.provider-attribution {
-  margin: 1px 0 0 2px;
-  color: rgba(255,255,255,.62);
-  font-size: clamp(10px, .68vw, 12px);
-  line-height: 1.1;
-}
 .detail-status {
   min-height: 1.2em;
   margin: .3rem 0 0;
   color: rgba(255,255,255,.73);
   font-size: clamp(11px, .75vw, 14px);
 }
-.detail-episode-section {
+/* Details information sits below the hero in the former episode-rail space. */
+.detail-information {
   position: absolute;
-  z-index: 3;
-  right: clamp(24px, 3.5vw, 66px);
-  bottom: clamp(18px, 3vh, 34px);
-  left: clamp(34px, 4.4vw, 82px);
-  height: clamp(190px, 28.5vh, 310px);
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: visible;
-}
-.episode-heading-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 40px;
-  margin: 0 0 clamp(8px, 1.2vh, 14px);
-}
-.episode-heading-row h2 {
-  margin: 0;
-  color: #fff;
-  font-size: clamp(19px, 1.5vw, 28px);
-  font-weight: 550;
-}
-.season-control { position: relative; z-index: 8; }
-.detail-season-toggle {
-  min-height: 38px;
-  padding: .3rem .7rem;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
-  color: rgba(255,255,255,.9);
-  font-size: clamp(14px, .95vw, 17px);
-}
-.season-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: 9;
-  width: max-content;
-  min-width: 180px;
-  max-width: 250px;
-  max-height: 40vh;
-  overflow-x: hidden;
-  overflow-y: auto;
-  padding: 5px;
-  border: 1px solid rgba(255,255,255,.2);
-  border-radius: 5px;
-  background: rgba(8,10,14,.97);
-  box-shadow: 0 10px 30px rgba(0,0,0,.55);
-}
-.season-option {
-  display: block;
-  width: 100%;
-  min-height: 42px;
-  padding: .55rem .75rem;
-  border: 1px solid transparent;
-  border-radius: 3px;
-  background: transparent;
-  color: #fff;
-  text-align: left;
-  font-size: 15px;
-}
-.season-option.is-current { color: #fff; font-weight: 650; background: rgba(255,255,255,.1); }
-.detail-episode-status {
-  min-height: 1em;
-  margin: -4px 0 5px;
-  color: rgba(255,255,255,.68);
-  font-size: clamp(11px, .72vw, 13px);
-}
-.detail-episodes {
-  display: flex;
-  align-items: flex-start;
-  gap: clamp(12px, 1.5vw, 26px);
-  min-width: 0;
-  min-height: 0;
-  flex: 1;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 12px 15px 16px;
-  scrollbar-width: none;
-}
-.detail-episodes::-webkit-scrollbar { display: none; }
-.detail-episodes button {
-  display: block;
-  flex: 0 0 clamp(190px, 21vw, 330px);
-  min-width: 0;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 3px;
-  background: transparent;
-  color: #fff;
-  text-align: left;
-}
-.detail-episode-art {
-  position: relative;
+  z-index: 2;
+  left: clamp(34px, 5.2vw, 98px);
+  right: clamp(34px, 5.2vw, 98px);
+  bottom: clamp(52px, 6vh, 72px);
   display: grid;
-  place-items: center;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  overflow: hidden;
-  border-radius: 4px;
-  background: rgba(22,27,34,.9);
-  color: rgba(255,255,255,.78);
-  font-size: clamp(16px, 1.2vw, 22px);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(12px, 1.7vh, 22px) clamp(24px, 4vw, 76px);
+  max-width: 1160px;
 }
-.detail-episode-art img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.detail-episode-label {
-  display: block;
-  margin-top: 7px;
-  overflow: hidden;
-  color: rgba(255,255,255,.94);
-  font-size: clamp(13px, .92vw, 17px);
-  font-weight: 500;
-  line-height: 1.22;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.detail-episode-meta {
-  display: block;
-  margin-top: 3px;
-  color: rgba(255,255,255,.66);
-  font-size: clamp(11px, .75vw, 13px);
-  line-height: 1.2;
-}
-.detail-view.is-movie .detail-episode-section { display: none; }
-.detail-view.is-movie .detail-copy { top: clamp(100px, 16vh, 180px); }
+.detail-fact { min-width: 0; }
+.detail-fact-label { display: block; color: rgba(255,255,255,.66); font-size: clamp(12px, .8vw, 15px);
+  text-transform: uppercase; letter-spacing: .08em; }
+.detail-fact-value { display: block; color: #fff; font-size: clamp(15px, 1.05vw, 19px);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.detail-credits { position: absolute; z-index: 2; bottom: 16px; right: clamp(34px, 5.2vw, 98px);
+  margin: 0; color: rgba(255,255,255,.6); font-size: 12px; }
+.detail-credits a { color: inherit; }
+.detail-credits a:focus, .detail-credits a.is-focused { outline: 2px solid #fff; outline-offset: 3px; }
 
-.episodes-view { margin-top: 1rem; }
-.episodes-view h1 { font-size: clamp(32px, 3vw, 54px); }
+.episodes-active { overflow: hidden; }
+.episodes-active .shell { height: 100vh; overflow: hidden; }
+.episodes-active .watch-content { height: 100vh; min-height: 0; overflow: hidden; }
+.episodes-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; margin-top: .25rem; overflow: hidden; }
+.episodes-header { flex: 0 0 auto; padding: 16px 20px 0; }
+.episodes-view h1 { font-size: clamp(30px, 2.7vw, 48px); margin: .35rem 0 .75rem; }
+.episodes-view #episode-status { flex: 0 0 auto; margin: .2rem 0; }
 .episode-list {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1.1rem;
-  max-height: 62vh;
+  align-content: start;
+  gap: 1.2rem;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  padding: .3rem;
+  overflow-x: hidden;
+  padding: 20px 22px 26px;
+  scroll-padding: 22px;
 }
-.episodes-view > .back-button, .episodes-view .seasons button {
-  min-height: 42px;
-  padding: .55rem .9rem;
-  border: 1px solid rgba(255,255,255,.18);
-  border-radius: 4px;
-  background: transparent;
+.episodes-header > .back-button, .episodes-view .seasons button {
+  min-height: 40px;
+  padding: .45rem .85rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(255,255,255,.055);
   color: #fff;
 }
-.episodes-view .seasons { display: flex; flex-wrap: wrap; gap: .55rem; margin: 1rem 0; }
-.episodes-view .seasons .is-current { border-color: #fff; background: rgba(255,255,255,.12); }
-.episode-list button {
+.episodes-view .seasons { display: flex; flex-wrap: nowrap; gap: .45rem; overflow-x: auto; overflow-y: hidden;
+  white-space: nowrap; margin: .2rem 0 .35rem; padding: 16px 20px 18px; scrollbar-width: none; }
+.episodes-view .seasons::-webkit-scrollbar { display: none; }
+.episodes-view .seasons button { flex: 0 0 auto; }
+.episodes-view .seasons .is-current { border-color: rgba(255,255,255,.8); background: rgba(255,255,255,.16); }
+.episodes-view .seasons button:focus, .episodes-view .seasons button.is-focused {
+  outline: 2px solid #fff; outline-offset: 1px; box-shadow: 0 0 8px rgba(255,255,255,.28);
+}
+.episodes-header > .back-button:focus, .episodes-header > .back-button.is-focused {
+  outline: 2px solid #fff; outline-offset: 1px; box-shadow: 0 0 8px rgba(255,255,255,.28);
+}
+.episode-list .episode-play {
   display: block;
+  width: 100%;
   text-align: left;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid transparent;
   border-radius: .65rem;
-  padding: .45rem .45rem .8rem;
-  min-height: 12rem;
-  background: #17191c;
-  transition: all 90ms ease-out;
+  padding: .25rem .25rem .35rem;
+  background: transparent;
+  transition: outline-color 90ms ease-out;
 }
 .episode-art { position: relative; display: grid; place-items: center; width: 100%; min-height: 130px; aspect-ratio: 16 / 9; overflow: hidden; border-radius: .38rem; background: linear-gradient(135deg, #272b30, #13171c); color: #bed5e4; font-size: 1.45rem; }
-.episode-started { position: absolute; right: 10px; bottom: 8px; z-index: 1; width: 18px; height: 20px; pointer-events: none; }
-.episode-started::before, .episode-started::after { content: ""; position: absolute; right: 4px; bottom: 3px; width: 9px; height: 15px; transform: rotate(45deg); }
-.episode-started::before { border-right: 5px solid rgba(0,0,0,.85); border-bottom: 5px solid rgba(0,0,0,.85); }
-.episode-started::after { border-right: 3px solid #fff; border-bottom: 3px solid #fff; }
+.episode-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255,255,255,.35); pointer-events: none; }
+.episode-progress-fill { display: block; height: 100%; background: #fff; }
 .episode-art img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.episode-list button strong { display: block; font-size: clamp(16px, 1.15vw, 20px); color: #ffffff; margin: .7rem .35rem .2rem; }
-.episode-list button small { color: var(--muted); margin: 0 .35rem; display: block; }
+.episode-list .episode-play strong { display: block; font-size: clamp(15px, 1.05vw, 19px); color: #ffffff; margin: .5rem .2rem .15rem; }
+.episode-list .episode-play small { color: var(--muted); margin: 0 .2rem; display: block; }
 .episode-list button:focus, .episode-list button.is-focused {
   outline: 2px solid #ffffff;
   outline-offset: 1px;
   border-color: #ffffff;
-  box-shadow: 0 0 16px 2px rgba(56, 189, 248, 0.72);
+  box-shadow: 0 0 10px rgba(255,255,255,.32);
 }
 
 footer {
@@ -776,8 +636,8 @@ footer a { color: rgba(255, 255, 255, 0.85); }
   .detail-copy { top: 8vh; left: 34px; width: min(59vw, 640px); }
   .detail-copy h1 { font-size: clamp(36px, 4.8vw, 54px); }
   .detail-summary { font-size: clamp(14px, 1.7vw, 18px); -webkit-line-clamp: 3; }
-  .detail-episode-section { left: 28px; right: 22px; height: clamp(190px, 30vh, 240px); }
-  .detail-episodes button { flex-basis: clamp(180px, 27vw, 250px); }
+  .detail-copy { width: min(70vw, 720px); }
+  .detail-information { gap: 10px 22px; }
   .episode-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 700px) {
@@ -787,26 +647,22 @@ footer a { color: rgba(255, 255, 255, 0.85); }
   .search-layout { grid-template-columns: 1fr; }
   .results { max-height: none; }
   .details-back { left: 16px; top: 14px; }
-  .detail-copy, .detail-view.is-movie .detail-copy { top: 62px; left: 24px; width: calc(100% - 48px); max-height: 56%; }
+  .detail-copy { top: 62px; left: 24px; width: calc(100% - 48px); max-height: 57%; }
   .detail-copy h1 { font-size: clamp(31px, 7vw, 44px); }
   .detail-meta { margin-bottom: 9px; font-size: 13px; }
   .detail-summary { margin-bottom: 11px; font-size: 14px; -webkit-line-clamp: 2; }
   .detail-actions { gap: 6px; min-height: 42px; margin-bottom: 7px; }
   .detail-actions button { min-height: 40px; padding: .55rem .75rem; font-size: 13px; }
   .detail-actions .detail-primary { min-width: 0; }
-  .provider-strip { min-height: 32px; gap: 7px; }
-  .provider-icon { width: 34px; height: 34px; flex-basis: 34px; }
-  .provider-icon img { width: 30px; height: 30px; }
-  .detail-episode-section { left: 18px; right: 14px; bottom: 13px; height: 32vh; min-height: 190px; }
-  .episode-heading-row { min-height: 34px; margin-bottom: 4px; }
-  .episode-heading-row h2 { font-size: 18px; }
-  .detail-episodes button { flex-basis: clamp(175px, 44vw, 230px); }
+  .detail-information { left: 24px; right: 24px; bottom: 42px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .detail-fact-value { font-size: 13px; }
   .episode-list { grid-template-columns: 1fr; max-height: none; }
   footer { margin-top: 2.5rem; }
 }
 @media (max-height: 800px) {
-  .detail-episode-section { height: clamp(225px, 32vh, 260px); bottom: 14px; }
-  .season-menu { top: auto; bottom: 100%; margin-bottom: 6px; }
-  .detail-episodes button { flex-basis: clamp(175px, 20vw, 220px); }
+  .detail-copy { top: 70px; }
+  .detail-summary { -webkit-line-clamp: 2; }
+  .detail-information { gap: 8px 24px; bottom: 38px; }
+  .detail-information .detail-fact:nth-child(n+7) { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }

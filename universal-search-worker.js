@@ -44,6 +44,30 @@ function title(row, type) {
       .map(s => ({ number: s.season_number, count: s.episode_count,
         name: String(s.name || `Season ${s.season_number}`).slice(0, 100) })) : undefined };
 }
+function detail(row, type) {
+  const base = title(row, type);
+  const names = values => Array.isArray(values) ? values.filter(value => value && typeof value.name === "string")
+    .slice(0, 5).map(value => value.name.slice(0, 70)) : [];
+  const crew = Array.isArray(row.credits?.crew) ? row.credits.crew : [];
+  const cast = Array.isArray(row.credits?.cast) ? row.credits.cast : [];
+  const directors = type === "movie" ? names(crew.filter(value => value.job === "Director")) : [];
+  const creators = type === "tv" ? names(row.created_by) : [];
+  const usRating = type === "tv"
+    ? row.content_ratings?.results?.find(value => value.iso_3166_1 === "US")?.rating
+    : row.release_dates?.results?.find(value => value.iso_3166_1 === "US")?.release_dates
+      ?.find(value => typeof value.certification === "string" && value.certification)?.certification;
+  return { ...base,
+    cast: names(cast), directors, creators,
+    networks: type === "tv" ? names(row.networks) : [],
+    studios: type === "movie" ? names(row.production_companies) : [],
+    runtime: type === "movie" && Number.isInteger(row.runtime) && row.runtime > 0 ? row.runtime : null,
+    episodeRuntime: type === "tv" && Array.isArray(row.episode_run_time)
+      ? row.episode_run_time.find(value => Number.isInteger(value) && value > 0) || null : null,
+    status: typeof row.status === "string" ? row.status.slice(0, 60) : "",
+    originalLanguage: typeof row.original_language === "string" && /^[a-z]{2,3}$/.test(row.original_language)
+      ? row.original_language : "",
+    rating: typeof usRating === "string" ? usRating.slice(0, 12) : "" };
+}
 function results(payload, filter) {
   return (Array.isArray(payload.results) ? payload.results : []).filter(row => {
     const type = filter === "all" ? row.media_type : filter;
@@ -158,7 +182,7 @@ export async function api(request, env, options = {}) {
     const kind = parts[2], type = parts[3], id = positive(parts[4]);
     if (url.search || !id || !TYPES.has(type) || parts.length !== (kind === "season" ? 6 : 5))
       return json(400, { error: "invalid_route" });
-    if (kind === "title") { path = `/${type}/${id}?language=en-US${type === "tv" ? "&append_to_response=external_ids" : ""}`; shape = value => title(value, type); ttl = 1800; }
+    if (kind === "title") { path = `/${type}/${id}?language=en-US&append_to_response=${type === "tv" ? "external_ids,credits,content_ratings" : "credits,release_dates"}`; shape = value => detail(value, type); ttl = 1800; }
     else if (kind === "providers") { path = `/${type}/${id}/watch/providers`; shape = value => providers(value, type, id); ttl = 900; }
     else if (kind === "season" && type === "tv") {
       const number = positive(parts[5], 100);

@@ -171,6 +171,33 @@ test("details, providers, and seasons preserve categories and exclude unaired ep
   assert.deepEqual((await season.json()).episodes.map(row => row.number), [2]);
 });
 
+test("detail metadata is bounded, verified, and omits missing fields", async () => {
+  const tv = await api(req("/api/title/tv/2190"), env, { fetch: async (url) => {
+    assert.match(url, /append_to_response=external_ids,credits,content_ratings/);
+    return new Response(JSON.stringify({ id: 2190, name: "South Park", first_air_date: "1997-08-13",
+      created_by: [{ name: "Trey Parker" }], networks: [{ name: "Comedy Central" }],
+      credits: { cast: [{ name: "Trey Parker" }, { name: "Matt Stone" }] },
+      content_ratings: { results: [{ iso_3166_1: "US", rating: "TV-MA" }] },
+      episode_run_time: [22], status: "Returning Series", original_language: "en" }));
+  } });
+  const show = await tv.json();
+  assert.deepEqual(show.cast, ["Trey Parker", "Matt Stone"]);
+  assert.deepEqual(show.creators, ["Trey Parker"]);
+  assert.deepEqual(show.networks, ["Comedy Central"]);
+  assert.equal(show.rating, "TV-MA");
+  assert.equal(show.episodeRuntime, 22);
+  const movie = await api(req("/api/title/movie/550"), env, { fetch: async (url) => {
+    assert.match(url, /append_to_response=credits,release_dates/);
+    return new Response(JSON.stringify({ id: 550, title: "Fight Club", runtime: 139,
+      credits: { crew: [{ job: "Director", name: "David Fincher" }] } }));
+  } });
+  const film = await movie.json();
+  assert.deepEqual(film.directors, ["David Fincher"]);
+  assert.equal(film.runtime, 139);
+  assert.deepEqual(film.studios, []);
+  assert.equal(film.rating, "");
+});
+
 test("TV details carry a validated external TVDB identity for player episode lookup", async () => {
   let upstream;
   const response = await api(req("/api/title/tv/105248"), env, { fetch: async (url, options) => {

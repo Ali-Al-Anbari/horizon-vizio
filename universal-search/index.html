@@ -58,29 +58,19 @@
         <p id="detail-year" class="detail-meta"></p>
         <p id="detail-summary" class="detail-summary"></p>
         <div id="detail-actions" class="detail-actions"></div>
-        <div id="providers" class="provider-strip" aria-label="Where to watch"></div>
-        <p class="provider-attribution">Availability via TMDB · JustWatch</p>
         <p id="detail-status" class="detail-status" role="status"></p>
       </div>
-      <section id="detail-episode-section" class="detail-episode-section" aria-label="Episodes">
-        <div class="episode-heading-row">
-          <h2>Episodes</h2>
-          <div class="season-control">
-            <button id="detail-season-toggle" data-focus type="button" aria-haspopup="true" aria-expanded="false" disabled>Season</button>
-            <div id="detail-season-menu" class="season-menu" role="listbox" aria-label="Choose a season" hidden></div>
-          </div>
-        </div>
-        <p id="detail-episode-status" class="detail-episode-status" role="status"></p>
-        <div id="detail-episodes" class="detail-episodes" aria-label="Season episodes"></div>
-      </section>
+      <section id="detail-information" class="detail-information" aria-label="Title information" hidden></section>
+      <p class="detail-credits">Credits · Metadata: <a href="https://www.themoviedb.org/" data-focus aria-label="The Movie Database">TMDB</a></p>
     </section>
     <section id="episodes-view" class="view episodes-view" hidden>
-      <button id="episodes-back" class="back-button" data-focus type="button">← Details</button>
-      <h1 id="episodes-heading"></h1>
-      <p class="disclaimer">Select an aired episode. Playback availability varies by title and provider.</p>
-      <div id="seasons" class="seasons" aria-label="Seasons"></div>
+      <div class="episodes-header">
+        <button id="episodes-back" class="back-button" data-focus type="button">← Details</button>
+        <h1 id="episodes-heading"></h1>
+        <div id="seasons" class="seasons" aria-label="Seasons"></div>
+      </div>
       <p id="episode-status" class="status" role="status"></p>
-      <div id="episode-list" class="episode-list"></div>
+      <div id="episode-list" class="episode-list" aria-label="Episodes"></div>
     </section>
     <section id="history-view" class="view history-view" hidden>
       <div class="history-header">
@@ -91,7 +81,7 @@
       <p id="history-status" class="status" role="status"></p>
       <button id="history-clear" class="back-button" data-focus type="button">Clear History</button>
     </section>
-    <footer>Search metadata by <a href="https://www.themoviedb.org/">TMDB</a> · Provider data by JustWatch</footer>
+    <footer>Metadata: <a href="https://www.themoviedb.org/">TMDB</a></footer>
     </div>
   </main>
 </body>

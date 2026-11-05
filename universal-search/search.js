@@ -29,16 +29,17 @@
     var get = function (id) { return doc.getElementById(id); };
     var query = get("query"), results = get("results");
     var state = { view: "search", previousView: "search", detailSource: "search", filter: "all", query: "", title: null, detail: null,
-      providers: null, season: null, episodes: [], subtitle: core.readSubtitlePref(local), continueMode: false };
+      season: null, episodes: [], subtitle: core.readSubtitlePref(local), continueMode: false };
     var finePointer = !!(clock.matchMedia && clock.matchMedia("(pointer: fine)").matches)
       && !/Vizio|SmartCast/i.test(clock.navigator && clock.navigator.userAgent || "");
     var keyboardOpen = !finePointer;
     var historyReady = false, restoringHistory = false, historyBackPending = false, historyDepth = 0;
     var searchTimer = null, searchToken = 0, detailToken = 0, seasonToken = 0, activeAbort = null;
     var cache = new Map(), disposed = false, returningHome = false, pendingEpisodeFocus = null,
+      nextContinue = null,
       launchingEpisode = false, clearPending = false;
     function text(id, value) { get(id).textContent = value; }
-    function createPlaybackHandoff(type, id) {
+    function createPlaybackHandoff(type, id, season, episode) {
       var token = "";
       try {
         if (clock.crypto && typeof clock.crypto.getRandomValues === "function") {
@@ -48,15 +49,15 @@
       } catch (_error) {}
       if (!token) return "";
       token = token.slice(0, 48);
-      session.setItem(core.HANDOFF_KEY, JSON.stringify({ token: token, type: type, id: id, at: Date.now() }));
+      session.setItem(core.HANDOFF_KEY, JSON.stringify({ token: token, type: type, id: id,
+        season: type === "tv" ? season : null, episode: type === "tv" ? episode : null, at: Date.now() }));
       return token;
     }
     function consumePlaybackHandoff(returned, type) {
       if (!returned || !returned.handoff) return false;
       try {
         var saved = JSON.parse(session.getItem(core.HANDOFF_KEY) || "null");
-        if (!saved || saved.token !== returned.handoff || saved.type !== type || saved.id !== returned.id
-            || !Number.isFinite(saved.at) || Date.now() - saved.at > 86400000) return false;
+        if (!core.validHandoff(saved, returned, type, Date.now())) return false;
         session.setItem(core.HANDOFF_KEY, "");
         return true;
       } catch (_error) { return false; }
@@ -73,7 +74,7 @@
       get("keyboard").hidden = name !== "search" || !keyboardOpen;
       get("keyboard-toggle").textContent = keyboardOpen ? "Hide Keyboard" : "Show Keyboard";
       doc.body.classList.toggle("details-active", name === "details");
-      if (name !== "details") closeSeasonMenu(false);
+      doc.body.classList.toggle("episodes-active", name === "episodes");
       syncRail();
       if (changed && historyReady && !restoringHistory && root.history && root.history.pushState) {
         try { root.history.pushState({ horizonWatchView: name, depth: ++historyDepth }, "", nav.href); }
@@ -104,11 +105,27 @@
       else if (target === "episodes") focus(get("episodes-back"));
       else focus(get("details-back"));
     }
+    function revealInScroller(element, scroller, horizontal, inset) {
+      if (!scroller) return;
+      var item = element.getBoundingClientRect(), bounds = scroller.getBoundingClientRect();
+      if (horizontal) {
+        if (item.left < bounds.left + inset) scroller.scrollLeft -= bounds.left + inset - item.left;
+        else if (item.right > bounds.right - inset) scroller.scrollLeft += item.right - bounds.right + inset;
+      } else {
+        if (item.top < bounds.top + inset) scroller.scrollTop -= bounds.top + inset - item.top;
+        else if (item.bottom > bounds.bottom - inset) scroller.scrollTop += item.bottom - bounds.bottom + inset;
+      }
+    }
     function focus(element) { if (element) {
       var previous = doc.querySelector("[data-focus].is-focused");
       if (previous && previous !== element) previous.classList.remove("is-focused");
       element.focus({ preventScroll: true }); element.classList.add("is-focused");
-      if (element.scrollIntoView) element.scrollIntoView({ block: "nearest", inline: "nearest" });
+      var seasonStrip = element.closest("#seasons");
+      var episodeScroll = element.closest("#episode-list");
+      var resultScroll = element.closest("#results, #history-list");
+      if (seasonStrip) revealInScroller(element, seasonStrip, true, 14);
+      else if (episodeScroll) revealInScroller(element, episodeScroll, false, 18);
+      else if (resultScroll) revealInScroller(element, resultScroll, false, 18);
     } }
     function button(label, click, className) {
       var el = doc.createElement("button"); el.type = "button"; el.textContent = label;
@@ -128,7 +145,6 @@
         var bits = parsed.pathname.split("/");
         var value = bits[2] === "search" ? mock.search(parsed.searchParams.get("q") || "", parsed.searchParams.get("type") || "all")
           : bits[2] === "title" ? mock.title(bits[3], Number(bits[4]))
-          : bits[2] === "providers" ? mock.providers()
           : mock.season(Number(bits[4]), Number(bits[5]));
         if (!value) throw Error("not_found");
         return value;
@@ -226,7 +242,8 @@
             : "Movie" : row.resume && row.type === "tv"
           ? "S" + row.resume.season + " E" + row.resume.episode + (row.resume.episodeTitle ? " · " + row.resume.episodeTitle : "")
             + (row.resume.progress && !row.resume.progress.completed
-              ? " · " + Math.round(row.resume.progress.position / row.resume.progress.duration * 100) + "% watched" : "")
+              ? " · " + Math.round(row.resume.progress.position / row.resume.progress.duration * 100) + "% watched"
+              : row.resume.progress && row.resume.progress.completed ? " · completed" : "")
           : (row.type === "tv" ? "TV" : "Movie") + (row.date ? " · " + row.date.slice(0, 4) : "");
         meta.appendChild(title); meta.appendChild(info); card.appendChild(art); card.appendChild(meta);
         card.setAttribute("aria-label", row.title + ", " + info.textContent);
@@ -301,7 +318,7 @@
       var history = core.readHistory(local || { getItem: function () { return null; } });
       renderResults(core.continueRows(history).map(function (row) { return { type: row.type, id: row.id, title: row.title,
         date: "", poster: row.poster, backdrop: row.backdrop, resume: row }; }));
-      text("search-status", history.length ? "Continue Watching · saved VidBolt positions resume with a 10-second rewind"
+      text("search-status", history.length ? "Continue Watching · resume or choose the next confirmed episode"
         : "Nothing in Continue Watching yet.");
       focus(get("continue-toggle"));
     }
@@ -346,49 +363,68 @@
         state.detailSource = "history"; state.title = row; launchMovie();
         return;
       }
+      row = core.lastWatchedEpisode(core.readHistory(local), row.id) || row;
       state.detailSource = "history";
       state.title = row; state.season = row.season; state.subtitle = core.readSubtitlePref(local);
       state.episodes = [{ number: row.episode, title: row.episodeTitle }];
       setView("episodes"); launchEpisode(row.season, row.episode);
     }
-    function updateProviders(value) {
-      state.providers = value;
-      var container = get("providers"); container.replaceChildren();
-      var link = state.title && core.providerWatchUrl(value && value.link, state.title.type, state.title.id);
-      var categoryNames = { stream: "included with subscription", free: "free or ad-supported",
-        rent: "available to rent", buy: "available to buy" };
-      core.groupProviders(value).forEach(function (provider) {
-        var label = provider.name + " · " + provider.availability.map(function (category) {
-          return categoryNames[category];
-        }).join(", ");
-        var icon;
-        if (link) {
-          icon = button("", function () { saveView(); nav.assign(link); }, "provider-icon");
-          icon.setAttribute("aria-label", label + ". Open title availability on TMDB / JustWatch.");
-          icon.title = label + " · View title availability";
-          icon.dataset.availability = provider.availability.join(",");
-        } else {
-          icon = doc.createElement("span"); icon.className = "provider-icon provider-informational";
-          icon.setAttribute("role", "img"); icon.setAttribute("aria-label", label + ". Informational listing only.");
-          icon.title = label;
-        }
-        if (provider.logo) {
-          var logo = doc.createElement("img"); logo.src = core.imageUrl(provider.logo, "provider"); logo.alt = provider.name;
-          logo.addEventListener("error", function () {
-            icon.classList.add("has-name-fallback");
-            icon.replaceChildren(); var name = doc.createElement("span"); name.className = "provider-name-fallback";
-            name.textContent = provider.name; icon.appendChild(name);
-          }); icon.appendChild(logo);
-        } else {
-          icon.classList.add("has-name-fallback");
-          var fallback = doc.createElement("span"); fallback.className = "provider-name-fallback";
-          fallback.textContent = provider.name; icon.appendChild(fallback);
-        }
-        container.appendChild(icon);
+    function renderInformation(detail) {
+      var host = get("detail-information"); host.replaceChildren();
+      var items = [];
+      function add(label, value) {
+        if (Array.isArray(value)) value = value.filter(Boolean).slice(0, 4).join(" · ");
+        if (value) items.push({ label: label, value: String(value) });
+      }
+      add("Featured cast", detail.cast);
+      add(state.title.type === "tv" ? "Created by" : "Directed by",
+        state.title.type === "tv" ? detail.creators : detail.directors);
+      add("Genres", detail.genres);
+      add(state.title.type === "tv" ? "Original network" : "Studios",
+        state.title.type === "tv" ? detail.networks : detail.studios);
+      add("Status", state.title.type === "tv" ? detail.status : "");
+      var languages = { en: "English", es: "Spanish", fr: "French", de: "German", ja: "Japanese",
+        ko: "Korean", zh: "Chinese", hi: "Hindi", it: "Italian", pt: "Portuguese" };
+      add("Original language", languages[detail.originalLanguage] || detail.originalLanguage);
+      host.hidden = !items.length;
+      items.forEach(function (item) {
+        var group = doc.createElement("div"); group.className = "detail-fact";
+        var label = doc.createElement("span"); label.className = "detail-fact-label"; label.textContent = item.label;
+        var value = doc.createElement("span"); value.className = "detail-fact-value"; value.textContent = item.value;
+        group.appendChild(label); group.appendChild(value); host.appendChild(group);
       });
-      container.setAttribute("aria-label", container.children.length
-        ? "Where to watch. Provider data from TMDB and JustWatch."
-        : "No US provider listings returned.");
+    }
+    function resolveNextContinue(recent) {
+      if (!state.detail || !Array.isArray(state.detail.seasons)) return;
+      var key = recent.id + ":" + recent.season + ":" + recent.episode + ":"
+        + (recent.progress && recent.progress.updatedAt || recent.at);
+      if (nextContinue && nextContinue.key === key) return;
+      var token = detailToken;
+      nextContinue = { key: key, status: "pending", target: null };
+      var seasons = state.detail.seasons.slice().sort(function (a, b) { return a.number - b.number; });
+      if (!seasons.some(function (row) { return row.number === recent.season; })) {
+        nextContinue.status = "unavailable"; return;
+      }
+      api("/api/season/tv/" + recent.id + "/" + recent.season).then(function (value) {
+        var rows = Array.isArray(value.episodes) ? value.episodes : [];
+        if (!rows.some(function (row) { return row.number === recent.episode; })) return null;
+        var next = core.nextConfirmedEpisode(recent, rows, null, null);
+        if (next) return next;
+        if (rows.some(function (row) { return row.number > recent.episode; })) return null;
+        var following = seasons.find(function (row) { return row.number > recent.season; });
+        if (!following) return null;
+        return api("/api/season/tv/" + recent.id + "/" + following.number).then(function (season) {
+          return core.nextConfirmedEpisode(recent, rows, following.number, season.episodes);
+        });
+      }).then(function (target) {
+        if (disposed || token !== detailToken || !nextContinue || nextContinue.key !== key) return;
+        nextContinue.status = target ? "ready" : "unavailable";
+        nextContinue.target = target;
+        renderActions();
+      }, function () {
+        if (disposed || token !== detailToken || !nextContinue || nextContinue.key !== key) return;
+        nextContinue.status = "unavailable"; renderActions();
+      });
     }
     function renderActions() {
       var actions = get("detail-actions");
@@ -404,22 +440,33 @@
         actions.appendChild(button(movieProgress ? "Resume movie" : "Play movie",
           function () { launchMovie(false); }, "detail-primary"));
         if (movieProgress) actions.appendChild(button("Start Over", function () { launchMovie(true); }, "detail-secondary"));
-        if (focusedClass) focus(actions.querySelector("." + focusedClass));
+        if (focusedClass) focus(actions.querySelector("." + focusedClass) || actions.querySelector(".detail-primary"));
         return;
       }
       if (state.title.type === "tv") {
-        var recent = core.readHistory(local || { getItem: function () { return null; } })
-          .find(function (row) { return row.type === "tv" && row.id === state.title.id; });
-        var resumable = recent && recent.progress && !recent.progress.completed ? recent.progress : null;
+        var recent = core.lastWatchedEpisode(core.readHistory(local), state.title.id);
+        var resumable = recent && recent.progress && recent.manualWatched !== true
+          && (!recent.progress.completed || recent.manualWatched === false)
+          ? recent.progress : null;
+        var completed = recent && (recent.manualWatched === true || recent.progress
+          && recent.progress.completed && recent.manualWatched !== false);
+        if (completed) resolveNextContinue(recent);
+        var next = completed && nextContinue && nextContinue.status === "ready" ? nextContinue.target : null;
+        var noNext = completed && nextContinue && nextContinue.status === "unavailable";
         var primary = button(resumable ? "Resume S" + recent.season + " E" + recent.episode
-          : recent && recent.progress && recent.progress.completed ? "Play S" + recent.season + " E" + recent.episode
-            : recent ? "Continue S" + recent.season + " E" + recent.episode : "Start watching",
+          : next ? "Continue S" + next.season + " E" + next.episode
+            : noNext ? "Episodes" : completed ? "Checking next episode…"
+              : recent ? "Continue S" + recent.season + " E" + recent.episode : "Start watching",
           function () {
-            if (recent) launchEpisode(recent.season, recent.episode, false);
+            if (next) launchEpisode(next.season, next.episode, false, next.title);
+            else if (noNext) browseEpisodes();
+            else if (recent && !completed) launchEpisode(recent.season, recent.episode, false);
             else if (state.season && state.episodes.length) launchEpisode(state.season, state.episodes[0].number);
           }, "detail-primary");
-        primary.disabled = !recent && !state.episodes.length;
+        primary.disabled = completed && !next && !noNext || !recent && !state.episodes.length;
         primary.setAttribute("aria-label", resumable ? "Resume Season " + recent.season + ", Episode " + recent.episode
+          : next ? "Continue with Season " + next.season + ", Episode " + next.episode
+          : noNext ? "Choose an episode" : completed ? "Checking for the next episode"
           : recent ? "Continue Season " + recent.season + ", Episode " + recent.episode
           : state.episodes.length ? "Play Season " + state.season + ", Episode " + state.episodes[0].number
             : "Start watching when episode metadata loads");
@@ -428,57 +475,25 @@
         if (resumable) actions.appendChild(button("Start Over", function () {
           launchEpisode(recent.season, recent.episode, true);
         }, "detail-secondary"));
-        actions.appendChild(button("Episode List", browseEpisodes, "detail-secondary"));
-        if (focusedClass) focus(primary.disabled ? actions.querySelector(".detail-secondary")
-          : actions.querySelector("." + focusedClass));
+        if (!noNext) actions.appendChild(button("Episodes", browseEpisodes, "detail-secondary"));
+        if (focusedClass) focus(actions.querySelector("." + focusedClass + ":not(:disabled)")
+          || actions.querySelector("button:not(:disabled)"));
       }
-    }
-    function renderDetailSeasons() {
-      var menu = get("detail-season-menu"), toggle = get("detail-season-toggle");
-      menu.replaceChildren();
-      var seasons = state.detail && Array.isArray(state.detail.seasons) ? state.detail.seasons : [];
-      toggle.disabled = !seasons.length;
-      if (!seasons.length) { toggle.textContent = "Season unavailable"; return; }
-      var selected = seasons.find(function (season) { return season.number === state.season; }) || seasons[0];
-      toggle.textContent = (selected.name || "Season " + selected.number) + " ▾";
-      seasons.forEach(function (season) {
-        var option = button(season.name || "Season " + season.number, function () {
-          closeSeasonMenu(false); loadSeason(season.number); focus(toggle);
-        }, "season-option" + (season.number === selected.number ? " is-current" : ""));
-        option.dataset.season = String(season.number); option.setAttribute("role", "option");
-        option.setAttribute("aria-selected", season.number === selected.number ? "true" : "false");
-        menu.appendChild(option);
-      });
-    }
-    function closeSeasonMenu(restoreFocus) {
-      var menu = get("detail-season-menu"), toggle = get("detail-season-toggle");
-      if (!menu || menu.hidden) return;
-      menu.hidden = true; toggle.setAttribute("aria-expanded", "false");
-      if (restoreFocus) focus(toggle);
-    }
-    function toggleSeasonMenu() {
-      var menu = get("detail-season-menu"), toggle = get("detail-season-toggle");
-      if (menu.hidden) {
-        menu.hidden = false; toggle.setAttribute("aria-expanded", "true");
-        var current = menu.querySelector(".is-current"); focus(current || menu.querySelector("button"));
-      } else closeSeasonMenu(true);
     }
     function openDetails(row) {
       detailToken += 1; seasonToken += 1;
       state.detailSource = state.view === "history" ? "history" : "search";
-      state.title = row; state.detail = null; state.providers = null; state.season = null;
+      state.title = row; state.detail = null; state.season = null; nextContinue = null;
       state.episodes = [];
       state.subtitle = core.readSubtitlePref(local);
       setView("details");
-      get("details-view").classList.toggle("is-movie", row.type === "movie");
-      get("detail-episode-section").hidden = row.type !== "tv";
+      get("detail-information").hidden = true;
+      get("detail-information").replaceChildren();
       text("detail-kind", row.type === "tv" ? "TV Show" : "Movie");
-      text("detail-title", row.title); text("detail-year", row.date ? row.date.slice(0, 4) : "Release date unknown");
+      text("detail-title", row.title); text("detail-year", row.date ? row.date.slice(0, 4) : row.type === "tv" ? "TV series" : "Movie");
       text("detail-summary", row.overview || "No synopsis available.");
       renderDetailArt(row);
-      text("detail-status", "Loading details and provider listings…");
-      text("detail-episode-status", row.type === "tv" ? "Loading episodes…" : "");
-      get("detail-episodes").replaceChildren();
+      text("detail-status", "Loading details…");
       renderActions();
       var initialPrimary = get("detail-actions").querySelector(".detail-primary");
       focus(initialPrimary && !initialPrimary.disabled ? initialPrimary : get("details-back"));
@@ -505,83 +520,87 @@
         text("detail-summary", detail.overview || "No synopsis available.");
         var meta = [];
         if (detail.date) meta.push(detail.date.slice(0, 4));
-        if (Array.isArray(detail.genres) && detail.genres.length) meta.push(detail.genres.slice(0, 3).join(" · "));
-        if (row.type === "tv") meta.push(Array.isArray(detail.seasons) && detail.seasons.length
-          ? detail.seasons.length + (detail.seasons.length === 1 ? " season" : " seasons") : "TV series");
-        else meta.push("Movie");
+        meta.push(row.type === "tv" ? "TV series" : "Movie");
+        if (detail.rating) meta.push(detail.rating);
+        if (row.type === "tv") {
+          if (Array.isArray(detail.seasons) && detail.seasons.length) meta.push(detail.seasons.length +
+            (detail.seasons.length === 1 ? " season" : " seasons"));
+          else if (detail.episodeRuntime) meta.push(detail.episodeRuntime + " min episodes");
+        } else if (detail.runtime) meta.push(detail.runtime + " min");
         text("detail-year", meta.join("  ·  ") || (row.type === "tv" ? "TV Series" : "Movie"));
+        renderInformation(detail);
         text("detail-status", "");
         if (row.type === "tv") {
-          var latest = core.readHistory(local || { getItem: function () { return null; } })
-            .find(function (entry) { return entry.type === "tv" && entry.id === state.title.id; });
+          var latest = core.lastWatchedEpisode(core.readHistory(local), state.title.id);
           var seasons = Array.isArray(detail.seasons) ? detail.seasons : [];
-          state.season = latest && seasons.some(function (entry) { return entry.number === latest.season; })
-            ? latest.season : seasons.length ? seasons[0].number : null;
-          renderDetailSeasons(); renderActions();
-          if (state.season) loadSeason(state.season);
-          else text("detail-episode-status", "Episode metadata is unavailable.");
+          var browsed = core.readBrowsedSeason(local, state.title.id);
+          state.season = browsed !== null && seasons.some(function (entry) { return entry.number === browsed; })
+            ? browsed : latest && seasons.some(function (entry) { return entry.number === latest.season; })
+              ? latest.season : seasons.length ? seasons[0].number : null;
+          renderActions();
+          if (state.view === "episodes") browseEpisodes();
+          else if (state.season !== null) loadSeason(state.season);
         }
         saveView();
       }, function () {
         if (disposed || token !== detailToken) return;
         text("detail-status", "More details unavailable; search result information remains visible.");
       });
-      api("/api/providers/" + row.type + "/" + row.id).then(function (value) {
-        if (!disposed && token === detailToken) updateProviders(value);
-      }, function () {
-        if (!disposed && token === detailToken) get("providers").textContent = "Provider listings unavailable. Try again later.";
-      });
     }
     function browseEpisodes() {
       if (!state.title || state.title.type !== "tv") return;
       setView("episodes");
       text("episodes-heading", state.title.title + " · Episodes");
-      var seasons = state.detail && state.detail.seasons || [];
+      var seasons = state.detail && state.detail.seasons ? state.detail.seasons.slice().sort(function (a, b) {
+        return a.number - b.number;
+      }) : [];
       var rail = get("seasons"); rail.replaceChildren();
       seasons.forEach(function (entry) {
-        rail.appendChild(button(entry.name || "Season " + entry.number, function () { loadSeason(entry.number); },
-          state.season === entry.number ? "is-current" : ""));
+        var seasonButton = button(entry.name || "Season " + entry.number, function () { loadSeason(entry.number, true); },
+          state.season === entry.number ? "is-current" : "");
+        seasonButton.dataset.season = String(entry.number); rail.appendChild(seasonButton);
       });
       if (!seasons.length) text("episode-status", state.detail
         ? "No season metadata available. Return to Details and retry."
         : "Loading season metadata…");
       else {
-        var latest = core.readHistory(local || { getItem: function () { return null; } })
-          .find(function (row) { return row.type === "tv" && row.id === state.title.id; });
-        var chosen = state.season || (latest && seasons.some(function (s) { return s.number === latest.season; })
-          ? latest.season : seasons[0].number);
+        var latest = core.lastWatchedEpisode(core.readHistory(local), state.title.id);
+        var browsed = core.readBrowsedSeason(local, state.title.id);
+        var chosen = browsed !== null && seasons.some(function (s) { return s.number === browsed; }) ? browsed
+          : state.season !== null && seasons.some(function (s) { return s.number === state.season; }) ? state.season
+            : latest && seasons.some(function (s) { return s.number === latest.season; }) ? latest.season : seasons[0].number;
+        if (pendingEpisodeFocus && pendingEpisodeFocus.season !== chosen) pendingEpisodeFocus = null;
         loadSeason(chosen);
+        var currentSeason = rail.querySelector(".is-current"), firstSeason = rail.querySelector("button");
+        if (currentSeason && firstSeason) rail.scrollLeft = Math.max(0, currentSeason.offsetLeft - firstSeason.offsetLeft);
       }
       focus(get("episodes-back")); saveView();
     }
-    function loadSeason(number) {
+    function loadSeason(number, remember) {
       if (!state.title || !state.detail || !state.detail.seasons.some(function (s) { return s.number === number; })) return;
+      if (state.season !== number) get("episode-list").scrollTop = 0;
       state.season = number; var token = ++seasonToken;
-      if (!get("details-view").hidden) renderDetailSeasons();
-      get("seasons").querySelectorAll("button").forEach(function (button, index) {
-        button.classList.toggle("is-current", state.detail.seasons[index].number === number);
+      if (remember) core.writeBrowsedSeason(local, state.title.id, number);
+      get("seasons").querySelectorAll("button").forEach(function (button) {
+        button.classList.toggle("is-current", Number(button.dataset.season) === number);
       });
       text("episode-status", "Loading Season " + number + "…");
-      text("detail-episode-status", "Loading episodes…");
       get("episode-list").replaceChildren();
-      get("detail-episodes").replaceChildren();
       api("/api/season/tv/" + state.title.id + "/" + number).then(function (value) {
         if (disposed || token !== seasonToken) return;
         state.episodes = Array.isArray(value.episodes) ? value.episodes : [];
-        var list = get("episode-list"), detailList = get("detail-episodes");
-        list.replaceChildren(); detailList.replaceChildren();
+        var list = get("episode-list");
+        list.replaceChildren();
         state.episodes.forEach(function (ep) {
-          list.appendChild(makeEpisodeCard(ep, number, false));
-          detailList.appendChild(makeEpisodeCard(ep, number, true));
+          list.appendChild(makeEpisodeCard(ep, number));
         });
-        text("episode-status", state.episodes.length ? "Select an episode to watch in Horizon."
-          : "No aired episodes returned for this season.");
-        text("detail-episode-status", state.episodes.length ? "" : "No aired episodes for this season.");
+        syncStartedMarks();
+        text("episode-status", state.episodes.length ? "" : "No aired episodes returned for this season.");
         renderActions();
         var primary = get("detail-actions").querySelector(".detail-primary");
         if (doc.activeElement === get("details-back") && primary && !primary.disabled) focus(primary);
         if (pendingEpisodeFocus && pendingEpisodeFocus.season === number) {
-          var selected = Array.from(list.querySelectorAll("button")).find(function (card) {
+          var selected = Array.from(list.querySelectorAll(".episode-play")).find(function (card) {
             return card.dataset.episode === String(pendingEpisodeFocus.episode);
           });
           pendingEpisodeFocus = null;
@@ -590,16 +609,15 @@
       }, function () {
         if (disposed || token !== seasonToken) return;
         text("episode-status", "Episodes unavailable. Select the season to retry.");
-        text("detail-episode-status", "Episodes unavailable. Choose the season to retry.");
       });
       saveView();
     }
-    function makeEpisodeCard(ep, seasonNumber, compact) {
-      var card = button("", function () { launchEpisode(seasonNumber, ep.number); }, compact ? "detail-episode-card" : "");
+    function makeEpisodeCard(ep, seasonNumber) {
+      var card = button("", function () { launchEpisode(seasonNumber, ep.number); }, "episode-play");
       card.dataset.season = String(seasonNumber);
       card.dataset.episode = String(ep.number);
       var artwork = doc.createElement("span");
-      artwork.className = compact ? "detail-episode-art" : "episode-art";
+      artwork.className = "episode-art";
       artwork.textContent = "Episode " + ep.number;
       if (ep.still) {
         var still = poster(ep.still, "backdrop");
@@ -610,41 +628,46 @@
         });
         artwork.replaceChildren(still);
       }
-      var heading = doc.createElement(compact ? "span" : "strong");
-      heading.className = compact ? "detail-episode-label" : "";
+      var heading = doc.createElement("strong");
       heading.textContent = "E" + ep.number + " · " + ep.title;
-      var subtitle = doc.createElement(compact ? "span" : "small");
-      subtitle.className = compact ? "detail-episode-meta" : "";
-      subtitle.textContent = compact ? (ep.date || "") : (ep.date || "Air date unknown");
+      var subtitle = doc.createElement("small");
+      subtitle.textContent = ep.date || "Air date unknown";
       card.appendChild(artwork); card.appendChild(heading); card.appendChild(subtitle);
       card.setAttribute("aria-label", "Season " + seasonNumber + ", episode " + ep.number + ": " + ep.title);
-      if (core.readHistory(local).some(function (row) { return row.type === "tv" && row.id === state.title.id
-          && row.season === seasonNumber && row.episode === ep.number; })) addStartedMark(artwork);
+      updateEpisodeProgress(card, core.readHistory(local));
       return card;
     }
-    function addStartedMark(artwork) {
-      if (artwork.querySelector(".episode-started")) return;
-      var mark = doc.createElement("span"); mark.className = "episode-started";
-      mark.setAttribute("aria-hidden", "true"); artwork.appendChild(mark);
+    function updateEpisodeProgress(card, history) {
+      var art = card.querySelector(".episode-art");
+      if (!art || !state.title) return;
+      var row = history.find(function (entry) { return entry.type === "tv" && entry.id === state.title.id
+        && entry.season === Number(card.dataset.season) && entry.episode === Number(card.dataset.episode); });
+      var fraction = core.episodeProgressFraction(row);
+      var line = art.querySelector(".episode-progress");
+      if (!fraction) { if (line) line.remove(); }
+      else {
+        if (!line) { line = doc.createElement("span"); line.className = "episode-progress";
+          line.setAttribute("aria-hidden", "true");
+          var fill = doc.createElement("span"); fill.className = "episode-progress-fill"; line.appendChild(fill);
+          art.appendChild(line);
+        }
+        line.querySelector(".episode-progress-fill").style.width = (fraction * 100).toFixed(1) + "%";
+      }
     }
     function syncStartedMarks() {
       var history = core.readHistory(local);
-      doc.querySelectorAll("#detail-episodes button, #episode-list button").forEach(function (card) {
-        var art = card.querySelector(".detail-episode-art, .episode-art");
-        if (!art) return;
-        var started = state.title && history.some(function (row) { return row.type === "tv" && row.id === state.title.id
-          && row.season === Number(card.dataset.season) && row.episode === Number(card.dataset.episode); });
-        if (started) addStartedMark(art);
-        else { var mark = art.querySelector(".episode-started"); if (mark) mark.remove(); }
-      });
+      doc.querySelectorAll("#episode-list .episode-play")
+        .forEach(function (card) { updateEpisodeProgress(card, history); });
     }
-    function launchEpisode(season, episode, startOver) {
+    function launchEpisode(season, episode, startOver, confirmedTitle) {
       if (launchingEpisode || !state.title || state.title.type !== "tv") return;
       var matching = core.readHistory(local).find(function (row) { return row.type === "tv" && row.id === state.title.id
         && row.season === season && row.episode === episode; });
-      var progress = matching && matching.progress && !matching.progress.completed ? matching.progress : null;
-      startOver = !!startOver || !!(matching && matching.progress && matching.progress.completed);
-      var handoff = createPlaybackHandoff("tv", state.title.id);
+      var progress = matching && matching.progress && (!matching.progress.completed || matching.manualWatched === false)
+        ? matching.progress : null;
+      startOver = !!startOver || !!(matching && matching.progress && matching.progress.completed
+        && matching.manualWatched !== false);
+      var handoff = createPlaybackHandoff("tv", state.title.id, season, episode);
       var url = player.tvUrl(state.title.id, season, episode, state.subtitle, state.title.title, state.title.tvdbId,
         startOver ? null : progress, !!startOver, handoff);
       if (!url) { text("detail-status", "Invalid episode selection."); return; }
@@ -655,7 +678,8 @@
         var episodeRow = state.season === season && state.episodes.find(function (row) { return row.number === episode; });
         core.writeHistory(local, core.item("tv", state.title.id, state.title.title, season, episode,
           state.subtitle, Date.now(), { poster: state.title.poster, backdrop: state.title.backdrop,
-            episodeTitle: episodeRow && episodeRow.title || state.title.episodeTitle,
+            episodeTitle: confirmedTitle || episodeRow && episodeRow.title
+              || state.title.season === season && state.title.episode === episode && state.title.episodeTitle || "",
             tvdbId: state.title.tvdbId }));
         syncStartedMarks();
       }
@@ -714,16 +738,67 @@
     function move(key) {
       var current = doc.activeElement, rect = current && current.getBoundingClientRect();
       if (!rect) { focus(query); return; }
-      var seasonMenu = get("detail-season-menu");
-      if (state.view === "details" && seasonMenu && !seasonMenu.hidden) {
-        var options = Array.from(seasonMenu.querySelectorAll("button"));
-        var optionIndex = options.indexOf(current);
-        if (key === "ArrowUp" || key === "ArrowDown") {
-          if (optionIndex < 0) optionIndex = 0;
-          else optionIndex = Math.max(0, Math.min(options.length - 1, optionIndex + (key === "ArrowDown" ? 1 : -1)));
-          if (options.length) focus(options[optionIndex]);
-        } else if (key === "ArrowLeft") closeSeasonMenu(true);
-        return;
+      if (state.view === "details") {
+        var actions = Array.from(get("detail-actions").querySelectorAll("button")).filter(function (item) {
+          return !item.disabled;
+        });
+        var actionIndex = actions.indexOf(current), credits = get("details-view").querySelector(".detail-credits a");
+        if (current === get("details-back")) {
+          if (key === "ArrowDown") focus(actions[0] || credits);
+          else if (key === "ArrowLeft") focus(get("search-toggle"));
+          return;
+        }
+        if (actionIndex >= 0) {
+          if (key === "ArrowUp") focus(get("details-back"));
+          else if (key === "ArrowLeft") focus(actions[actionIndex - 1] || get("search-toggle"));
+          else if (key === "ArrowRight") focus(actions[actionIndex + 1]);
+          else if (key === "ArrowDown") focus(credits);
+          return;
+        }
+        if (current === credits) {
+          if (key === "ArrowUp") focus(actions[actions.length - 1] || get("details-back"));
+          return;
+        }
+        if (current.closest(".watch-rail") && key === "ArrowRight") {
+          focus(get("details-back")); return;
+        }
+      }
+      if (state.view === "episodes") {
+        var seasonButtons = Array.from(get("seasons").querySelectorAll("button"));
+        var plays = Array.from(get("episode-list").querySelectorAll(".episode-play"));
+        var seasonIndex = seasonButtons.indexOf(current), playIndex = plays.indexOf(current);
+        var offset = key === "ArrowRight" ? 1 : -1;
+        var columns = plays.filter(function (item) {
+          return plays.length && Math.abs(item.getBoundingClientRect().top - plays[0].getBoundingClientRect().top) < 2;
+        }).length || 3;
+        if (current === get("episodes-back")) {
+          if (key === "ArrowDown") focus(seasonButtons.find(function (item) {
+            return item.classList.contains("is-current");
+          }) || seasonButtons[0] || plays[0]);
+          else if (key === "ArrowLeft") focus(get("search-toggle"));
+          return;
+        }
+        if (seasonIndex >= 0) {
+          if (key === "ArrowDown") focus(plays[0]);
+          else if (key === "ArrowUp") focus(get("episodes-back"));
+          else focus(seasonButtons[Math.max(0, Math.min(seasonButtons.length - 1, seasonIndex + offset))]);
+          return;
+        }
+        if (playIndex >= 0) {
+          if (key === "ArrowUp") focus(playIndex >= columns ? plays[playIndex - columns]
+            : seasonButtons.find(function (item) { return item.classList.contains("is-current"); }) || seasonButtons[0]);
+          else if (key === "ArrowDown") {
+            var nextRow = Math.floor(playIndex / columns) + 1;
+            if (nextRow * columns < plays.length) focus(plays[Math.min(nextRow * columns + playIndex % columns, plays.length - 1)]);
+          } else {
+            var rowStart = Math.floor(playIndex / columns) * columns;
+            focus(plays[Math.max(rowStart, Math.min(plays.length - 1, rowStart + columns - 1, playIndex + offset))]);
+          }
+          return;
+        }
+        if (current.closest(".watch-rail") && key === "ArrowRight") {
+          focus(get("episodes-back")); return;
+        }
       }
       if (state.view === "search") {
         if (key === "ArrowRight" && current.id === "search-toggle") {
@@ -777,8 +852,7 @@
       if (finePointer && event.key === "Backspace" && !editing) return;
       if (key === "Back") {
         event.preventDefault(); if (event.repeat) return;
-        if (state.view === "details" && !get("detail-season-menu").hidden) closeSeasonMenu(true);
-        else if (state.view === "history") returnWithinWatch(leaveHistory);
+        if (state.view === "history") returnWithinWatch(leaveHistory);
         else if (state.view === "episodes") returnWithinWatch(backToDetails);
         else if (state.view === "details") returnWithinWatch(backToResults);
         else if (state.view === "search" && state.query) {
@@ -809,7 +883,6 @@
     });
     get("details-back").addEventListener("click", function () { returnWithinWatch(backToResults); });
     get("episodes-back").addEventListener("click", function () { returnWithinWatch(backToDetails); });
-    get("detail-season-toggle").addEventListener("click", toggleSeasonMenu);
     query.addEventListener("input", function () { state.query = query.value; scheduleSearch(300); });
     doc.querySelectorAll("[data-filter]").forEach(function (filter) { filter.addEventListener("click", function () {
       state.filter = filter.dataset.filter;

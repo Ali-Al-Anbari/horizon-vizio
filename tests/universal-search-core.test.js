@@ -102,6 +102,106 @@ test("Watch history preserves validated VidBolt progress and keeps completed row
   assert.equal(core.readHistory(store).length, 1, "clearing progress does not erase History");
 });
 
+test("browsed season is remembered per show independently of watched history", () => {
+  const store = storage();
+  assert.equal(core.writeBrowsedSeason(store, 2190, 14), true);
+  assert.equal(core.readBrowsedSeason(store, 2190), 14);
+  assert.equal(core.readBrowsedSeason(store, 1396), null);
+  core.writeBrowsedSeason(store, 1396, 3);
+  assert.equal(core.readBrowsedSeason(store, 2190), 14);
+  assert.equal(core.readBrowsedSeason(store, 1396), 3);
+  assert.equal(core.writeBrowsedSeason(store, 2190, -1), false);
+  assert.equal(core.readBrowsedSeason(storage({ [core.BROWSED_SEASONS_KEY]: "invalid" }), 2190), null);
+});
+
+test("manual watched state overrides the thumbnail line without changing confirmed position", () => {
+  const store = storage();
+  const saved = { position: 50, duration: 100, updatedAt: 1700000000000, provider: "vidbolt", completed: false };
+  core.writeHistory(store, core.item("tv", 2190, "South Park", 14, 2, "off", 1,
+    { progress: saved, manualWatched: true }));
+  assert.equal(core.continueRows(core.readHistory(store)).length, 1,
+    "completed shows remain selectable so Continue can resolve a confirmed next episode");
+  core.writeHistory(store, core.item("tv", 2190, "South Park", 14, 2, "off", 2,
+    { manualWatched: false }));
+  const row = core.readHistory(store)[0];
+  assert.equal(row.progress.position, 50);
+  assert.equal(row.manualWatched, false);
+  assert.equal(core.continueRows(core.readHistory(store)).length, 1);
+  core.writeHistory(store, core.item("tv", 2190, "South Park", 14, 2, "off", 3,
+    { progress: Object.assign({}, saved, { updatedAt: 1700000001000, completed: true }) }));
+  assert.equal(core.readHistory(store)[0].manualWatched, false, "explicit unmark survives a progress update");
+  assert.equal(core.continueRows(core.readHistory(store)).length, 1);
+});
+
+test("confirmed playback selects the last watched episode over a newer catalog or browse launch", () => {
+  const store = storage();
+  const progress = (position, updatedAt, completed = false) =>
+    ({ position, duration: 1800, updatedAt, provider: "vidbolt", completed });
+  core.writeHistory(store, core.item("tv", 2190, "South Park", 3, 5, "off", 100,
+    { progress: progress(300, 1000) }));
+  core.writeHistory(store, core.item("tv", 2190, "South Park", 3, 10, "off", 2000));
+  core.writeBrowsedSeason(store, 2190, 14);
+  assert.equal(core.lastWatchedEpisode(core.readHistory(store), 2190).episode, 5);
+  assert.equal(core.homeRows(core.readHistory(store))[0].episode, 5);
+  assert.equal(core.continueRows(core.readHistory(store))[0].episode, 5);
+  assert.equal(core.readBrowsedSeason(store, 2190), 14);
+  core.writeHistory(store, core.item("tv", 2190, "South Park", 3, 5, "off", 3000,
+    { progress: progress(900, 3000) }));
+  assert.equal(core.lastWatchedEpisode(core.readHistory(store), 2190).progress.position, 900);
+  core.writeHistory(store, core.item("tv", 2190, "South Park", 3, 5, "off", 4000,
+    { progress: progress(300, 1000) }));
+  const latest = core.lastWatchedEpisode(core.readHistory(store), 2190);
+  assert.equal(latest.progress.position, 900, "stale handoff cannot overwrite newer absolute position");
+  assert.equal(latest.at, 3000, "stale handoff cannot also change activity order");
+});
+
+test("Continue resolves only exact confirmed next episodes and season boundaries", () => {
+  const current = { id: 2190, season: 3, episode: 5 };
+  const rows = Array.from({ length: 10 }, (_, index) => ({ number: index + 1, title: "Episode " + (index + 1) }));
+  assert.deepEqual(JSON.parse(JSON.stringify(core.nextConfirmedEpisode(current, rows, null, null))),
+    { season: 3, episode: 6, title: "Episode 6" });
+  assert.equal(core.nextConfirmedEpisode(current, rows.filter(row => row.number !== 6), null, null), null,
+    "a later catalog episode cannot be substituted for a missing next episode");
+  assert.deepEqual(JSON.parse(JSON.stringify(core.nextConfirmedEpisode({ id: 2190, season: 3, episode: 10 }, rows, 4,
+    [{ number: 1, title: "Season opener" }]))), { season: 4, episode: 1, title: "Season opener" });
+  assert.equal(core.nextConfirmedEpisode({ id: 2190, season: 3, episode: 10 }, rows, 4, []), null);
+  assert.equal(core.nextConfirmedEpisode({ id: 2190, season: 3, episode: 10 }, rows, null, null), null);
+  assert.equal(core.nextConfirmedEpisode({ id: 2190, season: 3, episode: 11 }, rows, 4,
+    [{ number: 1, title: "Wrong" }]), null);
+});
+
+test("two validated returns preserve independent episode positions and the newest absolute point", () => {
+  const store = storage();
+  const returned = (episode, position, updatedAt) => core.returnEpisode("?return=1&showId=1396&season=1&episode="
+    + episode + "&position=" + position + "&duration=1800&updated=" + updatedAt + "&progressProvider=vidbolt");
+  const first = returned(4, 300, 1000);
+  core.writeHistory(store, core.item("tv", first.id, "Breaking Bad", first.season, first.episode,
+    "off", 1000, { progress: first.progress }));
+  assert.equal(core.episodeProgressFraction(core.readHistory(store)[0]), 300 / 1800);
+  const second = returned(4, 900, 2000);
+  core.writeHistory(store, core.item("tv", second.id, "Breaking Bad", second.season, second.episode,
+    "off", 2000, { progress: second.progress }));
+  assert.equal(core.episodeProgressFraction(core.readHistory(store)[0]), 900 / 1800,
+    "thumbnail uses the latest absolute position immediately after the second return");
+  const other = returned(5, 120, 2100);
+  core.writeHistory(store, core.item("tv", other.id, "Breaking Bad", other.season, other.episode,
+    "off", 2100, { progress: other.progress }));
+  assert.equal(core.readHistory(store).find(row => row.episode === 4).progress.position, 900);
+  assert.equal(core.readHistory(store).find(row => row.episode === 5).progress.position, 120);
+  assert.equal(core.lastWatchedEpisode(core.readHistory(store), 1396).episode, 5);
+  assert.match(core.tvPlayerUrl(1396, 1, 4, "off", "Breaking Bad", null,
+    core.readHistory(store).find(row => row.episode === 4).progress), /resume=900/);
+});
+
+test("return handoff binds confirmed progress to the exact episode", () => {
+  const saved = { token: "session_abc123", type: "tv", id: 2190, season: 3, episode: 5, at: 1000 };
+  const returned = { handoff: "session_abc123", id: 2190, season: 3, episode: 5 };
+  assert.equal(core.validHandoff(saved, returned, "tv", 2000), true);
+  assert.equal(core.validHandoff(saved, { ...returned, episode: 10 }, "tv", 2000), false);
+  assert.equal(core.validHandoff(saved, { ...returned, season: 4 }, "tv", 2000), false);
+  assert.equal(core.validHandoff(saved, returned, "tv", 86402000), false);
+});
+
 test("progress records and Watch return handoffs reject invalid or mismatched fields", () => {
   const saved = { position: 20, duration: 100, updatedAt: 1700000000000, provider: "vidbolt", completed: false };
   assert.equal(core.progressRecord(Object.assign({}, saved, { position: 105 })), null);

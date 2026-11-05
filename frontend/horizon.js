@@ -134,7 +134,7 @@
     if (typeof target !== "string" || !target) { showNotice("Search is unavailable."); return; }
     searchOpening = true;
     try { sessionStorage.setItem("horizon.home.searchFocus", source); } catch (_error) {}
-    try { location.assign(target); }
+    try { location.assign(target + "#watch-import=" + encodeURIComponent(JSON.stringify({ version: 2, items: watchRows }))); }
     catch (_error) { searchOpening = false; showNotice("Search could not open."); }
   }
 
@@ -154,13 +154,19 @@
 
   function readWatchRows() {
     const key = "horizon.watch.home.v1";
-    let parsed = null;
+    let parsed = null, stored = null;
     try {
       const fragment = location.hash || "";
-      parsed = fragment.startsWith("#watch=") && fragment.length < 7000
-        ? JSON.parse(decodeURIComponent(fragment.slice(7))) : JSON.parse(localStorage.getItem(key) || "null");
+      stored = JSON.parse(localStorage.getItem(key) || "null");
+      const incoming = fragment.startsWith("#watch=") && fragment.length < 7000
+        ? JSON.parse(decodeURIComponent(fragment.slice(7))) : null;
+      parsed = incoming && incoming.version === 3 && Number.isFinite(incoming.updatedAt)
+        && (!stored || stored.version !== 3 || incoming.updatedAt >= stored.updatedAt)
+        ? incoming : incoming && incoming.version === 2 && (!stored || stored.version !== 3)
+          ? incoming : stored;
     } catch (_error) { return []; }
-    if (!parsed || parsed.version !== 2 || !Array.isArray(parsed.items) || parsed.items.length > 6) return [];
+    if (!parsed || (parsed.version !== 2 && parsed.version !== 3)
+        || !Array.isArray(parsed.items) || parsed.items.length > 6) return [];
     const seen = new Set();
     const rows = parsed.items.map(validWatchRow).filter(row => {
       if (!row) return false;
@@ -169,7 +175,8 @@
       seen.add(id); return true;
     });
     if ((location.hash || "").startsWith("#watch=")) {
-      try { localStorage.setItem(key, JSON.stringify({ version: 2, items: rows })); } catch (_error) {}
+      try { localStorage.setItem(key, JSON.stringify({ version: 3,
+        updatedAt: parsed.version === 3 ? parsed.updatedAt : Date.now(), items: rows })); } catch (_error) {}
     }
     return rows;
   }
@@ -181,7 +188,8 @@
     try { sessionStorage.setItem("horizon.watch.returnFocus", `${row.type}:${row.id}`); } catch (_error) {}
     if (row.type === "movie") {
       searchOpening = true;
-      try { location.assign(watchUrl + "&open=movie&id=" + row.id); }
+      try { location.assign(watchUrl + "&open=movie&id=" + row.id + "#watch-import="
+        + encodeURIComponent(JSON.stringify({ version: 2, items: watchRows }))); }
       catch (_error) { searchOpening = false; showNotice("Movie details could not open."); }
       return;
     }
@@ -192,10 +200,11 @@
       + (row.episodeTitle ? "&episodeTitle=" + encodeURIComponent(row.episodeTitle) : "")
       + (row.tvdbId ? "&tvdb=" + row.tvdbId : "");
     searchOpening = true;
-    try { location.assign(url);
+    try { location.assign(url + "#watch-import=" + encodeURIComponent(JSON.stringify({ version: 2, items: watchRows })));
       const fresh = { ...row, at: Date.now() };
       watchRows = [fresh, ...watchRows.filter(other => other.type !== row.type || other.id !== row.id)].slice(0, 6);
-      try { localStorage.setItem("horizon.watch.home.v1", JSON.stringify({ version: 2, items: watchRows })); } catch (_error) {}
+      try { localStorage.setItem("horizon.watch.home.v1", JSON.stringify({ version: 3,
+        updatedAt: Date.now(), items: watchRows })); } catch (_error) {}
     } catch (_error) { searchOpening = false; showNotice("Player could not open."); }
   }
 
@@ -226,7 +235,7 @@
       const copy = document.createElement("span"); copy.className = "watch-card-copy";
       const title = document.createElement("strong"); title.textContent = row.title;
       const detail = document.createElement("small"); detail.textContent = row.type === "tv"
-        ? `S${row.season} E${row.episode}${row.episodeTitle ? " · " + row.episodeTitle : ""}` : "Movie · starts from beginning";
+        ? `S${row.season} E${row.episode}${row.episodeTitle ? " · " + row.episodeTitle : ""}` : "Movie · Continue in Watch";
       copy.append(title, detail); card.append(art, copy);
       card.setAttribute("aria-label", row.title + ", " + detail.textContent);
       card.addEventListener("focus", () => { watchIndex = index; markFocused(card); });

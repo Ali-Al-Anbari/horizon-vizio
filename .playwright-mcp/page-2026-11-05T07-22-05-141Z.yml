@@ -1,0 +1,14 @@
+- generic [active] [ref=f3e1]:
+  - heading "Directory listing for /" [level=1] [ref=f3e2]
+  - separator [ref=f3e3]
+  - list [ref=f3e4]:
+    - listitem [ref=f3e5]:
+      - link ".localized" [ref=f3e6] [cursor=pointer]:
+        - /url: .localized
+    - listitem [ref=f3e7]:
+      - link "alialanbari/" [ref=f3e8] [cursor=pointer]:
+        - /url: alialanbari/
+    - listitem [ref=f3e9]:
+      - link "Shared/" [ref=f3e10] [cursor=pointer]:
+        - /url: Shared/
+  - separator [ref=f3e11]

@@ -26,11 +26,55 @@ test("Watch homepage uses confirmed activity, groups shows, and separates Contin
   ];
   const history = core.homepageHistory(rows);
   assert.deepEqual(JSON.parse(JSON.stringify(history.map(row => [row.id, row.episode]))), [[21, null], [10, 5], [20, null], [11, 2]]);
-  assert.deepEqual(Array.from(core.homepageContinueCandidates(rows), row => row.id), [21, 10, 11]);
+  assert.deepEqual(Array.from(core.homepageContinueCandidates(rows), row => row.id), [21, 10]);
+  assert.deepEqual(Array.from(core.homepageFinished(rows), row => row.id), [20, 11]);
+  assert.equal(core.homepageContinueCandidates(rows).some(row => core.homepageFinished(rows).some(done => done.id === row.id)), false);
   assert.equal(core.homepageHistory([]).length, 0);
+  const completedLatest = core.item("tv", 10, "Series", 3, 6, "off", 700,
+    { progress: progress(1200, 1200, 2500, true) });
+  assert.equal(core.homepageContinueCandidates([completedLatest, ...rows]).some(row => row.id === 10), false);
+  assert.equal(core.homepageFinished([completedLatest, ...rows]).find(row => row.id === 10).episode, 6);
   const updated = core.item("tv", 10, "Series", 3, 5, "off", 700,
     { progress: progress(900, 1200, 2000) });
   assert.equal(core.homepageHistory([updated, ...rows]).find(row => row.id === 10).progress.position, 900);
+});
+
+test("Home snapshot import is idempotent, preserves newer progress, and backs up existing history", () => {
+  const store = storage();
+  const progress = { position: 900, duration: 1800, updatedAt: 2000, provider: "vidbolt", completed: false };
+  core.writeHistory(store, core.item("movie", 5, "Existing", null, null, "off", 1000, { progress }));
+  const old = store.getItem(core.HISTORY_KEY);
+  const snapshot = { version: 2, items: [
+    core.item("movie", 5, "Old name", null, null, "off", 100),
+    core.item("tv", 10, "Legacy show", 1, 2, "off", 500)
+  ] };
+  assert.equal(core.importHomeSnapshot(store, snapshot), 1);
+  assert.equal(core.importHomeSnapshot(store, snapshot), 0);
+  assert.equal(store.getItem(core.HISTORY_BACKUP_KEY), old);
+  assert.equal(core.readHistory(store).find(row => row.id === 5).progress.position, 900);
+  assert.equal(core.readHistory(store).find(row => row.id === 10).progress, null);
+});
+
+test("Continue suppression, explicit completion, and exact deletion preserve independent history", () => {
+  const store = storage();
+  const progress = { position: 300, duration: 1000, updatedAt: 1000, provider: "vidbolt", completed: false };
+  const first = core.item("tv", 10, "Show", 1, 1, "off", 100, { progress });
+  core.writeHistory(store, first);
+  core.writeHistory(store, core.item("tv", 10, "Show", 1, 2, "off", 200));
+  assert.equal(core.setContinueHidden(store, first, true), true);
+  assert.equal(core.isContinueHidden(store, first), true);
+  const newer = core.item("tv", 10, "Show", 1, 1, "off", 300, { progress: { ...progress, updatedAt: 2000 } });
+  assert.equal(core.isContinueHidden(store, newer), false);
+  assert.equal(core.setHistoryWatched(store, "tv", 10, 1, 2, true), true);
+  assert.equal(core.homepageFinished(core.readHistory(store)).some(row => row.episode === 2), false,
+    "last actively watched episode remains authoritative");
+  assert.equal(core.deleteHistory(store, "tv", 10, 1, 1, false), true);
+  assert.equal(core.readHistory(store).length, 1);
+  assert.equal(core.homepageFinished(core.readHistory(store))[0].episode, 2);
+  assert.equal(core.deleteHistory(store, "tv", 10, 1, 2, true), true);
+  assert.equal(core.readHistory(store).length, 0);
+  assert.equal(core.importHomeSnapshot(store, { version: 2, items: [first] }), 0,
+    "an older Home snapshot cannot resurrect a deleted episode");
 });
 
 test("TV player URL uses validated show ID, selected episode, subtitle, and fixed return marker", () => {

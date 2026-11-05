@@ -45,7 +45,7 @@ async function until(expression, label, timeout = 5000) {
 }
 async function navigate(url, stayHome = false) {
   await send("Page.navigate", { url });
-  await until(`location.href === ${JSON.stringify(url)} && document.readyState === 'complete' && !!window.HorizonUniversalSearch && document.activeElement.id === 'watch-hero-play'`, "homepage ready");
+  await until(`location.href === ${JSON.stringify(url)} && document.readyState === 'complete' && !!window.HorizonUniversalSearch && document.activeElement.id === 'watch-toggle'`, "homepage ready");
   if (!stayHome) {
     await evaluate("document.querySelector('#search-toggle').click()");
     await until("document.activeElement.id === 'query'", "search ready");
@@ -67,28 +67,67 @@ try {
   assert.equal(await evaluate("document.querySelector('#watch-hero-title').textContent"), "Find your next watch");
   assert.equal(await evaluate("document.querySelector('#watch-continue-section').hidden"), true);
   assert.equal(await evaluate("document.querySelector('#watch-recent-section').hidden"), true);
+  for (const id of ["search-toggle", "history-toggle", "settings-toggle"]) {
+    await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))");
+    assert.equal(await evaluate("document.activeElement.id"), id);
+  }
+  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))");
+  assert.equal(await evaluate("document.querySelector('#settings-view').hidden"), false);
+  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
+  assert.equal(await evaluate("document.querySelector('#watch-view').hidden"), false);
   await evaluate(`localStorage.setItem(window.HorizonSearchCore.HISTORY_KEY, JSON.stringify({version:2,items:[
     window.HorizonSearchCore.item('movie',550,'Fight Club',null,null,'off',1000,
       {progress:{position:600,duration:6000,updatedAt:2000,provider:'vidbolt',completed:false}}),
-    window.HorizonSearchCore.item('tv',2190,'South Park',3,5,'off',900,
+    window.HorizonSearchCore.item('tv',2190,'South Park',13,2,'off',900,
       {progress:{position:300,duration:1200,updatedAt:1500,provider:'vidbolt',completed:false}}),
-    window.HorizonSearchCore.item('tv',2190,'South Park',3,10,'off',800,
-      {progress:{position:200,duration:1200,updatedAt:1200,provider:'vidbolt',completed:false}})
+    window.HorizonSearchCore.item('tv',2190,'South Park',13,3,'off',800,
+      {progress:{position:200,duration:1200,updatedAt:1200,provider:'vidbolt',completed:false}}),
+    window.HorizonSearchCore.item('tv',1396,'Breaking Bad',13,1,'off',700,
+      {progress:{position:1200,duration:1200,updatedAt:1100,provider:'vidbolt',completed:true}}),
+    window.HorizonSearchCore.item('movie',551,'Finished Film',null,null,'off',600,
+      {progress:{position:6000,duration:6000,updatedAt:1000,provider:'vidbolt',completed:true}})
   ]}))`);
   const homeUrl = new URL(base); homeUrl.searchParams.set("run", "home-" + Date.now());
   await navigate(homeUrl.href, true);
   assert.equal(await evaluate("document.querySelector('#watch-hero-title').textContent"), "Fight Club");
   assert.equal(await evaluate("document.querySelectorAll('#watch-continue-row button').length"), 2);
   assert.equal(await evaluate("document.querySelectorAll('#watch-recent-row button').length"), 2);
-  assert.match(await evaluate("document.querySelector('#watch-recent-row button:nth-child(2)').getAttribute('aria-label')"), /S3 E5/);
+  assert.match(await evaluate("document.querySelector('#watch-recent-row button:first-child').getAttribute('aria-label')"), /S13 E1/);
+  assert.equal(await evaluate("document.querySelector('#watch-hero-play') === null && document.querySelector('#home-toggle') === null"), true);
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))");
   assert.equal(await evaluate("document.activeElement.dataset.homeGroup"), "continue");
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}))");
   assert.equal(await evaluate("document.activeElement.dataset.homeKey"), "tv:2190");
+  assert.equal(await evaluate("document.querySelector('#watch-hero-title').textContent"), "South Park");
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))");
   assert.equal(await evaluate("document.activeElement.dataset.homeGroup"), "recent");
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true}))");
   assert.equal(await evaluate("document.activeElement.dataset.homeGroup"), "continue");
+  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))");
+  await until("document.querySelector('#episodes-view').hidden === false && document.activeElement.dataset.episode === '2'", "homepage TV opens exact episode");
+  await evaluate("document.querySelector('#watch-toggle').click()");
+  await until("document.querySelector('#watch-view').hidden === false", "return to homepage");
+  await evaluate("document.querySelector('#watch-recent-row button:first-child').click()");
+  await until("document.querySelector('#episodes-view').hidden === false && document.activeElement.dataset.season === '14' && document.activeElement.dataset.episode === '1'", "finished TV opens confirmed next episode");
+  await evaluate("document.querySelector('#watch-toggle').click(); document.querySelector('#watch-continue-row button:first-child').click()");
+  await until("document.querySelector('#details-view').hidden === false && document.activeElement.classList.contains('detail-primary')", "movie opens Details play action");
+  await evaluate("document.querySelector('#watch-toggle').click()");
+  assert.equal(await evaluate("document.querySelector('#watch-view').hidden"), false);
+  await evaluate(`window.HorizonSearchCore.writeHistory(localStorage, window.HorizonSearchCore.item('movie',550,
+    'Fight Club',null,null,'off',Date.now(),{progress:{position:1200,duration:6000,
+      updatedAt:3000,provider:'vidbolt',completed:false}}))`);
+  await navigate(homeUrl.href + '&updated=' + Date.now(), true);
+  assert.equal(await evaluate("document.querySelector('#watch-continue-row button:first-child .home-progress-fill').style.width"), "20.0%");
+  await evaluate("document.querySelector('#watch-view').scrollTop = 600; document.querySelector('#watch-toggle').click()");
+  assert.equal(await evaluate("document.querySelector('#watch-view').scrollTop"), 0, "Watch Home restores the hero at the top");
+  if (process.env.HORIZON_CAPTURE_DIR) {
+    await mkdir(process.env.HORIZON_CAPTURE_DIR, { recursive: true });
+    for (const viewport of [{ width: 1920, height: 1080 }, { width: 1440, height: 900 }]) {
+      await send("Emulation.setDeviceMetricsOverride", { ...viewport, deviceScaleFactor: 1, mobile: false });
+      await capture(join(process.env.HORIZON_CAPTURE_DIR, `watch-home-${viewport.width}x${viewport.height}.png`));
+    }
+    await send("Emulation.clearDeviceMetricsOverride");
+  }
   await evaluate("localStorage.clear(); sessionStorage.clear()");
   await navigate(cleanUrl.href + '&search=' + Date.now());
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));");
@@ -107,11 +146,11 @@ try {
   await evaluate("document.querySelector('#keyboard-toggle').click()");
   assert.equal(await evaluate("document.querySelector('#keyboard').hidden"), false, "keyboard can be reopened");
   await evaluate("document.querySelector('#search-toggle').focus(); document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));");
-  assert.equal(await evaluate("document.activeElement.id"), "continue-toggle");
-  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));");
   assert.equal(await evaluate("document.activeElement.id"), "history-toggle");
+  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));");
+  assert.equal(await evaluate("document.activeElement.id"), "settings-toggle");
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true}));");
-  assert.equal(await evaluate("document.activeElement.id"), "continue-toggle");
+  assert.equal(await evaluate("document.activeElement.id"), "history-toggle");
   await evaluate("document.querySelector('#search-toggle').focus(); document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));");
   assert.equal(await evaluate("document.activeElement.id"), "query");
   await evaluate("document.querySelector('#query').focus(); document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));");

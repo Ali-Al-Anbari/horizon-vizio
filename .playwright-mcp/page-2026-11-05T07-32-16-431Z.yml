@@ -1,0 +1,67 @@
+- main [ref=e2]:
+  - navigation "Horizon Watch navigation" [ref=e3]:
+    - button "Watch homepage" [active] [ref=e4] [cursor=pointer]:
+      - generic [ref=e5]: Watch Home
+    - button "Search" [ref=e6] [cursor=pointer]
+    - button "Watch History" [ref=e8] [cursor=pointer]:
+      - generic [ref=e9]: History
+    - button "Watch Settings" [ref=e10] [cursor=pointer]:
+      - generic [ref=e11]: Settings
+  - generic [ref=e12]:
+    - generic:
+      - generic [aria-hidden]:
+        - text: HORIZON
+        - generic: WATCH
+    - region "Watch homepage" [ref=e13]:
+      - generic [ref=e15]:
+        - heading "South Park" [level=1] [ref=e239]
+        - paragraph [ref=e17]: 1997 · TV Series · S13 E2
+        - paragraph [ref=e18]: Four friends navigate life in the small town of South Park.
+      - region "Continue Watching" [ref=e19]:
+        - heading "Continue Watching" [level=2] [ref=e20]
+        - generic [ref=e21]:
+          - button "Continue South Park, S13 E2" [ref=e240] [cursor=pointer]:
+            - generic [ref=e242]:
+              - strong [ref=e243]: South Park
+              - generic [ref=e244]: S13 E2
+          - button "Continue Dark, S2 E4" [ref=e247] [cursor=pointer]:
+            - generic [ref=e249]:
+              - strong [ref=e250]: Dark
+              - generic [ref=e251]: S2 E4
+          - button "Continue Breaking Bad, S3 E7" [ref=e254] [cursor=pointer]:
+            - generic [ref=e256]:
+              - strong [ref=e257]: Breaking Bad
+              - generic [ref=e258]: S3 E7
+          - button "Continue Interstellar, Movie" [ref=e261] [cursor=pointer]:
+            - generic [ref=e263]:
+              - strong [ref=e264]: Interstellar
+              - generic [ref=e265]: Movie
+          - button "Continue Stranger Things, S4 E5" [ref=e268] [cursor=pointer]:
+            - generic [ref=e270]:
+              - strong [ref=e271]: Stranger Things
+              - generic [ref=e272]: S4 E5
+          - button "Continue The Last of Us, S1 E6" [ref=e275] [cursor=pointer]:
+            - generic [ref=e277]:
+              - strong [ref=e278]: The Last of Us
+              - generic [ref=e279]: S1 E6
+      - region "Recently Finished" [ref=e64]:
+        - heading "Recently Finished" [level=2] [ref=e65]
+        - generic [ref=e66]:
+          - 'button "Finished Cyberpunk: Edgerunners, S1 E10" [ref=e282] [cursor=pointer]':
+            - generic [ref=e283]: "Cyberpunk: Edgerunners"
+            - strong [ref=e285]: "Cyberpunk: Edgerunners"
+          - button "Finished The Dark Knight, Movie" [ref=e286] [cursor=pointer]:
+            - generic [ref=e287]: The Dark Knight
+            - strong [ref=e289]: The Dark Knight
+          - button "Finished Dune, Movie" [ref=e290] [cursor=pointer]:
+            - generic [ref=e291]: Dune
+            - strong [ref=e293]: Dune
+          - button "Finished Oppenheimer, Movie" [ref=e294] [cursor=pointer]:
+            - generic [ref=e295]: Oppenheimer
+            - strong [ref=e297]: Oppenheimer
+          - button "Finished Severance, S1 E9" [ref=e298] [cursor=pointer]:
+            - generic [ref=e299]: Severance
+            - strong [ref=e301]: Severance
+          - button "Finished Arcane, S2 E9" [ref=e302] [cursor=pointer]:
+            - generic [ref=e303]: Arcane
+            - strong [ref=e305]: Arcane

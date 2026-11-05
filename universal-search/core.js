@@ -8,6 +8,9 @@
   var STATE_KEY = "horizon-universal-search-view-v1";
   var HANDOFF_KEY = "horizon-watch-player-handoff-v1";
   var BROWSED_SEASONS_KEY = "horizon-watch-browsed-seasons-v1";
+  var HIDDEN_CONTINUE_KEY = "horizon-watch-hidden-continue-v1";
+  var HISTORY_BACKUP_KEY = "horizon-universal-search-history-backup-v1";
+  var HISTORY_DELETIONS_KEY = "horizon-watch-history-deletions-v1";
   var APP_NAMES = { "Amazon Prime Video": "Prime Video", "Disney Plus": "Disney+",
     "Plex": "Plex", "YouTube": "YouTube" };
   function positive(value) { return typeof value === "number" && isFinite(value) && value % 1 === 0
@@ -82,7 +85,75 @@
     catch (_error) { /* Vizio storage may be unavailable; current session still works. */ }
     return rows;
   }
-  function clearHistory(storage) { try { storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: [] })); } catch (_error) {} }
+  function clearHistory(storage) { backupHistory(storage);
+    try { var deleted = historyDeletions(storage);
+      readHistory(storage).forEach(function (row) { deleted[historyKey(row)] = Date.now(); });
+      storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: [] }));
+      storage.setItem(HISTORY_DELETIONS_KEY, JSON.stringify({ version: 1, items: deleted }));
+    } catch (_error) {} }
+  function backupHistory(storage) {
+    try { if (!storage.getItem(HISTORY_BACKUP_KEY) && storage.getItem(HISTORY_KEY))
+      storage.setItem(HISTORY_BACKUP_KEY, storage.getItem(HISTORY_KEY)); } catch (_error) {}
+  }
+  function historyDeletions(storage) {
+    try { var parsed = JSON.parse(storage.getItem(HISTORY_DELETIONS_KEY) || "null");
+      return parsed && parsed.version === 1 && parsed.items && typeof parsed.items === "object" ? parsed.items : {};
+    } catch (_error) { return {}; }
+  }
+  function importHomeSnapshot(storage, snapshot) {
+    if (!snapshot || (snapshot.version !== 2 && snapshot.version !== 3) || !Array.isArray(snapshot.items)
+        || snapshot.items.length > 6) return 0;
+    var known = readHistory(storage), count = 0;
+    snapshot.items.forEach(function (row) {
+      var value = row && item(row.type, row.id, row.title, row.season, row.episode, row.subtitle, row.at,
+        { poster: row.poster, backdrop: row.backdrop, episodeTitle: row.episodeTitle, tvdbId: row.tvdbId });
+      if (!value || historyDeletions(storage)[historyKey(value)] >= value.at
+          || known.some(function (old) { return historyKey(old) === historyKey(value); })) return;
+      if (!count) backupHistory(storage);
+      known.push(value); count += 1;
+    });
+    if (count) try { storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2,
+      items: known.sort(function (a, b) { return b.at - a.at; }).slice(0, 100) })); } catch (_error) { return 0; }
+    return count;
+  }
+  function deleteHistory(storage, type, id, season, episode, allTitle) {
+    var rows = readHistory(storage), kept = rows.filter(function (row) { return row.type !== type || row.id !== id
+      || !allTitle && row.type === "tv" && (row.season !== season || row.episode !== episode); });
+    if (kept.length === rows.length) return false;
+    backupHistory(storage);
+    try { var deleted = historyDeletions(storage);
+      rows.filter(function (row) { return kept.indexOf(row) < 0; }).forEach(function (row) {
+        deleted[historyKey(row)] = Date.now();
+      });
+      storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: kept }));
+      storage.setItem(HISTORY_DELETIONS_KEY, JSON.stringify({ version: 1, items: deleted })); return true; }
+    catch (_error) { return false; }
+  }
+  function setHistoryWatched(storage, type, id, season, episode, watched) {
+    var rows = readHistory(storage), row = rows.find(function (entry) { return entry.type === type && entry.id === id
+      && (type !== "tv" || entry.season === season && entry.episode === episode); });
+    if (!row) return false;
+    backupHistory(storage); row.manualWatched = watched;
+    try { storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: rows })); return true; }
+    catch (_error) { return false; }
+  }
+  function hiddenContinue(storage) {
+    try { var parsed = JSON.parse(storage.getItem(HIDDEN_CONTINUE_KEY) || "null");
+      return parsed && parsed.version === 1 && parsed.items && typeof parsed.items === "object" ? parsed.items : {};
+    } catch (_error) { return {}; }
+  }
+  function setContinueHidden(storage, row, hidden) {
+    if (!row || !positive(row.id)) return false;
+    var items = hiddenContinue(storage), key = row.type + ":" + row.id;
+    if (hidden) items[key] = row.progress ? row.progress.updatedAt : row.at;
+    else delete items[key];
+    try { storage.setItem(HIDDEN_CONTINUE_KEY, JSON.stringify({ version: 1, items: items })); return true; }
+    catch (_error) { return false; }
+  }
+  function isContinueHidden(storage, row) {
+    var stamp = hiddenContinue(storage)[row.type + ":" + row.id];
+    return Number.isFinite(stamp) && stamp >= (row.progress ? row.progress.updatedAt : row.at);
+  }
   function clearProgress(storage, type, id, season, episode) {
     var rows = readHistory(storage);
     var target = rows.find(function (row) { return row.type === type && row.id === id
@@ -114,10 +185,17 @@
   function homepageHistory(rows) {
     return groupedHistory(rows.filter(function (row) { return !!row.progress; })).slice(0, 12);
   }
+  function homepageFinishedRow(row) {
+    return row.manualWatched === true || row.progress.completed && row.manualWatched !== false;
+  }
   function homepageContinueCandidates(rows) {
     return groupedHistory(rows.filter(function (row) { return !!row.progress; })).filter(function (row) {
-      var completed = row.manualWatched === true || row.progress.completed && row.manualWatched !== false;
-      return !completed || row.type === "tv";
+      return !homepageFinishedRow(row);
+    }).slice(0, 12);
+  }
+  function homepageFinished(rows) {
+    return groupedHistory(rows.filter(function (row) { return !!row.progress || row.manualWatched === true; })).filter(function (row) {
+      return homepageFinishedRow(row);
     }).slice(0, 12);
   }
   function continueRows(rows) { return groupedHistory(rows).filter(function (row) {
@@ -296,12 +374,16 @@
   root.HorizonSearchCore = { PLAYER_ORIGIN: PLAYER_ORIGIN, LAUNCHER_ORIGIN: LAUNCHER_ORIGIN,
     HISTORY_KEY: HISTORY_KEY, PREFS_KEY: PREFS_KEY, SUBTITLE_KEY: SUBTITLE_KEY, STATE_KEY: STATE_KEY,
     HANDOFF_KEY: HANDOFF_KEY, BROWSED_SEASONS_KEY: BROWSED_SEASONS_KEY,
+    HIDDEN_CONTINUE_KEY: HIDDEN_CONTINUE_KEY, HISTORY_BACKUP_KEY: HISTORY_BACKUP_KEY,
+    HISTORY_DELETIONS_KEY: HISTORY_DELETIONS_KEY,
     readBrowsedSeason: readBrowsedSeason, writeBrowsedSeason: writeBrowsedSeason,
     progressRecord: progressRecord, validHandoff: validHandoff, item: item,
     readHistory: readHistory, writeHistory: writeHistory, clearHistory: clearHistory,
     clearProgress: clearProgress, groupedHistory: groupedHistory,
     homeRows: homeRows, homepageHistory: homepageHistory,
-    homepageContinueCandidates: homepageContinueCandidates,
+    homepageContinueCandidates: homepageContinueCandidates, homepageFinished: homepageFinished,
+    importHomeSnapshot: importHomeSnapshot, deleteHistory: deleteHistory,
+    setHistoryWatched: setHistoryWatched, setContinueHidden: setContinueHidden, isContinueHidden: isContinueHidden,
     continueRows: continueRows, lastWatchedEpisode: lastWatchedEpisode,
     nextConfirmedEpisode: nextConfirmedEpisode, episodeProgressFraction: episodeProgressFraction,
     rankResults: rankResults,

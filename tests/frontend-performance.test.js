@@ -118,7 +118,8 @@ test("Home Search is remote-focusable, opens once, and restores focus on return"
   assert.equal(page.get("search-open").classList.contains("is-focused"), true);
   page.press("OK");
   page.press("OK", true);
-  assert.deepEqual(page.navigations(), ["/universal-search/index.html?mock=1&from=home-local"]);
+  assert.equal(page.navigations().length, 1);
+  assert.match(page.navigations()[0], /^\/universal-search\/index\.html\?mock=1&from=home-local#watch-import=/);
   const returned = boot("?return=search", { port: "4173" });
   assert.equal(returned.document.activeElement, returned.get("search-open"));
   assert.deepEqual(returned.navigations(), ["replace:/frontend/index.html"]);
@@ -127,7 +128,8 @@ test("Home Search is remote-focusable, opens once, and restores focus on return"
   const watchLaunch = boot("", { port: "4173" });
   watchLaunch.press("OK");
   watchLaunch.press("OK", true);
-  assert.deepEqual(watchLaunch.navigations(), ["/universal-search/index.html?mock=1&from=home-local"]);
+  assert.equal(watchLaunch.navigations().length, 1);
+  assert.match(watchLaunch.navigations()[0], /^\/universal-search\/index\.html\?mock=1&from=home-local#watch-import=/);
   assert.equal(watchLaunch.session("horizon.home.searchFocus"), "horizon-watch");
   const watchReturn = boot("?return=search", { port: "4173", session: { "horizon.home.searchFocus": "horizon-watch" } });
   assert.equal(watchReturn.document.activeElement.dataset.id, "horizon-watch");
@@ -220,6 +222,21 @@ test("Continue Watching reads a bounded return snapshot and remains reachable fr
   assert.match(legacy.navigations().at(-1), /sub=off/);
 });
 
+test("Watch return accepts an empty newer snapshot and rejects stale history resurrection", () => {
+  const row = { type: "movie", id: 550, title: "Old title", at: 100 };
+  const key = "horizon.watch.home.v1";
+  const old = { version: 2, items: [row] };
+  const empty = { version: 3, updatedAt: 500, items: [] };
+  const cleared = boot("?return=search", { storage: { [key]: JSON.stringify(old) },
+    hash: "#watch=" + encodeURIComponent(JSON.stringify(empty)) });
+  assert.equal(cleared.get("watch-section").hidden, true);
+  assert.equal(JSON.parse(cleared.stored(key)).items.length, 0);
+  const stale = boot("?return=search", { storage: { [key]: cleared.stored(key) },
+    hash: "#watch=" + encodeURIComponent(JSON.stringify(old)) });
+  assert.equal(stale.get("watch-section").hidden, true);
+  assert.equal(JSON.parse(stale.stored(key)).items.length, 0);
+});
+
 test("Continue Watching prefers vertical poster artwork and preserves native app actions", () => {
   const row = { type: "tv", id: 2190, title: "South Park", season: 13, episode: 2, subtitle: "on",
     at: 100, poster: "/poster.jpg", backdrop: "/backdrop.jpg" };
@@ -244,7 +261,7 @@ test("Home accepts a movie in the Watch history transfer and opens its details",
   assert.equal(page.get("watch-cards").children.length, 1);
   assert.equal(JSON.parse(page.stored("horizon.watch.home.v1")).items[0].type, "movie");
   page.press("ArrowDown"); page.press("ArrowDown"); page.press("OK");
-  assert.equal(page.navigations().at(-1), "/universal-search/index.html?mock=1&from=home-local&open=movie&id=550");
+  assert.match(page.navigations().at(-1), /^\/universal-search\/index\.html\?mock=1&from=home-local&open=movie&id=550#watch-import=/);
 });
 
 test("optimized is the default and explicit profile variants remain selectable", () => {

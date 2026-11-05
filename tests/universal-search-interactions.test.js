@@ -11,19 +11,42 @@ const native = root.HorizonUniversalSearch.nativeEditingKey;
 const html = readFileSync(new URL("../universal-search/index.html", import.meta.url), "utf8");
 const css = readFileSync(new URL("../universal-search/search.css", import.meta.url), "utf8");
 
-test("Watch homepage has real history rows, an empty discovery state, and explicit focus groups", () => {
-  for (const id of ["watch-view", "watch-hero-play", "watch-hero-details", "watch-continue-row", "watch-recent-row"])
+test("Watch rail and Settings expose the requested controls and retain TMDB attribution", () => {
+  const rail = html.match(/<nav class="watch-rail"[\s\S]*?<\/nav>/)[0];
+  assert.deepEqual(Array.from(rail.matchAll(/id="([^"]+-toggle)"/g), match => match[1]),
+    ["watch-toggle", "search-toggle", "history-toggle", "settings-toggle"]);
+  assert.match(source, /railOrder = \[get\("watch-toggle"\), get\("search-toggle"\), get\("history-toggle"\), get\("settings-toggle"\)\]/);
+  assert.match(source, /railPosition \+ \(key === "ArrowDown" \? 1 : -1\)/);
+  assert.match(html, /id="settings-view"/);
+  assert.match(html, /id="settings-continue"/);
+  assert.match(html, /id="settings-history"/);
+  assert.match(html, /This product uses the TMDB API but is not endorsed or certified by TMDB/);
+  assert.match(html, /icons\/tmdb-approved\.svg/);
+  assert.doesNotMatch(html, /<footer>Metadata:/);
+  assert.match(css, /body\.watch-active \.watch-rail::before/);
+  assert.match(css, /body\.watch-active \.home-card \.poster-art \{[^}]*aspect-ratio: 16 \/ 9/s);
+});
+
+test("Watch home follows the reference layout and routes cards through the existing Watch views", () => {
+  for (const id of ["watch-view", "watch-hero-title", "watch-hero-description", "watch-continue-row", "watch-recent-row"])
     assert.match(html, new RegExp(`id="${id}"`));
-  assert.match(source, /core\.homepageHistory\(core\.readHistory\(local\)\)/);
-  assert.match(source, /core\.homepageContinueCandidates\(core\.readHistory\(local\)\)/);
+  assert.doesNotMatch(html, /id="home-toggle"|id="watch-hero-play"|id="watch-hero-details"/);
+  assert.match(html, /<h2>Recently Finished<\/h2>/);
+  assert.match(source, /core\.homepageContinueCandidates\(rows\)/);
+  assert.match(source, /core\.homepageFinished\(rows\)/);
+  assert.match(source, /group === "continue" \? landscapeArt\(row\) : verticalPosterArt\(row\)/);
+  assert.match(source, /if \(row\.type === "movie"\) \{ openDetails\(row\); return; \}/);
+  assert.match(source, /openDetails\(row, target \|\| \{ season: row\.season, episode: row\.episode \}\)/);
   assert.match(source, /lookupNextEpisode\(row, detail\)/);
-  assert.match(source, /if \(homeHeroEntry\) startHomeEntry\(homeHeroEntry\)/);
-  assert.match(source, /else get\("search-toggle"\)\.click\(\)/);
-  assert.match(source, /if \(state\.view === "watch"\) \{[\s\S]*?var hero = /);
-  assert.match(source, /else if \(key === "ArrowDown"\) focus\(down\[/);
+  assert.match(source, /pendingEpisodeFocus = \{ season: episodeTarget\.season, episode: episodeTarget\.episode \}/);
+  assert.match(source, /if \(episodeTarget \|\| state\.view === "episodes"\) browseEpisodes\(\)/);
+  assert.match(source, /event\.target\.homeEntry\) showHomeHero\(event\.target\.homeEntry\)/);
+  assert.match(source, /railOrder = \[get\("watch-toggle"\), get\("search-toggle"\), get\("history-toggle"\), get\("settings-toggle"\)\]/);
   assert.match(source, /revealInScroller\(element, homeScroll, true, 18\)/);
-  assert.match(css, /\.watch-home-row\s*\{[^}]*overflow-x: auto/s);
-  assert.match(css, /\.home-card:focus \.poster-art/);
+  assert.match(css, /body\.watch-active \.watch-home \{[^}]*overflow-y: auto/s);
+  assert.match(css, /body\.watch-active \.watch-hero \{[^}]*min-height:/s);
+  assert.match(css, /body\.watch-active \.home-card-poster \.poster-art \{[^}]*aspect-ratio: 2 \/ 3/s);
+  assert.match(css, /body\.watch-active \.home-card:focus \.poster-art/);
   assert.match(css, /\.home-progress-fill\s*\{[^}]*background: #fff/s);
   assert.doesNotMatch(html, /Trending Now|Recommended For You/);
 });

@@ -15,36 +15,32 @@
 <body>
   <main class="shell">
     <nav class="watch-rail" aria-label="Horizon Watch navigation">
-      <button id="watch-toggle" class="rail-action is-current" data-focus type="button" aria-label="Watch homepage"><span class="watch-mark" aria-hidden="true">W</span></button>
-      <button id="home-toggle" class="rail-action" data-focus type="button" aria-label="Horizon Home"><img src="icons/house.svg" alt="" /><span>Home</span></button>
+      <button id="watch-toggle" class="rail-action is-current" data-focus type="button" aria-label="Watch homepage"><img src="icons/house.svg" alt="" /><span>Watch Home</span></button>
       <button id="search-toggle" class="rail-action" data-focus type="button" aria-label="Search"><img src="icons/search.svg" alt="" /><span>Search</span></button>
-      <button id="continue-toggle" class="rail-action" data-focus type="button" aria-label="Continue Watching"><img src="icons/play-circle.svg" alt="" /><span>Continue</span></button>
       <button id="history-toggle" class="rail-action" data-focus type="button" aria-label="Watch History"><img src="icons/clock-history.svg" alt="" /><span>History</span></button>
+      <button id="settings-toggle" class="rail-action" data-focus type="button" aria-label="Watch Settings"><img src="icons/gear.svg" alt="" /><span>Settings</span></button>
     </nav>
     <div class="watch-content">
     <header class="topbar">
       <span class="wordmark">HORIZON WATCH</span>
+      <span class="watch-wordmark" aria-hidden="true">HORIZON<small>WATCH</small></span>
     </header>
     <section id="watch-view" class="view watch-home" aria-label="Watch homepage">
       <div id="watch-hero" class="watch-hero">
         <div id="watch-hero-art" class="watch-hero-art" aria-hidden="true"></div>
         <div class="watch-hero-shade" aria-hidden="true"></div>
         <div class="watch-hero-copy">
-          <p id="watch-hero-eyebrow" class="watch-hero-eyebrow"></p>
           <h1 id="watch-hero-title"></h1>
           <p id="watch-hero-context" class="watch-hero-context"></p>
-          <div class="watch-hero-actions">
-            <button id="watch-hero-play" data-focus type="button"></button>
-            <button id="watch-hero-details" data-focus type="button" hidden>Details</button>
-          </div>
+          <p id="watch-hero-description" class="watch-hero-description"></p>
         </div>
       </div>
       <section id="watch-continue-section" class="watch-home-section" aria-label="Continue Watching" hidden>
         <h2>Continue Watching</h2>
         <div id="watch-continue-row" class="watch-home-row"></div>
       </section>
-      <section id="watch-recent-section" class="watch-home-section" aria-label="Recently Watched" hidden>
-        <h2>Recently Watched</h2>
+      <section id="watch-recent-section" class="watch-home-section" aria-label="Recently Finished" hidden>
+        <h2>Recently Finished</h2>
         <div id="watch-recent-row" class="watch-home-row"></div>
       </section>
     </section>
@@ -105,7 +101,23 @@
       <p id="history-status" class="status" role="status"></p>
       <button id="history-clear" class="back-button" data-focus type="button">Clear History</button>
     </section>
-    <footer>Metadata: <a href="https://www.themoviedb.org/">TMDB</a></footer>
+    <section id="settings-view" class="view settings-view" aria-label="Watch Settings" hidden>
+      <h1>Settings</h1>
+      <section class="settings-panel" aria-label="Manage Continue Watching">
+        <h2>Continue Watching</h2>
+        <div id="settings-continue" class="settings-list"></div>
+      </section>
+      <section class="settings-panel" aria-label="Manage History">
+        <h2>Viewing History</h2>
+        <div id="settings-history" class="settings-list"></div>
+      </section>
+      <section class="settings-panel settings-credits" aria-label="About and Credits">
+        <h2>About &amp; Credits</h2>
+        <a href="https://www.themoviedb.org/" data-focus aria-label="The Movie Database"><img src="icons/tmdb-approved.svg" alt="TMDB" /></a>
+        <p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+        <p>Viewing history and progress are stored on this device.</p>
+      </section>
+    </section>
     </div>
   </main>
 </body>

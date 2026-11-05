@@ -1,0 +1,22 @@
+- main [ref=e2]:
+  - navigation "Horizon Watch navigation" [ref=e3]:
+    - button "Watch homepage" [ref=e4] [cursor=pointer]:
+      - generic [ref=e5]: Watch Home
+    - button "Search" [ref=e6] [cursor=pointer]
+    - button "Watch History" [ref=e8] [cursor=pointer]:
+      - generic [ref=e9]: History
+    - button "Watch Settings" [ref=e10] [cursor=pointer]:
+      - generic [ref=e11]: Settings
+  - region "Show details" [ref=e91]:
+    - button "Back to results" [ref=e93] [cursor=pointer]: ← Results
+    - generic [ref=e94]:
+      - heading "Interstellar" [level=1] [ref=e170]
+      - paragraph [ref=e96]: Movie
+      - paragraph [ref=e97]: No synopsis available.
+      - button "Play movie" [active] [ref=e171] [cursor=pointer]
+      - status [ref=e101]
+    - paragraph [ref=e102]:
+      - text: "Credits · Metadata:"
+      - link "The Movie Database" [ref=e103] [cursor=pointer]:
+        - /url: https://www.themoviedb.org/
+        - text: TMDB

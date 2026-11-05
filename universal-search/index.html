@@ -15,8 +15,9 @@
 <body>
   <main class="shell">
     <nav class="watch-rail" aria-label="Horizon Watch navigation">
+      <button id="watch-toggle" class="rail-action is-current" data-focus type="button" aria-label="Watch homepage"><span class="watch-mark" aria-hidden="true">W</span></button>
       <button id="home-toggle" class="rail-action" data-focus type="button" aria-label="Horizon Home"><img src="icons/house.svg" alt="" /><span>Home</span></button>
-      <button id="search-toggle" class="rail-action is-current" data-focus type="button" aria-label="Search"><img src="icons/search.svg" alt="" /><span>Search</span></button>
+      <button id="search-toggle" class="rail-action" data-focus type="button" aria-label="Search"><img src="icons/search.svg" alt="" /><span>Search</span></button>
       <button id="continue-toggle" class="rail-action" data-focus type="button" aria-label="Continue Watching"><img src="icons/play-circle.svg" alt="" /><span>Continue</span></button>
       <button id="history-toggle" class="rail-action" data-focus type="button" aria-label="Watch History"><img src="icons/clock-history.svg" alt="" /><span>History</span></button>
     </nav>
@@ -24,7 +25,30 @@
     <header class="topbar">
       <span class="wordmark">HORIZON WATCH</span>
     </header>
-    <section id="search-view" class="view">
+    <section id="watch-view" class="view watch-home" aria-label="Watch homepage">
+      <div id="watch-hero" class="watch-hero">
+        <div id="watch-hero-art" class="watch-hero-art" aria-hidden="true"></div>
+        <div class="watch-hero-shade" aria-hidden="true"></div>
+        <div class="watch-hero-copy">
+          <p id="watch-hero-eyebrow" class="watch-hero-eyebrow"></p>
+          <h1 id="watch-hero-title"></h1>
+          <p id="watch-hero-context" class="watch-hero-context"></p>
+          <div class="watch-hero-actions">
+            <button id="watch-hero-play" data-focus type="button"></button>
+            <button id="watch-hero-details" data-focus type="button" hidden>Details</button>
+          </div>
+        </div>
+      </div>
+      <section id="watch-continue-section" class="watch-home-section" aria-label="Continue Watching" hidden>
+        <h2>Continue Watching</h2>
+        <div id="watch-continue-row" class="watch-home-row"></div>
+      </section>
+      <section id="watch-recent-section" class="watch-home-section" aria-label="Recently Watched" hidden>
+        <h2>Recently Watched</h2>
+        <div id="watch-recent-row" class="watch-home-row"></div>
+      </section>
+    </section>
+    <section id="search-view" class="view" hidden>
       <div class="search-layout">
         <div class="search-panel">
           <div class="search-field"><img src="icons/search.svg" alt="" /><input id="query" data-focus type="search" autocomplete="off" placeholder="Search titles" aria-label="Search movies and TV shows" /></div>

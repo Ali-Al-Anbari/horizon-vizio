@@ -13,6 +13,26 @@ const player = window.HorizonSearchPlayer;
 function storage(initial = {}) { const values = new Map(Object.entries(initial));
   return { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value) }; }
 
+test("Watch homepage uses confirmed activity, groups shows, and separates Continue from History", () => {
+  const progress = (position, duration, updatedAt, completed = false) =>
+    ({ position, duration, updatedAt, provider: "vidbolt", completed });
+  const rows = [
+    core.item("tv", 10, "Series", 3, 5, "off", 100, { progress: progress(300, 1200, 1000) }),
+    core.item("tv", 10, "Series", 3, 10, "off", 300, { progress: progress(100, 1200, 800) }),
+    core.item("movie", 20, "Done film", null, null, "off", 200, { progress: progress(1000, 1000, 900, true) }),
+    core.item("movie", 21, "New film", null, null, "off", 400, { progress: progress(100, 1000, 1100) }),
+    core.item("tv", 11, "Done show", 1, 2, "off", 500, { progress: progress(900, 900, 700, true) }),
+    core.item("movie", 22, "Only opened", null, null, "off", 600)
+  ];
+  const history = core.homepageHistory(rows);
+  assert.deepEqual(JSON.parse(JSON.stringify(history.map(row => [row.id, row.episode]))), [[21, null], [10, 5], [20, null], [11, 2]]);
+  assert.deepEqual(Array.from(core.homepageContinueCandidates(rows), row => row.id), [21, 10, 11]);
+  assert.equal(core.homepageHistory([]).length, 0);
+  const updated = core.item("tv", 10, "Series", 3, 5, "off", 700,
+    { progress: progress(900, 1200, 2000) });
+  assert.equal(core.homepageHistory([updated, ...rows]).find(row => row.id === 10).progress.position, 900);
+});
+
 test("TV player URL uses validated show ID, selected episode, subtitle, and fixed return marker", () => {
   assert.equal(core.tvPlayerUrl(2190, 13, 2, "off", "South Park"),
     "https://horizon-video-lab-preview.ali-al-anbari.workers.dev/player-overlay.html?season=13&episode=2&sub=off&showId=2190&from=search&provider=vidbolt&name=South%20Park");

@@ -43,9 +43,13 @@ async function until(expression, label, timeout = 5000) {
   }
   throw Error(`Timed out waiting for ${label}; page=${await evaluate("location.href")} status=${await evaluate("document.querySelector('#search-status')?.textContent")}`);
 }
-async function navigate(url) {
+async function navigate(url, stayHome = false) {
   await send("Page.navigate", { url });
-  await until(`location.href === ${JSON.stringify(url)} && document.readyState === 'complete' && !!window.HorizonUniversalSearch && document.activeElement.id === 'query'`, "page ready");
+  await until(`location.href === ${JSON.stringify(url)} && document.readyState === 'complete' && !!window.HorizonUniversalSearch && document.activeElement.id === 'watch-hero-play'`, "homepage ready");
+  if (!stayHome) {
+    await evaluate("document.querySelector('#search-toggle').click()");
+    await until("document.activeElement.id === 'query'", "search ready");
+  }
 }
 async function capture(path) {
   const result = await send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
@@ -58,8 +62,35 @@ try {
   await navigate(base);
   await evaluate("localStorage.clear(); sessionStorage.clear()");
   const cleanUrl = new URL(base); cleanUrl.searchParams.set("run", String(Date.now()));
-  await navigate(cleanUrl.href);
+  await navigate(cleanUrl.href, true);
   assert.equal(await evaluate("document.title"), "Horizon Watch");
+  assert.equal(await evaluate("document.querySelector('#watch-hero-title').textContent"), "Find your next watch");
+  assert.equal(await evaluate("document.querySelector('#watch-continue-section').hidden"), true);
+  assert.equal(await evaluate("document.querySelector('#watch-recent-section').hidden"), true);
+  await evaluate(`localStorage.setItem(window.HorizonSearchCore.HISTORY_KEY, JSON.stringify({version:2,items:[
+    window.HorizonSearchCore.item('movie',550,'Fight Club',null,null,'off',1000,
+      {progress:{position:600,duration:6000,updatedAt:2000,provider:'vidbolt',completed:false}}),
+    window.HorizonSearchCore.item('tv',2190,'South Park',3,5,'off',900,
+      {progress:{position:300,duration:1200,updatedAt:1500,provider:'vidbolt',completed:false}}),
+    window.HorizonSearchCore.item('tv',2190,'South Park',3,10,'off',800,
+      {progress:{position:200,duration:1200,updatedAt:1200,provider:'vidbolt',completed:false}})
+  ]}))`);
+  const homeUrl = new URL(base); homeUrl.searchParams.set("run", "home-" + Date.now());
+  await navigate(homeUrl.href, true);
+  assert.equal(await evaluate("document.querySelector('#watch-hero-title').textContent"), "Fight Club");
+  assert.equal(await evaluate("document.querySelectorAll('#watch-continue-row button').length"), 2);
+  assert.equal(await evaluate("document.querySelectorAll('#watch-recent-row button').length"), 2);
+  assert.match(await evaluate("document.querySelector('#watch-recent-row button:nth-child(2)').getAttribute('aria-label')"), /S3 E5/);
+  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))");
+  assert.equal(await evaluate("document.activeElement.dataset.homeGroup"), "continue");
+  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}))");
+  assert.equal(await evaluate("document.activeElement.dataset.homeKey"), "tv:2190");
+  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))");
+  assert.equal(await evaluate("document.activeElement.dataset.homeGroup"), "recent");
+  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true}))");
+  assert.equal(await evaluate("document.activeElement.dataset.homeGroup"), "continue");
+  await evaluate("localStorage.clear(); sessionStorage.clear()");
+  await navigate(cleanUrl.href + '&search=' + Date.now());
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));");
   assert.equal(await evaluate("document.activeElement.textContent"), "A");
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',repeat:true,bubbles:true}));");

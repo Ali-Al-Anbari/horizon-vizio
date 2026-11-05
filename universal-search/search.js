@@ -28,7 +28,7 @@
     }
     var get = function (id) { return doc.getElementById(id); };
     var query = get("query"), results = get("results");
-    var state = { view: "search", previousView: "search", detailSource: "search", filter: "all", query: "", title: null, detail: null,
+    var state = { view: "watch", previousView: "watch", detailSource: "watch", filter: "all", query: "", title: null, detail: null,
       season: null, episodes: [], subtitle: core.readSubtitlePref(local), continueMode: false };
     var finePointer = !!(clock.matchMedia && clock.matchMedia("(pointer: fine)").matches)
       && !/Vizio|SmartCast/i.test(clock.navigator && clock.navigator.userAgent || "");
@@ -36,7 +36,7 @@
     var historyReady = false, restoringHistory = false, historyBackPending = false, historyDepth = 0;
     var searchTimer = null, searchToken = 0, detailToken = 0, seasonToken = 0, activeAbort = null;
     var cache = new Map(), disposed = false, returningHome = false, pendingEpisodeFocus = null,
-      nextContinue = null,
+      nextContinue = null, homeHeroEntry = null, homeLookupToken = 0, homeReturnFocus = null,
       launchingEpisode = false, clearPending = false;
     function text(id, value) { get(id).textContent = value; }
     function createPlaybackHandoff(type, id, season, episode) {
@@ -63,18 +63,23 @@
       } catch (_error) { return false; }
     }
     function syncRail() {
-      get("search-toggle").classList.toggle("is-current", state.view !== "history" && !state.continueMode);
-      get("continue-toggle").classList.toggle("is-current", state.view !== "history" && state.continueMode);
-      get("history-toggle").classList.toggle("is-current", state.view === "history");
+      get("watch-toggle").classList.toggle("is-current", state.view === "watch"
+        || (state.view === "details" || state.view === "episodes") && state.detailSource === "watch");
+      get("search-toggle").classList.toggle("is-current", state.view === "search" && !state.continueMode
+        || (state.view === "details" || state.view === "episodes") && state.detailSource === "search");
+      get("continue-toggle").classList.toggle("is-current", state.view === "search" && state.continueMode);
+      get("history-toggle").classList.toggle("is-current", state.view === "history"
+        || (state.view === "details" || state.view === "episodes") && state.detailSource === "history");
     }
     function setView(name) {
       var changed = state.view !== name;
       state.view = name;
-      ["search", "details", "episodes", "history"].forEach(function (view) { get(view + "-view").hidden = view !== name; });
+      ["watch", "search", "details", "episodes", "history"].forEach(function (view) { get(view + "-view").hidden = view !== name; });
       get("keyboard").hidden = name !== "search" || !keyboardOpen;
       get("keyboard-toggle").textContent = keyboardOpen ? "Hide Keyboard" : "Show Keyboard";
       doc.body.classList.toggle("details-active", name === "details");
       doc.body.classList.toggle("episodes-active", name === "episodes");
+      doc.body.classList.toggle("watch-active", name === "watch");
       syncRail();
       if (changed && historyReady && !restoringHistory && root.history && root.history.pushState) {
         try { root.history.pushState({ horizonWatchView: name, depth: ++historyDepth }, "", nav.href); }
@@ -95,12 +100,13 @@
     function restoreBrowserView(event) {
       historyBackPending = false;
       var target = event.state && event.state.horizonWatchView;
-      if (["search", "details", "episodes", "history"].indexOf(target) < 0) return;
+      if (["watch", "search", "details", "episodes", "history"].indexOf(target) < 0) return;
       historyDepth = Number.isInteger(event.state.depth) ? event.state.depth : 0;
       restoringHistory = true;
       setView(target);
       restoringHistory = false;
-      if (target === "search") focusSelectedResult();
+      if (target === "watch") { renderHomepage(); focusHomeTarget(); }
+      else if (target === "search") focusSelectedResult();
       else if (target === "history") { renderHistory(); focus(get("history-back")); }
       else if (target === "episodes") focus(get("episodes-back"));
       else focus(get("details-back"));
@@ -123,9 +129,12 @@
       var seasonStrip = element.closest("#seasons");
       var episodeScroll = element.closest("#episode-list");
       var resultScroll = element.closest("#results, #history-list");
+      var homeScroll = element.closest("#watch-continue-row, #watch-recent-row");
       if (seasonStrip) revealInScroller(element, seasonStrip, true, 14);
       else if (episodeScroll) revealInScroller(element, episodeScroll, false, 18);
+      else if (homeScroll) revealInScroller(element, homeScroll, true, 18);
       else if (resultScroll) revealInScroller(element, resultScroll, false, 18);
+      if (element.closest("#watch-view")) revealInScroller(element, get("watch-view"), false, 16);
     } }
     function button(label, click, className) {
       var el = doc.createElement("button"); el.type = "button"; el.textContent = label;
@@ -136,7 +145,8 @@
       try { if (session) session.setItem(core.STATE_KEY, JSON.stringify({ version: 1, view: state.view,
         filter: state.filter, query: state.query, type: state.title && state.title.type,
         id: state.title && state.title.id, season: state.season, subtitle: state.subtitle,
-        source: state.detailSource })); }
+        source: state.detailSource,
+        homeFocus: state.view === "watch" ? homeFocusIdentity(doc.activeElement) : homeReturnFocus })); }
       catch (_error) { /* Return falls back to search. */ }
     }
     function api(path, signal) {
@@ -170,9 +180,9 @@
     }
     function landscapeArt(row) {
       var art = doc.createElement("span"); art.className = "poster-art";
-      function fallback() { art.replaceChildren();
+      function fallback() { Array.from(art.querySelectorAll("img, .art-fallback")).forEach(function (node) { node.remove(); });
         var label = doc.createElement("span"); label.className = "art-fallback"; label.textContent = row.title;
-        art.appendChild(label);
+        art.insertBefore(label, art.firstChild);
       }
       var image = poster(row.backdrop || row.poster, row.backdrop ? "backdrop" : "poster");
       if (!image) { fallback(); return art; }
@@ -206,6 +216,108 @@
       if (image.complete && image.naturalWidth) art.classList.add("is-loaded");
       return art;
     }
+    function homeFocusIdentity(element) {
+      if (!element || !element.closest || !element.closest("#watch-view")) return null;
+      return { id: element.id || "", group: element.dataset.homeGroup || "",
+        key: element.dataset.homeKey || "" };
+    }
+    function focusHomeTarget() {
+      var saved = homeReturnFocus, target = null;
+      if (saved && saved.group && saved.key) target = Array.from(get(saved.group === "continue"
+        ? "watch-continue-row" : "watch-recent-row").querySelectorAll("button"))
+        .find(function (item) { return item.dataset.homeKey === saved.key; });
+      else if (saved && saved.id) target = get(saved.id);
+      focus(target && !target.closest("[hidden]") ? target : get("watch-hero-play"));
+    }
+    function homeContext(entry) {
+      var row = entry.row;
+      if (entry.next) return "Next · S" + entry.next.season + " E" + entry.next.episode
+        + (entry.next.title ? " · " + entry.next.title : "");
+      var fraction = core.episodeProgressFraction(row);
+      return (row.type === "tv" ? "S" + row.season + " E" + row.episode
+        + (row.episodeTitle ? " · " + row.episodeTitle : "") : "Movie")
+        + (fraction > 0 && fraction < 1 ? " · " + Math.round(fraction * 100) + "% watched"
+          : fraction === 1 ? " · completed" : "");
+    }
+    function startHomeEntry(entry) {
+      if (!entry) return;
+      state.title = entry.row; state.detailSource = "watch"; state.subtitle = core.readSubtitlePref(local);
+      if (entry.next) launchEpisode(entry.next.season, entry.next.episode, false, entry.next.title);
+      else if (entry.row.type === "movie") launchMovie(false);
+      else launchEpisode(entry.row.season, entry.row.episode, false);
+    }
+    function paintHomepage(entries, history) {
+      var previous = homeFocusIdentity(doc.activeElement);
+      entries.sort(function (a, b) { return b.row.progress.updatedAt - a.row.progress.updatedAt; });
+      homeHeroEntry = entries[0] || null;
+      var art = get("watch-hero-art"); art.replaceChildren(); art.classList.remove("is-poster");
+      if (homeHeroEntry) {
+        var row = homeHeroEntry.row, backdrop = core.imageUrl(row.backdrop, "hero");
+        var image = poster(row.backdrop || row.poster, row.backdrop ? "hero" : "poster");
+        if (image) { if (!backdrop) art.classList.add("is-poster");
+          var triedPoster = !row.backdrop;
+          image.addEventListener("error", function () {
+            if (!triedPoster && row.poster) { triedPoster = true; art.classList.add("is-poster"); image.src = core.imageUrl(row.poster, "poster"); }
+            else image.remove();
+          }); art.appendChild(image); }
+        text("watch-hero-eyebrow", "CONTINUE WATCHING"); text("watch-hero-title", row.title);
+        text("watch-hero-context", homeContext(homeHeroEntry));
+        text("watch-hero-play", homeHeroEntry.next ? "Continue" : "Resume Watching");
+        get("watch-hero-details").hidden = false;
+      } else {
+        text("watch-hero-eyebrow", "HORIZON WATCH"); text("watch-hero-title", "Find your next watch");
+        text("watch-hero-context", ""); text("watch-hero-play", "Search titles");
+        get("watch-hero-details").hidden = true;
+      }
+      function rowCard(entry, group, action) {
+        var row = entry.row, card = button("", action, "home-card");
+        card.dataset.homeGroup = group; card.dataset.homeKey = row.type + ":" + row.id;
+        var artwork = landscapeArt(row), title = doc.createElement("strong"), context = doc.createElement("small");
+        title.textContent = row.title; context.textContent = homeContext(entry);
+        card.appendChild(artwork);
+        if (!entry.next) {
+          var fraction = core.episodeProgressFraction(row);
+          if (fraction > 0) { var line = doc.createElement("span"), fill = doc.createElement("span");
+            line.className = "home-progress"; fill.className = "home-progress-fill";
+            fill.style.width = (fraction * 100).toFixed(1) + "%";
+            line.appendChild(fill); artwork.appendChild(line); }
+        }
+        card.appendChild(title); card.appendChild(context);
+        card.setAttribute("aria-label", (group === "continue" ? "Resume or continue " : "Details for ")
+          + row.title + ", " + context.textContent);
+        return card;
+      }
+      var continueRow = get("watch-continue-row"), recentRow = get("watch-recent-row");
+      continueRow.replaceChildren(); recentRow.replaceChildren();
+      entries.slice(0, 8).forEach(function (entry) {
+        continueRow.appendChild(rowCard(entry, "continue", function () { startHomeEntry(entry); }));
+      });
+      history.slice(0, 8).forEach(function (row) {
+        var entry = { row: row };
+        recentRow.appendChild(rowCard(entry, "recent", function () { openDetails(row); }));
+      });
+      get("watch-continue-section").hidden = !continueRow.children.length;
+      get("watch-recent-section").hidden = !recentRow.children.length;
+      if (previous && previous.group) { homeReturnFocus = previous; focusHomeTarget(); }
+    }
+    function renderHomepage() {
+      var token = ++homeLookupToken, history = core.homepageHistory(core.readHistory(local));
+      var candidates = core.homepageContinueCandidates(core.readHistory(local));
+      var incomplete = candidates.filter(function (row) { return row.manualWatched !== true
+        && (!row.progress.completed || row.manualWatched === false); }).map(function (row) { return { row: row }; });
+      var completed = candidates.filter(function (row) { return row.type === "tv"
+        && (row.manualWatched === true || row.progress.completed && row.manualWatched !== false); }).slice(0, 8);
+      paintHomepage(incomplete, history);
+      if (completed.length) Promise.all(completed.map(function (row) {
+        return api("/api/title/tv/" + row.id).then(function (detail) {
+          return lookupNextEpisode(row, detail);
+        }).then(function (next) { return next ? { row: row, next: next } : null; }, function () { return null; });
+      })).then(function (resolved) {
+        if (disposed || token !== homeLookupToken || state.view !== "watch") return;
+        paintHomepage(incomplete.concat(resolved.filter(Boolean)), history);
+      });
+    }
+    function showWatch() { setView("watch"); renderHomepage(); focusHomeTarget(); saveView(); }
     function renderDetailArt(row) {
       var art = get("detail-art"), view = get("details-view");
       art.replaceChildren(); art.classList.remove("is-poster");
@@ -257,6 +369,7 @@
       focus(selected || results.querySelector("button") || query);
     }
     function backToResults() {
+      if (state.detailSource === "watch") { showWatch(); return; }
       if (state.detailSource === "history") {
         state.detailSource = "search"; setView("history"); renderHistory(); focus(get("history-back")); return;
       }
@@ -355,8 +468,9 @@
     }
     function leaveHistory() {
       clearPending = false; get("history-clear").textContent = "Clear History";
-      setView(state.previousView === "details" || state.previousView === "episodes" ? state.previousView : "search");
-      focus(state.view === "episodes" ? get("episodes-back") : state.view === "details" ? get("details-back") : query);
+      setView(["details", "episodes", "watch"].indexOf(state.previousView) >= 0 ? state.previousView : "search");
+      if (state.view === "watch") { renderHomepage(); focusHomeTarget(); }
+      else focus(state.view === "episodes" ? get("episodes-back") : state.view === "details" ? get("details-back") : query);
     }
     function launchHistory(row) {
       if (row.type === "movie") {
@@ -394,18 +508,11 @@
         group.appendChild(label); group.appendChild(value); host.appendChild(group);
       });
     }
-    function resolveNextContinue(recent) {
-      if (!state.detail || !Array.isArray(state.detail.seasons)) return;
-      var key = recent.id + ":" + recent.season + ":" + recent.episode + ":"
-        + (recent.progress && recent.progress.updatedAt || recent.at);
-      if (nextContinue && nextContinue.key === key) return;
-      var token = detailToken;
-      nextContinue = { key: key, status: "pending", target: null };
-      var seasons = state.detail.seasons.slice().sort(function (a, b) { return a.number - b.number; });
-      if (!seasons.some(function (row) { return row.number === recent.season; })) {
-        nextContinue.status = "unavailable"; return;
-      }
-      api("/api/season/tv/" + recent.id + "/" + recent.season).then(function (value) {
+    function lookupNextEpisode(recent, detail) {
+      if (!detail || !Array.isArray(detail.seasons)) return Promise.resolve(null);
+      var seasons = detail.seasons.slice().sort(function (a, b) { return a.number - b.number; });
+      if (!seasons.some(function (row) { return row.number === recent.season; })) return Promise.resolve(null);
+      return api("/api/season/tv/" + recent.id + "/" + recent.season).then(function (value) {
         var rows = Array.isArray(value.episodes) ? value.episodes : [];
         if (!rows.some(function (row) { return row.number === recent.episode; })) return null;
         var next = core.nextConfirmedEpisode(recent, rows, null, null);
@@ -416,7 +523,16 @@
         return api("/api/season/tv/" + recent.id + "/" + following.number).then(function (season) {
           return core.nextConfirmedEpisode(recent, rows, following.number, season.episodes);
         });
-      }).then(function (target) {
+      });
+    }
+    function resolveNextContinue(recent) {
+      if (!state.detail || !Array.isArray(state.detail.seasons)) return;
+      var key = recent.id + ":" + recent.season + ":" + recent.episode + ":"
+        + (recent.progress && recent.progress.updatedAt || recent.at);
+      if (nextContinue && nextContinue.key === key) return;
+      var token = detailToken;
+      nextContinue = { key: key, status: "pending", target: null };
+      lookupNextEpisode(recent, state.detail).then(function (target) {
         if (disposed || token !== detailToken || !nextContinue || nextContinue.key !== key) return;
         nextContinue.status = target ? "ready" : "unavailable";
         nextContinue.target = target;
@@ -482,7 +598,8 @@
     }
     function openDetails(row) {
       detailToken += 1; seasonToken += 1;
-      state.detailSource = state.view === "history" ? "history" : "search";
+      if (state.view === "watch") homeReturnFocus = homeFocusIdentity(doc.activeElement);
+      state.detailSource = state.view === "history" ? "history" : state.view === "watch" ? "watch" : "search";
       state.title = row; state.detail = null; state.season = null; nextContinue = null;
       state.episodes = [];
       state.subtitle = core.readSubtitlePref(local);
@@ -738,6 +855,27 @@
     function move(key) {
       var current = doc.activeElement, rect = current && current.getBoundingClientRect();
       if (!rect) { focus(query); return; }
+      if (state.view === "watch") {
+        var hero = [get("watch-hero-play"), get("watch-hero-details")].filter(function (item) { return !item.hidden; });
+        var cont = Array.from(get("watch-continue-row").querySelectorAll("button"));
+        var recent = Array.from(get("watch-recent-row").querySelectorAll("button"));
+        var group = hero.indexOf(current) >= 0 ? hero : cont.indexOf(current) >= 0 ? cont
+          : recent.indexOf(current) >= 0 ? recent : null;
+        if (current.closest(".watch-rail")) {
+          if (key === "ArrowRight") focus(hero[0]);
+          return;
+        }
+        if (group) {
+          var index = group.indexOf(current), down = group === hero ? cont.length ? cont : recent
+            : group === cont ? recent : [], up = group === recent ? cont.length ? cont : hero
+            : group === cont ? hero : [];
+          if (key === "ArrowLeft") focus(group[index - 1] || get("watch-toggle"));
+          else if (key === "ArrowRight") focus(group[index + 1]);
+          else if (key === "ArrowDown") focus(down[Math.min(index, down.length - 1)]);
+          else if (key === "ArrowUp") focus(up.length ? up[Math.min(index, up.length - 1)] : get("watch-toggle"));
+          return;
+        }
+      }
       if (state.view === "details") {
         var actions = Array.from(get("detail-actions").querySelectorAll("button")).filter(function (item) {
           return !item.disabled;
@@ -857,7 +995,8 @@
         else if (state.view === "details") returnWithinWatch(backToResults);
         else if (state.view === "search" && state.query) {
           query.value = ""; state.query = ""; scheduleSearch(0); focus(query); saveView();
-        } else exitToHome();
+        } else if (state.view === "search") showWatch();
+        else exitToHome();
         return;
       }
       if (key === "OK") {
@@ -869,6 +1008,14 @@
       if (key && key.indexOf("Arrow") === 0) { event.preventDefault(); move(key); return; }
     }
     get("home-toggle").addEventListener("click", exitToHome);
+    get("watch-toggle").addEventListener("click", showWatch);
+    get("watch-hero-play").addEventListener("click", function () {
+      if (homeHeroEntry) startHomeEntry(homeHeroEntry);
+      else get("search-toggle").click();
+    });
+    get("watch-hero-details").addEventListener("click", function () {
+      if (homeHeroEntry) openDetails(homeHeroEntry.row);
+    });
     get("search-toggle").addEventListener("click", function () {
       state.continueMode = false; setView("search"); scheduleSearch(0); focus(query); saveView();
     });
@@ -928,13 +1075,22 @@
             returned.subtitle, Date.now(), returnedArtwork));
         }
       }
+      if (returnedMovie) {
+        var acceptedMovieProgress = consumePlaybackHandoff(returnedMovie, "movie") ? returnedMovie.progress : null;
+        var existingMovie = core.readHistory(local).find(function (row) { return row.type === "movie"
+          && row.id === returnedMovie.id; });
+        if (acceptedMovieProgress && existingMovie) core.writeHistory(local, core.item("movie", returnedMovie.id,
+          existingMovie.title, null, null, "off", Date.now(), Object.assign({}, existingMovie,
+            { progress: acceptedMovieProgress })));
+      }
       if (saved && saved.version === 1 && ["all", "movie", "tv"].indexOf(saved.filter) >= 0) {
-        state.detailSource = saved.source === "history" ? "history" : "search";
+        state.detailSource = ["history", "watch"].indexOf(saved.source) >= 0 ? saved.source : "search";
+        if (saved.homeFocus && typeof saved.homeFocus === "object") homeReturnFocus = saved.homeFocus;
         state.filter = saved.filter; state.query = String(saved.query || "").slice(0, 80); query.value = state.query;
         doc.querySelectorAll("[data-filter]").forEach(function (b) { b.classList.toggle("is-current", b.dataset.filter === state.filter); });
         if (state.query.length >= 2) scheduleSearch(0);
       }
-      if (returned) {
+      if (returned && (!saved || saved.view !== "watch")) {
         var restoreEpisodes = !saved || saved.id !== returned.id || saved.view === "episodes"
           || new URLSearchParams(nav.search).get("episodes") === "1";
         api("/api/title/tv/" + returned.id).then(function (value) {
@@ -946,10 +1102,9 @@
           if (restoreEpisodes) browseEpisodes();
         }, function () { text("search-status", "Could not restore show details. Search for the show to continue."); });
       }
-      if (returnedMovie) {
-        var acceptedMovieProgress = consumePlaybackHandoff(returnedMovie, "movie") ? returnedMovie.progress : null;
+      if (returnedMovie && (!saved || saved.view !== "watch")) {
         api("/api/title/movie/" + returnedMovie.id).then(function (value) {
-          var existingMovie = core.readHistory(local).find(function (row) { return row.type === "movie"
+          existingMovie = core.readHistory(local).find(function (row) { return row.type === "movie"
             && row.id === returnedMovie.id; });
           if (acceptedMovieProgress || existingMovie) core.writeHistory(local, core.item("movie", returnedMovie.id,
             value.title, null, null, "off", Date.now(), Object.assign({}, existingMovie || {}, {
@@ -964,7 +1119,7 @@
       if ((returned || returnedMovie) && root.history && root.history.replaceState) root.history.replaceState(null, "",
         useMock ? (nav.pathname + "?mock=1") : "/");
     } catch (_error) { /* Storage and history are optional on the TV browser. */ }
-    setView("search"); focus(query);
+    setView("watch"); renderHomepage(); focusHomeTarget();
     if (finePointer && root.history && root.history.replaceState) {
       try { root.history.replaceState({ horizonWatchView: state.view, depth: 0 }, "", nav.href);
         historyReady = true;

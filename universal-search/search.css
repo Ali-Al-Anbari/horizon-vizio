@@ -69,6 +69,11 @@ button:disabled { opacity: .45; cursor: default; }
   white-space: nowrap;
   border: 0;
 }
+.rail-action .watch-mark {
+  position: static; width: auto; height: auto; margin: 0; overflow: visible;
+  clip: auto; font-size: 1.55rem; font-weight: 700; letter-spacing: -.09em;
+}
+.rail-action.is-current .watch-mark { color: #fff; }
 .rail-action.is-current img { opacity: 1; }
 .rail-action:focus, .rail-action.is-focused {
   outline: 2px solid #ffffff;
@@ -99,6 +104,41 @@ button:disabled { opacity: .45; cursor: default; }
   color: #ffffff;
   white-space: nowrap;
 }
+
+body.watch-active { overflow: hidden; }
+body.watch-active .shell, body.watch-active .watch-content { height: 100vh; min-height: 0; }
+.watch-home { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 12px 24px; scrollbar-width: thin; }
+.watch-hero { position: relative; min-height: clamp(270px, 36vh, 410px); display: flex; align-items: flex-end;
+  isolation: isolate; background: #111b27; border-radius: 8px; overflow: hidden; }
+.watch-hero-art, .watch-hero-shade { position: absolute; inset: 0; pointer-events: none; }
+.watch-hero-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.watch-hero-art.is-poster img { object-fit: contain; object-position: right center; }
+.watch-hero-shade { background: linear-gradient(90deg, rgba(0,0,0,.96) 0%, rgba(0,0,0,.68) 38%, rgba(0,0,0,.1) 82%),
+  linear-gradient(0deg, rgba(0,0,0,.7), transparent 60%); }
+.watch-hero-copy { position: relative; z-index: 1; width: min(690px, 70%); padding: clamp(24px, 3vw, 52px); }
+.watch-hero-eyebrow { margin: 0 0 6px; color: #cbd4dc; font-size: .75rem; letter-spacing: .22em; font-weight: 700; }
+.watch-hero h1 { margin: 0; font-size: clamp(2rem, 3.3vw, 3.7rem); line-height: 1.06; letter-spacing: -.04em; }
+.watch-hero-context { min-height: 1.3em; margin: 12px 0 22px; color: #e0e4e8; font-size: .92rem; }
+.watch-hero-actions { display: flex; flex-wrap: wrap; gap: 14px; padding: 4px; }
+.watch-hero-actions button { min-height: 44px; padding: 8px 22px; border: 1px solid rgba(255,255,255,.68); border-radius: 5px;
+  background: rgba(7,12,18,.5); color: #fff; font-weight: 600; }
+#watch-hero-play { color: #111; background: #fff; border-color: #fff; }
+.watch-hero-actions button:focus, .watch-hero-actions button.is-focused { outline: 2px solid #fff; outline-offset: 3px; box-shadow: 0 0 16px rgba(255,255,255,.45); }
+.watch-home-section { margin-top: clamp(18px, 2.5vh, 28px); }
+.watch-home-section h2 { margin: 0 0 4px 8px; font-size: clamp(1.05rem, 1.35vw, 1.45rem); font-weight: 600; }
+.watch-home-row { display: flex; gap: clamp(14px, 1.2vw, 22px); overflow-x: auto; overflow-y: hidden;
+  padding: 13px 9px 18px; scroll-behavior: smooth; scrollbar-width: thin; }
+.home-card { position: relative; display: block; flex: 0 0 clamp(190px, 16vw, 280px); min-width: 0; padding: 0;
+  border: 0; background: transparent; color: #fff; text-align: left; }
+.home-card .poster-art { position: relative; display: block; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 5px; background: #18222d; }
+.home-card .poster-art img { width: 100%; height: 100%; object-fit: cover; }
+.home-card strong, .home-card small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.home-card strong { margin-top: 8px; font-size: .94rem; }
+.home-card small { color: #aeb9c5; font-size: .76rem; }
+.home-card:focus .poster-art, .home-card.is-focused .poster-art { outline: 2px solid #fff; outline-offset: 3px; box-shadow: 0 0 14px rgba(255,255,255,.3); }
+.home-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.3); }
+.home-progress-fill { display: block; height: 100%; background: #fff; }
+@media (max-width: 1100px) { .watch-hero-copy { width: min(620px, 86%); } .home-card { flex-basis: 210px; } }
 
 .search-layout {
   display: grid;

@@ -111,6 +111,15 @@
       - (a.progress ? a.progress.updatedAt : a.at); });
   }
   function homeRows(rows) { return groupedHistory(rows).slice(0, 6); }
+  function homepageHistory(rows) {
+    return groupedHistory(rows.filter(function (row) { return !!row.progress; })).slice(0, 12);
+  }
+  function homepageContinueCandidates(rows) {
+    return groupedHistory(rows.filter(function (row) { return !!row.progress; })).filter(function (row) {
+      var completed = row.manualWatched === true || row.progress.completed && row.manualWatched !== false;
+      return !completed || row.type === "tv";
+    }).slice(0, 12);
+  }
   function continueRows(rows) { return groupedHistory(rows).filter(function (row) {
     return row.type === "tv" || row.manualWatched === false || row.manualWatched !== true
       && (!row.progress || row.progress.completed !== true);
@@ -291,7 +300,9 @@
     progressRecord: progressRecord, validHandoff: validHandoff, item: item,
     readHistory: readHistory, writeHistory: writeHistory, clearHistory: clearHistory,
     clearProgress: clearProgress, groupedHistory: groupedHistory,
-    homeRows: homeRows, continueRows: continueRows, lastWatchedEpisode: lastWatchedEpisode,
+    homeRows: homeRows, homepageHistory: homepageHistory,
+    homepageContinueCandidates: homepageContinueCandidates,
+    continueRows: continueRows, lastWatchedEpisode: lastWatchedEpisode,
     nextConfirmedEpisode: nextConfirmedEpisode, episodeProgressFraction: episodeProgressFraction,
     rankResults: rankResults,
     readPrefs: readPrefs, writePrefs: writePrefs, readSubtitlePref: readSubtitlePref, writeSubtitlePref: writeSubtitlePref,

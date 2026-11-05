@@ -11,6 +11,23 @@ const native = root.HorizonUniversalSearch.nativeEditingKey;
 const html = readFileSync(new URL("../universal-search/index.html", import.meta.url), "utf8");
 const css = readFileSync(new URL("../universal-search/search.css", import.meta.url), "utf8");
 
+test("Watch homepage has real history rows, an empty discovery state, and explicit focus groups", () => {
+  for (const id of ["watch-view", "watch-hero-play", "watch-hero-details", "watch-continue-row", "watch-recent-row"])
+    assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(source, /core\.homepageHistory\(core\.readHistory\(local\)\)/);
+  assert.match(source, /core\.homepageContinueCandidates\(core\.readHistory\(local\)\)/);
+  assert.match(source, /lookupNextEpisode\(row, detail\)/);
+  assert.match(source, /if \(homeHeroEntry\) startHomeEntry\(homeHeroEntry\)/);
+  assert.match(source, /else get\("search-toggle"\)\.click\(\)/);
+  assert.match(source, /if \(state\.view === "watch"\) \{[\s\S]*?var hero = /);
+  assert.match(source, /else if \(key === "ArrowDown"\) focus\(down\[/);
+  assert.match(source, /revealInScroller\(element, homeScroll, true, 18\)/);
+  assert.match(css, /\.watch-home-row\s*\{[^}]*overflow-x: auto/s);
+  assert.match(css, /\.home-card:focus \.poster-art/);
+  assert.match(css, /\.home-progress-fill\s*\{[^}]*background: #fff/s);
+  assert.doesNotMatch(html, /Trending Now|Recommended For You/);
+});
+
 test("desktop search keeps editing keys native while TV arrows remain available for D-pad navigation", () => {
   for (const key of ["Backspace", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"])
     assert.equal(native({ key }, true, true), true, key);

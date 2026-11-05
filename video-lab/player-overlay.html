@@ -68,16 +68,6 @@
             <button id="experiment-focus" type="button" tabindex="-1">Focus player · 12s</button>
             <button id="experiment-skip" type="button" tabindex="-1">Test Skip +10s</button>
           </div>
-          <section id="up-next" class="up-next" aria-label="Up Next" hidden>
-            <p class="brand">UP NEXT</p>
-            <h2 id="up-next-title"></h2>
-            <p class="up-next-availability">YapGrid playback availability is unverified.</p>
-            <p id="up-next-countdown"></p>
-            <div class="menu-actions">
-              <button id="up-next-play" type="button" tabindex="-1">Play now</button>
-              <button id="up-next-cancel" type="button" tabindex="-1">Cancel · Episode List</button>
-            </div>
-          </section>
           <section id="subtitle-menu" class="subtitle-menu" aria-label="Subtitle settings" hidden>
             <h2 id="menu-title">Subtitle mode</h2>
             <p id="menu-description">Changing subtitles reloads YapGrid and may lose your position.</p>
@@ -137,6 +127,19 @@
           </div>
           <p class="diagnostics-assessment"><strong>Assessment</strong><span id="diag-assessment"></span></p>
         </section>
+      </section>
+      <section id="up-next" class="up-next" aria-label="Up Next" hidden>
+        <div class="up-next-copy">
+          <p class="brand">UP NEXT</p>
+          <div id="up-next-title" class="up-next-title">
+            <span id="up-next-identity" class="up-next-identity"></span>
+            <span id="up-next-separator" class="up-next-separator" aria-hidden="true">·</span>
+            <span id="up-next-name-viewport" class="up-next-name-viewport"><span id="up-next-name" class="up-next-name"></span></span>
+          </div>
+        </div>
+        <button id="up-next-play" type="button" tabindex="-1" aria-label="Play next episode" title="Play next episode">
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M4 5v14l11-7L4 5zm13 0h3v14h-3z"/></svg>
+        </button>
       </section>
       <p id="screen-reader-status" class="screen-reader-only" role="status" aria-live="polite">Video playing. Press an arrow or OK to show controls. Back exits to Video Lab.</p>
     </main>

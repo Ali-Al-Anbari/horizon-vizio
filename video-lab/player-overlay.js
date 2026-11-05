@@ -6,7 +6,6 @@
     CONTROLS_VISIBLE: "CONTROLS_VISIBLE",
     SUBMENU_OPEN: "SUBMENU_OPEN",
     COMMAND_IN_PROGRESS: "COMMAND_IN_PROGRESS",
-    UP_NEXT: "UP_NEXT",
     DIAGNOSTICS_OPEN: "DIAGNOSTICS_OPEN",
     NATIVE_FOCUS: "NATIVE_FOCUS",
   };
@@ -53,7 +52,7 @@
       get("vidlink-focus-default"), get("vidbolt-autoplay-toggle"), get("vidbolt-auto-recover"),
       get("vidbolt-stop"), get("vidbolt-native-focus")];
     var menuButtons = [get("menu-cancel"), get("menu-change")];
-    var upNextButtons = [get("up-next-play"), get("up-next-cancel")];
+    var upNextButtons = [get("up-next-play")];
     var catalog = root.HorizonEpisodes;
     var providers = root.HorizonPlaybackProviders;
     var diagnostics = root.HorizonPlayerDiagnostics.create(root, doc, frame, clock);
@@ -146,10 +145,11 @@
     var batchPollTimer = null;
     var batchStopTimer = null;
     var seekLevels = { rewind: 0, forward: 0 };
-    var upNextTimer = null;
-    var upNextDeadline = null;
-    var upNextSelected = 0;
     var upNextTarget = null;
+    var upNextDismissed = false;
+    var upNextLookup = 0;
+    var upNextLookupPending = false;
+    var leavingUpNextFocus = false;
     var transitionStarted = false;
     var episodeLookup = 0;
     var episodeLookupPending = false;
@@ -301,7 +301,7 @@
           boltSeekPending = false; s.seekTarget = null; s.seekUnconfirmed = true;
         }
         var reason = null;
-        if (!transitionStarted && state !== STATES.UP_NEXT && !episodeLookupPending
+        if (!transitionStarted && !episodeLookupPending
             && !pendingEpisode && s.endedAt === null && s.paused !== true && !s.pauseIntent
             && now() >= s.seekUntil) {
           if (!s.healthy && now() - Math.max(s.createdAt, s.monitorSince) >= boltStartupGraceMs)
@@ -349,10 +349,14 @@
             && time - s.controlPending.at < BOLT_CONTROL_PENDING_MS) return;
         s.controlPending = null;
         clearBoltControlTimer();
+        var replayAfterEnd = s.endedAt !== null;
         if (s.paused !== false) s.monitorSince = time;
         s.paused = false;
         s.pauseIntent = false;
         s.endedAt = null;
+        if (replayAfterEnd) {
+          clearUpNext();
+        }
         initializeBoltVolume(); // ready may have been missed.
       } else if (message.type === "vidbolt:pause") {
         if (s.controlPending && s.controlPending.type === "play"
@@ -367,6 +371,7 @@
         s.controlPending = null;
         clearBoltControlTimer();
         s.endedAt = time; s.paused = true; s.suspected = null;
+        if (!isMovie) startUpNext();
         if (movieLoadTimer !== null) { clock.clearTimeout(movieLoadTimer); movieLoadTimer = null; }
         get("player-loading").classList.remove("is-warning");
         get("player-loading").hidden = true;
@@ -380,6 +385,8 @@
         s.offOptionCount = message.offOptionCount;
       } else if (message.type === "vidbolt:timeupdate") {
         if (s.firstTimeupdateAt === null) s.firstTimeupdateAt = time;
+        if (typeof message.duration === "number" && isFinite(message.duration) && message.duration > 0)
+          s.duration = message.duration;
         var seekArrival = s.seekTarget !== null && Math.abs(message.currentTime - s.seekTarget) <= 2;
         if (s.progressReference === null || seekArrival || s.seekTarget !== null
             || s.seekUnconfirmed || message.currentTime < s.progressReference)
@@ -408,6 +415,10 @@
         }
         s.position = message.currentTime;
         s.positionAt = time;
+        // A provider timeupdate is the confirmed position. Seek preview targets
+        // never reach this check, so a validated seek to the completion range
+        // is eligible just like any other reported position.
+        if (!isMovie && s.duration > 0 && message.currentTime / s.duration >= 0.95) startUpNext();
       }
       renderBoltPlayPause();
     }
@@ -425,6 +436,7 @@
       boltLastRecoveryReason = reason + (reason === "manual" || !boltSession.suspectedDetail
         ? "" : "; " + boltSession.suspectedDetail)
         + (restore === null ? "; position unavailable" : "; resume " + restore + "s");
+      clearUpNext();
       boltRecoveryFromGeneration = boltSession.generation;
       boltRecoveryFromLoads = boltSession.loadCount + " from " + boltSession.parentUrlAssignments
         + " parent URL assignment(s)";
@@ -641,6 +653,11 @@
       if (!force && provider === providers.VIDBOLT && boltSession
           && (boltSession.paused === true || boltSession.pauseIntent || boltSession.endedAt !== null)) return;
       clearIdle();
+      if (upNextTarget && provider === providers.VIDBOLT && boltSeekPending) {
+        resetIdle();
+        return;
+      }
+      var restoreUpNextFocus = !!upNextTarget;
       episodeLookup += 1;
       episodeLookupPending = false;
       pendingEpisode = null;
@@ -652,7 +669,9 @@
       get("command-status").classList.remove("is-seek-help");
       get("seek-preview").hidden = true;
       if (adapter && typeof adapter.close === "function") adapter.close();
-      focus(capture);
+      if (restoreUpNextFocus) {
+        if (doc.activeElement !== upNextButtons[0]) focus(upNextButtons[0]);
+      } else focus(capture);
       get("screen-reader-status").textContent = "Controls hidden. Press an arrow or OK to show controls. Back exits to "
         + (route.fromSearch ? "Watch." : "Video Lab.");
     }
@@ -798,6 +817,10 @@
       if (next !== selected) focusControl(next);
     }
     function navigateSharedControls(key) {
+      if (upNextTarget && !leavingUpNextFocus && key === "ArrowDown" && selected >= 3) {
+        focus(upNextButtons[0]);
+        return true;
+      }
       var rows = [[0, 1, 2], [3, 5, 6, 8, 11, 7, 9, 4, 10, 21, 20]]
         .map(function (row) { return row.filter(function (index) {
           return controls[index] && !controls[index].hidden && !controls[index].disabled;
@@ -806,6 +829,11 @@
       if (rowIndex < 0) { focusControl(1); return true; }
       var row = rows[rowIndex];
       var column = row.indexOf(selected);
+      if (upNextTarget && !leavingUpNextFocus && rowIndex === 1
+          && (key === "ArrowDown" || key === "ArrowRight" && column === row.length - 1)) {
+        focus(upNextButtons[0]);
+        return true;
+      }
       if (key === "ArrowLeft" || key === "ArrowRight") {
         var nextColumn = column + (key === "ArrowRight" ? 1 : -1);
         if (nextColumn >= 0 && nextColumn < row.length) focusControl(row[nextColumn]);
@@ -1139,12 +1167,16 @@
       beginHandoff();
     }
     function clearUpNext() {
-      if (upNextTimer !== null) { clock.clearTimeout(upNextTimer); upNextTimer = null; }
-      upNextDeadline = null;
+      var hadFocus = doc.activeElement === upNextButtons[0];
+      upNextLookup += 1;
+      upNextLookupPending = false;
       upNextTarget = null;
       get("up-next").hidden = true;
-      overlay.classList.remove("is-up-next");
       upNextButtons.forEach(function (button) { button.tabIndex = -1; });
+      if (hadFocus) {
+        if (state === STATES.CONTROLS_VISIBLE) focusControl(1);
+        else if (state === STATES.PLAYBACK_HIDDEN) focus(capture);
+      }
     }
     function transitionTo(url) {
       if (disposed || transitionStarted || !url) return;
@@ -1208,64 +1240,76 @@
         get("command-status").textContent = "Episode metadata unavailable; availability unknown. Press OK to retry.";
       });
     }
-    function renderUpNext() {
-      var remaining = Math.max(0, Math.ceil((upNextDeadline - now()) / 1000));
-      get("up-next-countdown").textContent = "Playing next episode in " + remaining
-        + (remaining === 1 ? " second" : " seconds");
-      get("screen-reader-status").textContent = "Up Next: " + get("up-next-title").textContent
-        + ". " + remaining + " seconds. Choose Play now or Cancel.";
-    }
-    function tickUpNext() {
-      upNextTimer = null;
-      if (disposed || state !== STATES.UP_NEXT || upNextDeadline === null) return;
-      if (now() >= upNextDeadline) {
-        launchEpisode(upNextTarget);
-        return;
-      }
-      renderUpNext();
-      upNextTimer = clock.setTimeout(tickUpNext, Math.min(1000, upNextDeadline - now()));
-    }
     function startUpNext() {
-      if (!manualEndEnabled || disposed || state !== STATES.CONTROLS_VISIBLE
-          || transitionStarted || episodeLookupPending) return;
-      episodeLookupPending = true;
-      var lookup = ++episodeLookup;
-      get("command-status").textContent = "Checking next episode metadata…";
+      if (isMovie || disposed || transitionStarted || upNextLookupPending || upNextDismissed || upNextTarget) return;
+      upNextLookupPending = true;
+      var lookup = ++upNextLookup;
+      var generation = boltSession && boltSession.generation;
+      var identity = boltSession && boltSession.identity;
       Promise.resolve().then(function () { return resolver.resolve(currentEpisode, 1); }).then(function (result) {
-        if (disposed || lookup !== episodeLookup || state !== STATES.CONTROLS_VISIBLE) return;
-        episodeLookupPending = false;
-        if (!result || result.kind !== "catalogued") {
-          get("command-status").textContent = result && result.kind === "none_known"
-            ? "No later aired episode in metadata; series status and " + providerLabel() + " availability unknown."
-            : "Next episode metadata unavailable; autoplay cannot start safely.";
-          return;
-        }
+        if (lookup !== upNextLookup) return;
+        upNextLookupPending = false;
+        if (disposed || provider !== providers.VIDBOLT || isMovie || !boltSession
+            || boltSession.generation !== generation || boltSession.identity !== identity) return;
+        if (!result || result.kind !== "catalogued") return;
         beginUpNext(result.target);
-      }, function () {
-        if (disposed || lookup !== episodeLookup || state !== STATES.CONTROLS_VISIBLE) return;
-        episodeLookupPending = false;
-        get("command-status").textContent = "Next episode metadata unavailable; autoplay cannot start safely.";
-      });
+      }, function () { if (lookup === upNextLookup) upNextLookupPending = false; });
     }
     function beginUpNext(next) {
-      clearIdle();
-      state = STATES.UP_NEXT;
+      if (upNextTarget || upNextDismissed || !next
+          || typeof next.season !== "number" || !isFinite(next.season) || next.season < 0
+          || Math.floor(next.season) !== next.season
+          || typeof next.episode !== "number" || !isFinite(next.episode) || next.episode < 1
+          || Math.floor(next.episode) !== next.episode) return;
+      var activeSeekInteraction = state === STATES.CONTROLS_VISIBLE
+        && (selected === 0 || selected === 2 || boltSeekPending || !get("seek-preview").hidden);
       upNextTarget = next;
-      upNextDeadline = now() + 10000;
-      upNextSelected = 0;
-      get("up-next-title").textContent = "S" + next.season + " E" + next.episode + " · " + next.title;
+      get("up-next-identity").textContent = "S" + next.season + " E" + next.episode;
+      get("up-next-name").textContent = next.title || "";
+      get("up-next-separator").hidden = !next.title;
+      var actionName = "Play next episode, Season " + next.season + ", Episode " + next.episode
+        + (next.title ? ": " + next.title : "");
+      upNextButtons[0].setAttribute("aria-label", actionName);
+      upNextButtons[0].title = actionName;
       get("up-next").hidden = false;
-      overlay.classList.add("is-up-next");
-      upNextButtons.forEach(function (button) { button.tabIndex = 0; });
-      controls.forEach(function (button) { button.tabIndex = -1; });
-      renderUpNext();
-      focus(upNextButtons[0]);
-      upNextTimer = clock.setTimeout(tickUpNext, 1000);
+      upNextButtons[0].tabIndex = 0;
+      get("screen-reader-status").textContent = "Next episode available. Press OK to Play Next, or Back to return to the current player.";
+      var safeToFocus = state !== STATES.SUBMENU_OPEN && state !== STATES.DIAGNOSTICS_OPEN
+        && state !== STATES.COMMAND_IN_PROGRESS && state !== STATES.NATIVE_FOCUS && !activeSeekInteraction;
+      if (safeToFocus) focus(upNextButtons[0]);
+      renderUpNextTitleOverflow();
     }
     function chooseUpNext() {
-      if (state !== STATES.UP_NEXT) return;
-      if (upNextSelected === 0) launchEpisode(upNextTarget);
-      else transitionTo(episodeListUrl());
+      if (!upNextTarget || transitionStarted) return;
+      launchEpisode(upNextTarget);
+    }
+    function dismissUpNext() {
+      if (!upNextTarget) return;
+      var hadFocus = doc.activeElement === upNextButtons[0];
+      upNextDismissed = true;
+      upNextTarget = null;
+      get("up-next").hidden = true;
+      upNextButtons[0].tabIndex = -1;
+      if (hadFocus) {
+        if (state === STATES.CONTROLS_VISIBLE) focusControl(1);
+        else if (state === STATES.PLAYBACK_HIDDEN) focus(capture);
+      }
+      if (state === STATES.CONTROLS_VISIBLE) resetIdle();
+    }
+    function renderUpNextTitleOverflow() {
+      if (!upNextTarget) return;
+      var viewport = get("up-next-name-viewport");
+      var title = get("up-next-name");
+      var overflow = Number(title.scrollWidth) - Number(viewport.clientWidth);
+      if (isFinite(overflow) && overflow > 8) {
+        viewport.classList.add("is-overflowing");
+        if (viewport.style && typeof viewport.style.setProperty === "function")
+          viewport.style.setProperty("--up-next-overflow", "-" + Math.ceil(overflow) + "px");
+      } else {
+        viewport.classList.remove("is-overflowing");
+        if (viewport.style && typeof viewport.style.removeProperty === "function")
+          viewport.style.removeProperty("--up-next-overflow");
+      }
     }
     function boltClock(seconds) {
       var whole = Math.max(0, Math.floor(seconds));
@@ -1532,6 +1576,29 @@
         }
         return;
       }
+      if (upNextTarget && doc.activeElement === upNextButtons[0]) {
+        if (key === "OK") {
+          if (!event.repeat) chooseUpNext();
+          return;
+        }
+        if (key === "Back") { if (!event.repeat) dismissUpNext(); return; }
+        if (key.indexOf("Arrow") === 0) {
+          if (state === STATES.PLAYBACK_HIDDEN) showControls();
+          if (state === STATES.CONTROLS_VISIBLE) {
+            focusControl(selected);
+            leavingUpNextFocus = true;
+            navigate(key);
+            leavingUpNextFocus = false;
+            resetIdle();
+          }
+          return;
+        }
+      }
+      if (upNextTarget && key === "Back" && state !== STATES.SUBMENU_OPEN
+          && state !== STATES.DIAGNOSTICS_OPEN && !event.repeat) {
+        dismissUpNext();
+        return;
+      }
       if (state === STATES.PLAYBACK_HIDDEN) {
         if (key === "Back") { if (!event.repeat) exitPlayer(); }
         else if (key === "OK" && !event.repeat && (!isCommandProvider() || provider === providers.VIDBOLT)) {
@@ -1549,14 +1616,6 @@
           menuSelected = key === "ArrowLeft" || key === "ArrowUp" ? 0 : 1;
           focus(menuButtons[menuSelected]);
         } else if (!event.repeat) chooseMenu();
-        return;
-      }
-      if (state === STATES.UP_NEXT) {
-        if (key === "Back") { if (!event.repeat) transitionTo(episodeListUrl()); }
-        else if (key.indexOf("Arrow") === 0) {
-          upNextSelected = key === "ArrowLeft" || key === "ArrowUp" ? 0 : 1;
-          focus(upNextButtons[upNextSelected]);
-        } else if (!event.repeat) chooseUpNext();
         return;
       }
       if (state === STATES.DIAGNOSTICS_OPEN) {
@@ -1628,6 +1687,7 @@
       lease.dispose();
       if (adapter && typeof adapter.dispose === "function") adapter.dispose();
       if (typeof clock.removeEventListener === "function") clock.removeEventListener("message", onProviderMessage);
+      if (typeof clock.removeEventListener === "function") clock.removeEventListener("resize", renderUpNextTitleOverflow);
     }
 
     function loading(message) {
@@ -2137,6 +2197,7 @@
       boltRecoveryFromLoads = null;
       boltRecoveryDecision = "no explicit failure signal";
       boltLastConfirmed = null;
+      clearUpNext();
       get("compat-status").textContent = "Each choice reloads CineSrc with one changed setting. Play is a separate manual command.";
       get("vidfast-compat-status").textContent = "Iframe loading, provider status, and visible playback are separate results.";
       get("vidlink-compat-status").textContent = "Choose one setting, then check picture and audio on the TV. Each choice unloads the previous player.";
@@ -2204,7 +2265,7 @@
           : s.endedAt !== null ? "ended"
           : s.paused === true || s.pauseIntent ? "intentionally paused"
           : boltSeekPending || now() < s.seekUntil ? "seek in progress"
-          : transitionStarted || state === STATES.UP_NEXT || episodeLookupPending || pendingEpisode
+          : transitionStarted || episodeLookupPending || pendingEpisode
             ? "navigation in progress" : null;
         if (blocked) {
           boltRecoveryDecision = "active iframe error; skipped: " + blocked;
@@ -2308,9 +2369,7 @@
     });
     upNextButtons.forEach(function (button, index) {
       button.addEventListener("click", function () {
-        if (state !== STATES.UP_NEXT) return;
-        upNextSelected = index;
-        chooseUpNext();
+        if (index === 0) chooseUpNext();
       });
     });
     doc.addEventListener("keydown", onKey);
@@ -2333,6 +2392,7 @@
     overlay.addEventListener("pointermove", function () {
       if (route.fromSearch && state === STATES.CONTROLS_VISIBLE) resetIdle();
     });
+    clock.addEventListener("resize", renderUpNextTitleOverflow);
     clock.addEventListener("pagehide", dispose);
     setOverlayVisible(false);
     renderSeekLabels();

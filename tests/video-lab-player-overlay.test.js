@@ -13,7 +13,7 @@ const listHtml = readFileSync(new URL("../video-lab/episode-list-placeholder.htm
 const listScript = readFileSync(new URL("../video-lab/episode-list-placeholder.js", import.meta.url), "utf8");
 const playerScript = readFileSync(new URL("../video-lab/player-overlay.js", import.meta.url), "utf8");
 const ids = ["player-frame", "player-loading", "remote-capture", "overlay", "seek-preview", "playback-timeline", "timeline-current", "timeline-duration", "timeline-fill", "timeline-playhead", "provider-indicator", "rewind", "rewind-label", "play-pause", "play-pause-label", "forward", "forward-label", "subtitles",
-  "episodes", "previous-episode", "next-episode", "manual-end", "show-title", "metadata-credit", "metadata-provider-credit", "episode-caption", "up-next", "up-next-title", "up-next-countdown", "up-next-play", "up-next-cancel",
+  "episodes", "previous-episode", "next-episode", "manual-end", "show-title", "metadata-credit", "metadata-provider-credit", "episode-caption", "up-next", "up-next-title", "up-next-identity", "up-next-separator", "up-next-name-viewport", "up-next-name", "up-next-play",
   "subtitle-menu", "subtitle-mode", "menu-title", "menu-description", "menu-cancel", "menu-change",
   "command-status", "screen-reader-status", "provider-choice", "unload-provider", "recover-provider", "watch-fullscreen", "watch-exit", "provider-telemetry", "diagnostics-open", "diagnostics-close", "diagnostics-panel", "diag-user-agent", "diag-media-source", "diag-native-hls", "diag-html5", "diag-permissions", "diag-frame-events", "diag-events", "diag-message-checks", "diag-sources", "diag-elapsed", "diag-assessment", "diag-vidbolt-session", "compat-controls", "compat-quality", "compat-play", "compat-autoplay", "compat-reset", "compat-status", "diag-variant", "vidfast-compat-controls", "vidfast-autoplay", "vidfast-reset", "vidfast-compat-status", "diag-vidfast-mode", "vidlink-compat-controls", "vidlink-default-off", "vidlink-default-on", "vidlink-jw-on", "vidlink-focus-default", "vidlink-focus-status", "vidlink-compat-status", "diag-vidlink-mode", "vidbolt-compat-controls", "vidbolt-autoplay-toggle", "vidbolt-auto-recover", "vidbolt-stop", "vidbolt-native-focus", "diag-vidbolt-mode", "vidbolt-compat-status", "experimental-controls", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip", "player-shell"];
 const baseUrl = "https://yapgrid.com/embed/tv/2190/13/2";
@@ -2570,47 +2570,204 @@ test("metadata boundaries cannot launch unlisted episodes or autoplay", async ()
   assert.deepEqual(final.navigation, []);
 });
 
-test("preview manual end trigger counts down ten seconds and launches once", async () => {
-  const app = setup({ search: "?season=13&episode=2&sub=off&testEnd=1" });
-  app.key("ArrowUp"); app.get("manual-end").focus();
-  assert.equal(app.document.activeElement.id, "manual-end");
-  app.key("Enter");
-  app.get("manual-end").click(); // Duplicate end while prompt is active.
+test("manual next episode prompt has no countdown or automatic navigation", async () => {
+  const app = setup({ search: "?season=13&episode=2&sub=off&provider=vidbolt" });
+  app.get("player-frame").fire("load");
+  app.message({ type: "ready" }, "https://vidbolt.xyz");
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.message({ type: "ended" }, "https://vidbolt.xyz");
   await flush();
-  assert.equal(app.state(), "UP_NEXT");
   assert.equal(app.get("up-next").hidden, false);
   assert.equal(app.document.activeElement.id, "up-next-play");
-  assert.match(app.get("up-next-title").textContent, /Margaritaville/);
-  assert.match(app.get("up-next-countdown").textContent, /10 seconds/);
-  app.advance(9000);
-  assert.match(app.get("up-next-countdown").textContent, /1 second$/);
-  assert.deepEqual(app.navigation, []);
-  app.advance(1000);
-  assert.deepEqual(app.navigation, ["player-overlay.html?season=13&episode=3&sub=off&testEnd=1"]);
+  assert.equal(app.get("up-next-identity").textContent, "S13 E3");
+  assert.equal(app.get("up-next-name").textContent, "Margaritaville");
+  assert.equal((html.match(/id="up-next-play"/g) || []).length, 1);
+  assert.doesNotMatch(html, /up-next-art|up-next-cancel|up-next-availability/);
+  assert.doesNotMatch(html, /up-next-countdown|Playing next episode in/);
   app.advance(30000);
+  assert.deepEqual(app.navigation, []);
+  app.key("Enter");
+  assert.match(app.navigation[0], /season=13&episode=3/);
+  app.get("up-next-play").click();
   assert.equal(app.navigation.length, 1);
-  assert.equal(app.timers.size, 0);
 });
 
-test("Play now, Cancel and Back terminate countdown with no delayed second launch", async () => {
-  for (const action of ["play", "cancel", "back"]) {
-    const app = setup({ search: "?season=13&episode=2&sub=off&testEnd=1" });
-    app.key("ArrowUp"); app.get("manual-end").click();
-    await flush();
-    app.advance(2000);
-    if (action === "play") app.key("Enter");
-    else if (action === "cancel") { app.key("ArrowRight"); app.key("Enter"); }
-    else app.key("Backspace");
-    assert.deepEqual(app.navigation, [action === "play"
-      ? "player-overlay.html?season=13&episode=3&sub=off&testEnd=1"
-      : "episode-list-placeholder.html?season=13&episode=2&sub=off&testEnd=1"]);
-    app.advance(20000);
-    assert.equal(app.navigation.length, 1);
-    assert.equal(app.timers.size, 0);
-  }
+test("validated VidBolt position at 95 percent triggers Up Next even after a seek", async () => {
+  const app = setup({ search: "?season=13&episode=2&sub=off&provider=vidbolt" });
+  app.get("player-frame").fire("load");
+  app.message({ type: "ready" }, "https://vidbolt.xyz");
+  app.message({ type: "durationchange", duration: 100 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 50 }, "https://vidbolt.xyz");
+  app.key("ArrowDown"); app.key("ArrowRight"); app.key("Enter");
+  assert.equal(app.get("up-next").hidden, true, "seek preview alone is not playback position");
+  app.message({ type: "timeupdate", time: 95 }, "https://vidbolt.xyz");
+  await flush();
+  assert.equal(app.get("up-next").hidden, false);
+  assert.equal(app.document.activeElement.id, "forward", "active seek interaction keeps focus");
+  assert.equal(app.navigation.length, 0);
 });
 
-test("countdown ignores other controls, clears on teardown, and does not trust arbitrary messages", () => {
+test("95 percent fallback waits for valid duration and ended can trigger while seek is pending", async () => {
+  const missing = setup({ search: "?season=13&episode=2&sub=off&provider=vidbolt" });
+  missing.get("player-frame").fire("load");
+  missing.message({ type: "timeupdate", time: 500 }, "https://vidbolt.xyz");
+  await flush();
+  assert.equal(missing.get("up-next").hidden, true);
+
+  const ended = setup({ search: "?season=13&episode=2&sub=off&provider=vidbolt" });
+  ended.get("player-frame").fire("load");
+  ended.key("ArrowDown"); ended.key("ArrowRight"); ended.key("Enter");
+  ended.message({ type: "ended" }, "https://vidbolt.xyz");
+  await flush();
+  assert.equal(ended.get("up-next").hidden, false);
+  assert.equal(ended.document.activeElement.id, "forward", "ended does not steal focus from seek preview");
+});
+
+test("active seek can navigate to Up Next, and the compact title truncates", async () => {
+  const app = setup({ search: "?season=13&episode=2&sub=off&provider=vidbolt" });
+  app.get("player-frame").fire("load");
+  app.message({ type: "durationchange", duration: 100 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 40 }, "https://vidbolt.xyz");
+  app.key("ArrowDown"); app.key("ArrowRight");
+  app.message({ type: "timeupdate", time: 96 }, "https://vidbolt.xyz");
+  await flush();
+  assert.equal(app.get("up-next").hidden, false);
+  assert.equal(app.document.activeElement.id, "forward");
+  app.key("ArrowDown");
+  app.key("ArrowDown");
+  assert.equal(app.document.activeElement.id, "up-next-play");
+  app.key("ArrowLeft");
+  assert.equal(app.document.activeElement.id, "episodes");
+  assert.equal(app.get("up-next").hidden, false);
+  app.key("Backspace");
+  assert.equal(app.get("up-next").hidden, true);
+  assert.match(css, /\.up-next\s*\{[^}]*width:\s*max-content/);
+  assert.match(css, /\.up-next\s*\{[^}]*max-width:\s*min\(336px/);
+  assert.match(css, /\.up-next-name-viewport[^}]*overflow:\s*hidden/);
+  assert.match(css, /prefers-reduced-motion:\s*reduce[^}]*animation:\s*none/s);
+});
+
+test("Next Episode remains independent while the five-second control overlay hides", async () => {
+  const app = setup({ search: "?season=13&episode=2&sub=off&provider=vidbolt", desktop: true });
+  app.get("player-frame").fire("load");
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.message({ type: "durationchange", duration: 100 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 96 }, "https://vidbolt.xyz");
+  await flush();
+  assert.equal(app.get("up-next").hidden, false);
+  assert.equal(app.document.activeElement.id, "up-next-play");
+  app.advance(5000);
+  assert.equal(app.state(), "PLAYBACK_HIDDEN");
+  assert.equal(app.get("overlay").classList.contains("is-visible"), false);
+  assert.equal(app.get("up-next").hidden, false);
+  assert.equal(app.document.activeElement.id, "up-next-play");
+  app.key("Enter");
+  assert.equal(app.navigation.length, 1);
+  assert.match(app.navigation[0], /season=13&episode=3/);
+});
+
+test("main-control focus returns to Next when the five-second hide transition runs", async () => {
+  const app = setup({ search: "?season=13&episode=2&sub=off&provider=vidbolt" });
+  app.get("player-frame").fire("load");
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.message({ type: "durationchange", duration: 100 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 96 }, "https://vidbolt.xyz");
+  await flush();
+  assert.equal(app.document.activeElement.id, "up-next-play");
+  app.key("ArrowLeft");
+  assert.equal(app.document.activeElement.id, "rewind");
+  app.advance(5000);
+  assert.equal(app.state(), "PLAYBACK_HIDDEN");
+  assert.equal(app.get("rewind").tabIndex, -1);
+  assert.equal(app.document.activeElement.id, "up-next-play");
+  app.key("Enter");
+  assert.equal(app.navigation.length, 1);
+  assert.match(app.navigation[0], /season=13&episode=3/);
+});
+
+test("focus restoration waits for an active seek or diagnostics interaction", async () => {
+  const seeking = setup({ search: "?season=13&episode=2&sub=off&provider=vidbolt" });
+  seeking.get("player-frame").fire("load");
+  seeking.message({ type: "play" }, "https://vidbolt.xyz");
+  seeking.message({ type: "durationchange", duration: 100 }, "https://vidbolt.xyz");
+  seeking.message({ type: "timeupdate", time: 40 }, "https://vidbolt.xyz");
+  seeking.key("ArrowLeft"); seeking.key("Enter");
+  seeking.message({ type: "timeupdate", time: 96 }, "https://vidbolt.xyz");
+  await flush();
+  assert.equal(seeking.document.activeElement.id, "rewind");
+  seeking.advance(5000);
+  assert.equal(seeking.state(), "CONTROLS_VISIBLE", "pending seek keeps the controls interaction intact");
+  assert.equal(seeking.document.activeElement.id, "rewind");
+
+  const menu = setup({ search: "?season=13&episode=2&sub=off&provider=vidbolt" });
+  menu.get("player-frame").fire("load");
+  menu.message({ type: "ready" }, "https://vidbolt.xyz");
+  menu.message({ type: "play" }, "https://vidbolt.xyz");
+  menu.get("diagnostics-open").click();
+  const menuFocus = menu.document.activeElement.id;
+  menu.message({ type: "ended" }, "https://vidbolt.xyz");
+  await flush();
+  assert.equal(menu.get("up-next").hidden, false);
+  assert.equal(menu.document.activeElement.id, menuFocus);
+});
+
+test("Next icon stays vertically centered across short and overflowing titles", () => {
+  assert.match(css, /\.up-next\s*\{[^}]*display:\s*flex[^}]*align-items:\s*center/s);
+  assert.match(css, /\.up-next-copy\s*\{[^}]*min-width:\s*0/);
+  assert.match(css, /\.up-next #up-next-play\s*\{[^}]*align-self:\s*center[^}]*margin:\s*0/);
+  assert.match(css, /\.up-next-name-viewport\.is-overflowing \.up-next-name\s*\{[^}]*animation:/);
+  assert.doesNotMatch(css, /\.up-next #up-next-play\s*\{[^}]*margin-top:/);
+});
+
+test("Next Episode is a player-root sibling and uses stable bottom-right viewport anchoring", () => {
+  assert.match(html, /<\/section>\s*<section id="up-next"/);
+  assert.match(css, /\.player-shell\s*\{[^}]*position:\s*relative/);
+  assert.match(css, /\.up-next\s*\{[^}]*position:\s*absolute/);
+  assert.match(css, /\.up-next\s*\{[^}]*right:\s*clamp\(24px/);
+  assert.match(css, /\.up-next\s*\{[^}]*bottom:\s*clamp\(24px/);
+  assert.doesNotMatch(css, /\.up-next\s*\{[^}]*position:\s*fixed/);
+});
+
+test("short Up Next titles stay still while measured long titles receive a bounded marquee", async () => {
+  const short = setup({ search: "?season=13&episode=2&sub=off&provider=vidbolt" });
+  short.get("up-next-name").scrollWidth = 60;
+  short.get("up-next-name-viewport").clientWidth = 60;
+  short.message({ type: "ended" }, "https://vidbolt.xyz");
+  await flush();
+  assert.equal(short.get("up-next-name-viewport").classList.contains("is-overflowing"), false);
+
+  const long = setup({ search: "?season=13&episode=2&sub=off&provider=vidbolt" });
+  long.get("up-next-name").scrollWidth = 420;
+  long.get("up-next-name-viewport").clientWidth = 190;
+  long.message({ type: "ended" }, "https://vidbolt.xyz");
+  await flush();
+  assert.equal(long.get("up-next-name-viewport").classList.contains("is-overflowing"), true);
+  assert.match(css, /\.up-next-name-viewport\.is-overflowing \.up-next-name\s*\{[^}]*animation:/);
+  assert.match(css, /up-next-name-marquee[\s\S]*translateX\(var\(--up-next-overflow/);
+});
+
+test("Next Episode dismissal returns focus and never reopens during that player session", async () => {
+  const app = setup({ search: "?season=13&episode=2&sub=off&provider=vidbolt" });
+  app.get("player-frame").fire("load");
+  app.message({ type: "ready" }, "https://vidbolt.xyz");
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.message({ type: "ended" }, "https://vidbolt.xyz");
+  await flush();
+  app.key("Backspace");
+  assert.equal(app.get("up-next").hidden, true);
+  assert.equal(app.get("up-next-play").tabIndex, -1);
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  app.message({ type: "durationchange", duration: 100 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 20 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 96 }, "https://vidbolt.xyz");
+  app.message({ type: "ended" }, "https://vidbolt.xyz");
+  await flush();
+  assert.equal(app.get("up-next").hidden, true);
+  assert.notEqual(app.document.activeElement.id, "up-next-play");
+  assert.deepEqual(app.navigation, []);
+});
+
+test("unvalidated end signals are ignored and card cleanup has no lingering timers", () => {
   const app = setup({ search: "?testEnd=1" });
   app.message({ type: "ended" });
   assert.equal(app.state(), "PLAYBACK_HIDDEN");

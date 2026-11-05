@@ -103,13 +103,13 @@
   function tvPlayerUrl(id, season, episode, subtitle, title, tvdbId) {
     if (!positive(id) || !positive(season) || !positive(episode)) return null;
     var url = PLAYER_ORIGIN + "/player-overlay.html?season=" + season + "&episode=" + episode
-      + "&sub=" + (subtitle === "on" ? "on" : "off") + "&showId=" + id + "&from=search";
+      + "&sub=" + (subtitle === "on" ? "on" : "off") + "&showId=" + id + "&from=search&provider=vidbolt";
     return url + (safeText(title, 120) ? "&name=" + encodeURIComponent(safeText(title, 120)) : "")
       + (positive(tvdbId) ? "&tvdb=" + tvdbId : "");
   }
   function moviePlayerUrl(id, title) {
     if (!positive(id)) return null;
-    return PLAYER_ORIGIN + "/player-overlay.html?type=movie&id=" + id + "&from=search"
+    return PLAYER_ORIGIN + "/player-overlay.html?type=movie&id=" + id + "&from=search&provider=vidbolt"
       + (safeText(title, 120) ? "&name=" + encodeURIComponent(safeText(title, 120)) : "");
   }
   function imageUrl(path, size) {

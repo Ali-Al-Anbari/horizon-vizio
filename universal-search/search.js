@@ -1,5 +1,10 @@
 (function (root) {
   "use strict";
+  function nativeEditingKey(event, editing, finePointer) {
+    return editing && (event.key === "Delete" || finePointer && event.key === "Backspace"
+      || finePointer && (event.key === "ArrowLeft" || event.key === "ArrowRight"
+        || event.key === "ArrowUp" || event.key === "ArrowDown"));
+  }
   function createApp(doc, nav, clock, options) {
     options = options || {};
     var core = root.HorizonSearchCore;
@@ -25,6 +30,10 @@
     var query = get("query"), results = get("results");
     var state = { view: "search", previousView: "search", detailSource: "search", filter: "all", query: "", title: null, detail: null,
       providers: null, season: null, episodes: [], subtitle: core.readSubtitlePref(local), continueMode: false };
+    var finePointer = !!(clock.matchMedia && clock.matchMedia("(pointer: fine)").matches)
+      && !/Vizio|SmartCast/i.test(clock.navigator && clock.navigator.userAgent || "");
+    var keyboardOpen = !finePointer;
+    var historyReady = false, restoringHistory = false, historyBackPending = false, historyDepth = 0;
     var searchTimer = null, searchToken = 0, detailToken = 0, seasonToken = 0, activeAbort = null;
     var cache = new Map(), disposed = false, returningHome = false, pendingEpisodeFocus = null,
       launchingEpisode = false, clearPending = false;
@@ -35,12 +44,42 @@
       get("history-toggle").classList.toggle("is-current", state.view === "history");
     }
     function setView(name) {
+      var changed = state.view !== name;
       state.view = name;
       ["search", "details", "episodes", "history"].forEach(function (view) { get(view + "-view").hidden = view !== name; });
-      get("keyboard").hidden = name !== "search";
+      get("keyboard").hidden = name !== "search" || !keyboardOpen;
+      get("keyboard-toggle").textContent = keyboardOpen ? "Hide Keyboard" : "Show Keyboard";
       doc.body.classList.toggle("details-active", name === "details");
       if (name !== "details") closeSeasonMenu(false);
       syncRail();
+      if (changed && historyReady && !restoringHistory && root.history && root.history.pushState) {
+        try { root.history.pushState({ horizonWatchView: name, depth: ++historyDepth }, "", nav.href); }
+        catch (_error) { historyDepth -= 1; }
+      }
+    }
+    function returnWithinWatch(fallback) {
+      if (historyReady && historyDepth > 0 && root.history && root.history.back) {
+        if (historyBackPending) return;
+        historyBackPending = true;
+        restoringHistory = true;
+        fallback();
+        restoringHistory = false;
+        root.history.back(); return;
+      }
+      fallback();
+    }
+    function restoreBrowserView(event) {
+      historyBackPending = false;
+      var target = event.state && event.state.horizonWatchView;
+      if (["search", "details", "episodes", "history"].indexOf(target) < 0) return;
+      historyDepth = Number.isInteger(event.state.depth) ? event.state.depth : 0;
+      restoringHistory = true;
+      setView(target);
+      restoringHistory = false;
+      if (target === "search") focusSelectedResult();
+      else if (target === "history") { renderHistory(); focus(get("history-back")); }
+      else if (target === "episodes") focus(get("episodes-back"));
+      else focus(get("details-back"));
     }
     function focus(element) { if (element) {
       var previous = doc.querySelector("[data-focus].is-focused");
@@ -150,6 +189,7 @@
     }
     function renderResults(rows) {
       results.replaceChildren();
+      results.scrollTop = 0;
       rows.forEach(function (row) {
         var card = button("", function () { openDetails(row); }, "poster-card");
         card.dataset.mediaType = row.type;
@@ -240,6 +280,7 @@
     }
     function renderHistory() {
       var list = get("history-list"); list.replaceChildren();
+      list.scrollTop = 0;
       var rows = core.groupedHistory(core.readHistory(local));
       rows.forEach(function (row) {
         var label = row.title + (row.type === "tv" ? " · S" + row.season + " E" + row.episode
@@ -317,9 +358,13 @@
         : "No US provider listings returned.");
     }
     function renderActions() {
-      var actions = get("detail-actions"); actions.replaceChildren();
+      var actions = get("detail-actions");
+      var focusedClass = actions.contains(doc.activeElement) && doc.activeElement.classList.contains("detail-secondary")
+        ? "detail-secondary" : actions.contains(doc.activeElement) ? "detail-primary" : null;
+      actions.replaceChildren();
       if (state.title.type === "movie") {
         actions.appendChild(button("Play movie", launchMovie, "detail-primary"));
+        if (focusedClass) focus(actions.querySelector(".detail-primary"));
         return;
       }
       if (state.title.type === "tv") {
@@ -337,6 +382,8 @@
         if (!recent && state.episodes.length) primary.textContent = "Play S" + state.season + " E" + state.episodes[0].number;
         actions.appendChild(primary);
         actions.appendChild(button("Episode List", browseEpisodes, "detail-secondary"));
+        if (focusedClass) focus(primary.disabled ? actions.querySelector(".detail-secondary")
+          : actions.querySelector("." + focusedClass));
       }
     }
     function renderDetailSeasons() {
@@ -576,7 +623,19 @@
         text("detail-status", "Movie player could not open. Select Play to retry.");
       }
     }
-    function openKeyboard() { focus(get("keyboard-keys").querySelector("button")); }
+    function openKeyboard() {
+      keyboardOpen = true;
+      get("keyboard").hidden = false;
+      get("keyboard-toggle").textContent = "Hide Keyboard";
+      focus(get("keyboard-keys").querySelector("button"));
+    }
+    function toggleKeyboard() {
+      if (!keyboardOpen) { openKeyboard(); return; }
+      keyboardOpen = false;
+      get("keyboard").hidden = true;
+      get("keyboard-toggle").textContent = "Show Keyboard";
+      focus(query);
+    }
     function buildKeyboard() {
       var host = get("keyboard-keys");
       "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890".split("").forEach(function (char) {
@@ -652,15 +711,17 @@
       return key || "Unknown";
     }
     function onKey(event) {
-      if (disposed) return;
+      if (disposed || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
       var key = keyName(event);
-      if (event.key === "Backspace" && event.code === "Backspace" && doc.activeElement === query) return;
+      var editing = doc.activeElement === query || !!(doc.activeElement && doc.activeElement.isContentEditable);
+      if (nativeEditingKey(event, editing, finePointer)) return;
+      if (finePointer && event.key === "Backspace" && !editing) return;
       if (key === "Back") {
         event.preventDefault(); if (event.repeat) return;
         if (state.view === "details" && !get("detail-season-menu").hidden) closeSeasonMenu(true);
-        else if (state.view === "history") leaveHistory();
-        else if (state.view === "episodes") backToDetails();
-        else if (state.view === "details") backToResults();
+        else if (state.view === "history") returnWithinWatch(leaveHistory);
+        else if (state.view === "episodes") returnWithinWatch(backToDetails);
+        else if (state.view === "details") returnWithinWatch(backToResults);
         else if (state.view === "search" && state.query) {
           query.value = ""; state.query = ""; scheduleSearch(0); focus(query); saveView();
         } else exitToHome();
@@ -673,26 +734,22 @@
         return;
       }
       if (key && key.indexOf("Arrow") === 0) { event.preventDefault(); move(key); return; }
-      if (state.view === "search" && doc.activeElement !== query && key && key.length === 1
-          && !event.ctrlKey && !event.metaKey && !event.repeat) {
-        event.preventDefault(); query.value += key; state.query = query.value; scheduleSearch(300); focus(query);
-      }
     }
     get("home-toggle").addEventListener("click", exitToHome);
     get("search-toggle").addEventListener("click", function () {
       state.continueMode = false; setView("search"); scheduleSearch(0); focus(query); saveView();
     });
-    get("keyboard-toggle").addEventListener("click", openKeyboard);
+    get("keyboard-toggle").addEventListener("click", toggleKeyboard);
     get("continue-toggle").addEventListener("click", showContinue);
     get("history-toggle").addEventListener("click", showHistory);
-    get("history-back").addEventListener("click", leaveHistory);
+    get("history-back").addEventListener("click", function () { returnWithinWatch(leaveHistory); });
     get("history-clear").addEventListener("click", function () {
       if (!clearPending) { clearPending = true; this.textContent = "Confirm clear history"; return; }
       core.clearHistory(local); clearPending = false; this.textContent = "Clear History";
       renderHistory(); syncStartedMarks(); focus(this);
     });
-    get("details-back").addEventListener("click", backToResults);
-    get("episodes-back").addEventListener("click", backToDetails);
+    get("details-back").addEventListener("click", function () { returnWithinWatch(backToResults); });
+    get("episodes-back").addEventListener("click", function () { returnWithinWatch(backToDetails); });
     get("detail-season-toggle").addEventListener("click", toggleSeasonMenu);
     query.addEventListener("input", function () { state.query = query.value; scheduleSearch(300); });
     doc.querySelectorAll("[data-filter]").forEach(function (filter) { filter.addEventListener("click", function () {
@@ -702,6 +759,10 @@
       }); scheduleSearch(0);
     }); });
     buildKeyboard();
+    doc.addEventListener("click", function (event) {
+      var target = event.target && event.target.closest && event.target.closest("[data-focus]");
+      if (target && !target.disabled && !target.closest("[hidden]")) focus(target);
+    }, true);
     doc.addEventListener("focusin", function (event) {
       if (event.target && event.target.matches && event.target.matches("[data-focus]")) event.target.classList.add("is-focused");
     });
@@ -709,6 +770,9 @@
       if (event.target && event.target.classList) event.target.classList.remove("is-focused");
     });
     doc.addEventListener("keydown", onKey);
+    if (finePointer && root.history && root.history.replaceState && clock.addEventListener) {
+      clock.addEventListener("popstate", restoreBrowserView);
+    }
     clock.addEventListener("pagehide", function () { disposed = true; if (searchTimer !== null) clock.clearTimeout(searchTimer);
       if (activeAbort) activeAbort.abort(); });
     try {
@@ -731,7 +795,8 @@
         if (state.query.length >= 2) scheduleSearch(0);
       }
       if (returned) {
-        var restoreEpisodes = !saved || saved.id !== returned.id || saved.view === "episodes";
+        var restoreEpisodes = !saved || saved.id !== returned.id || saved.view === "episodes"
+          || new URLSearchParams(nav.search).get("episodes") === "1";
         api("/api/title/tv/" + returned.id).then(function (value) {
           if (!old) core.writeHistory(local, core.item("tv", returned.id, value.title,
             returned.season, returned.episode, returned.subtitle, Date.now(), value));
@@ -752,6 +817,11 @@
         useMock ? (nav.pathname + "?mock=1") : "/");
     } catch (_error) { /* Storage and history are optional on the TV browser. */ }
     setView("search"); focus(query);
+    if (finePointer && root.history && root.history.replaceState) {
+      try { root.history.replaceState({ horizonWatchView: state.view, depth: 0 }, "", nav.href);
+        historyReady = true;
+      } catch (_error) { /* Browser history remains optional on SmartCast. */ }
+    }
     var incoming = new URLSearchParams(nav.search);
     if (incoming.get("play") === "tv") {
       var requested = core.item("tv", Number(incoming.get("id")), incoming.get("name"),
@@ -771,6 +841,6 @@
     return { state: state, searchNow: searchNow, openDetails: openDetails, browseEpisodes: browseEpisodes,
       launchEpisode: launchEpisode, onKey: onKey, showContinue: showContinue };
   }
-  root.HorizonUniversalSearch = { createApp: createApp };
+  root.HorizonUniversalSearch = { createApp: createApp, nativeEditingKey: nativeEditingKey };
   if (typeof document !== "undefined") createApp(document, location, root);
 })(typeof window !== "undefined" ? window : globalThis);

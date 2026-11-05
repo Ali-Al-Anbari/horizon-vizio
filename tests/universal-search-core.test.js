@@ -15,7 +15,7 @@ function storage(initial = {}) { const values = new Map(Object.entries(initial))
 
 test("TV player URL uses validated show ID, selected episode, subtitle, and fixed return marker", () => {
   assert.equal(core.tvPlayerUrl(2190, 13, 2, "off", "South Park"),
-    "https://horizon-video-lab-preview.ali-al-anbari.workers.dev/player-overlay.html?season=13&episode=2&sub=off&showId=2190&from=search&name=South%20Park");
+    "https://horizon-video-lab-preview.ali-al-anbari.workers.dev/player-overlay.html?season=13&episode=2&sub=off&showId=2190&from=search&provider=vidbolt&name=South%20Park");
   assert.equal(core.tvPlayerUrl(1396, 1, 0, "on", "Breaking Bad"), null);
   assert.equal(core.tvPlayerUrl(-1, 1, 1, "on", "Bad"), null);
   assert.deepEqual(JSON.parse(JSON.stringify(core.returnEpisode("?return=1&showId=1396&season=1&episode=4&sub=off"))),
@@ -30,9 +30,9 @@ test("TVDB identity survives history and player URL without changing YapGrid sho
     /showId=105248.*tvdb=384541$/);
 });
 
-test("movie adapter routes validated TMDB movie IDs through Video Lab while TV stays unchanged", () => {
+test("movie adapter routes validated TMDB movie IDs to VidBolt with YapGrid selectable in the player", () => {
   assert.equal(player.movieUrl(550, "Fight Club"),
-    "https://horizon-video-lab-preview.ali-al-anbari.workers.dev/player-overlay.html?type=movie&id=550&from=search&name=Fight%20Club");
+    "https://horizon-video-lab-preview.ali-al-anbari.workers.dev/player-overlay.html?type=movie&id=550&from=search&provider=vidbolt&name=Fight%20Club");
   assert.equal(player.movieUrl(-1, "Bad"), null);
   assert.equal(player.movieUrl(0, "Bad"), null);
   assert.deepEqual(JSON.parse(JSON.stringify(core.returnMovie("?return=1&type=movie&id=550"))), { id: 550 });

@@ -319,7 +319,7 @@ test("VidBolt mobile-panel diagnostics validate the frame and expose counts only
       { option: "audio", group: "Audio", label: "English", value: "en" },
     ] } };
   assert.equal(JSON.stringify(providers.acceptEvent(event, frame, "vidbolt")),
-    '{"type":"vidbolt:mobile-panel","optionCount":3,"subtitleOptionCount":2}');
+    '{"type":"vidbolt:mobile-panel","optionCount":3,"subtitleOptionCount":2,"englishOptionCount":1,"offOptionCount":1}');
   assert.equal(providers.acceptEvent({ ...event, source: {} }, frame, "vidbolt"), null);
   assert.equal(providers.acceptEvent({ ...event, origin: "https://example.test" }, frame, "vidbolt"), null);
   assert.equal(providers.acceptEvent({ ...event, data: { type: "mobile-panel", options: null } }, frame, "vidbolt"), null);

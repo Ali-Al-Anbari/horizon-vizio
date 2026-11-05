@@ -1,0 +1,17 @@
+:root { color-scheme: dark; font-family: Arial, sans-serif; background: #09131f; color: #f3f7ff; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.probe-panel { position: relative; z-index: 2; width: min(100%, 760px); padding: 1rem; background: rgba(9, 19, 31, .96); }
+h1 { margin: 0 0 .5rem; font-size: 1.4rem; }
+p { margin: .4rem 0; line-height: 1.35; }
+form { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem; margin: .8rem 0; }
+label { display: flex; flex-direction: column; gap: .2rem; font-size: .85rem; }
+input, select, button { min-height: 2.4rem; border: 1px solid #8daecc; border-radius: .35rem; padding: .35rem .5rem; background: #183249; color: #fff; font: inherit; }
+input { width: 6.5rem; }
+button { cursor: pointer; }
+button:focus { outline: 3px solid #fff; outline-offset: 2px; }
+#subtitle-rows { max-height: 12rem; overflow: auto; }
+.subtitle-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .3rem 0; }
+.frame-host.mobile { width: min(520px, 100vw); height: min(78vh, 760px); margin: 1rem auto; }
+.frame-host.full { position: fixed; z-index: 1; inset: 0; width: 100vw; height: 100vh; margin: 0; }
+.frame-host iframe { display: block; width: 100%; height: 100%; border: 0; background: #000; }

@@ -11,7 +11,7 @@
     NATIVE_FOCUS: "NATIVE_FOCUS",
   };
   var PREVIEW_ORIGIN = "https://horizon-video-lab-preview.ali-al-anbari.workers.dev";
-  var CONTROL_IDS = ["rewind", "play-pause", "forward", "previous-episode", "subtitles", "episodes", "next-episode", "manual-end", "provider-choice", "unload-provider", "diagnostics-open", "recover-provider", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip"];
+  var CONTROL_IDS = ["rewind", "play-pause", "forward", "previous-episode", "subtitles", "episodes", "next-episode", "manual-end", "provider-choice", "unload-provider", "diagnostics-open", "recover-provider", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip", "watch-exit", "watch-fullscreen"];
   var COMMANDS = { rewind: "seek_backward", "play-pause": "pause_toggle", forward: "seek_forward" };
   var IDLE_MS = 5000;
   // A watchdog for a future acknowledged adapter, not a delay before sending.
@@ -58,6 +58,18 @@
     var providers = root.HorizonPlaybackProviders;
     var diagnostics = root.HorizonPlayerDiagnostics.create(root, doc, frame, clock);
     var route = catalog.parse(nav.search);
+    if (route.fromSearch) get("player-shell").classList.add("watch-player");
+    var desktopWatch = route.fromSearch && !!(clock.matchMedia
+      && (clock.matchMedia("(pointer: fine)").matches || clock.matchMedia("(any-pointer: fine)").matches))
+      && !/Vizio|SmartCast/i.test(root.navigator && root.navigator.userAgent || "");
+    var playerShell = get("player-shell");
+    var desktopFullscreenButton = get("watch-fullscreen");
+    var fullscreenWasActive = false;
+    var fullscreenExitAt = -Infinity;
+    if (desktopWatch) {
+      playerShell.classList.add("watch-desktop");
+      capture.tabIndex = -1;
+    }
     var provider = providers.select(route.provider);
     var compatibilityMode = providers.BASELINE;
     var vidFastMode = providers.BASELINE;
@@ -151,15 +163,29 @@
     function renderProviderChoice() {
       var next = providers.next(provider);
       var choice = get("provider-choice");
-      choice.textContent = "Provider: " + providerLabel();
+      var text = "Provider: " + providerLabel();
       choice.setAttribute("aria-label", "Playback provider: " + providerLabel()
         + ". Press OK to switch to " + providers.label(next));
+      choice.title = "Switch provider · current " + providerLabel();
+      var label = choice.querySelector ? choice.querySelector(".action-label") : null;
+      if (label) label.textContent = text;
+      else choice.textContent = text;
+      get("provider-indicator").textContent = providerLabel();
+      get("playback-timeline").hidden = true;
       var unloadBtn = get("unload-provider");
       if (unloadBtn) {
         unloadBtn.hidden = provider === providers.PRIMARY || provider === providers.VIDBOLT;
       }
-      get("recover-provider").hidden = provider !== providers.VIDBOLT && provider !== providers.YAPGRID;
-      get("recover-provider").textContent = provider === providers.YAPGRID ? "Reload Player" : "Recover Player";
+      var recoverBtn = get("recover-provider");
+      recoverBtn.hidden = provider !== providers.VIDBOLT && provider !== providers.YAPGRID;
+      var recoverText = provider === providers.YAPGRID ? "Reload Player" : "Recover Player";
+      var recoverLabel = recoverBtn.querySelector ? recoverBtn.querySelector(".action-label") : null;
+      if (recoverLabel) recoverLabel.textContent = recoverText;
+      else recoverBtn.textContent = recoverText;
+      recoverBtn.title = recoverText;
+      recoverBtn.setAttribute("aria-label", recoverText);
+      desktopFullscreenButton.hidden = !desktopWatch;
+      get("watch-exit").hidden = !route.fromSearch;
       get("experimental-controls").hidden = !usesExperimentalRow();
       get("experiment-pause").hidden = false;
       get("experiment-volume").hidden = false;
@@ -170,6 +196,7 @@
         get(id).hidden = usesExperimentalRow();
       });
       get("subtitle-mode").textContent = provider === providers.VIDBOLT ? "NATIVE" : subtitleMode.toUpperCase();
+      get("subtitles").hidden = isMovie || provider === providers.VIDBOLT;
       renderBoltPlayPause();
       renderSeekLabels();
     }
@@ -201,6 +228,7 @@
       if (provider !== providers.VIDBOLT) {
         get("play-pause-label").textContent = "Play / Pause";
         button.setAttribute("aria-label", "Play / Pause");
+        button.setAttribute("data-playback", "unknown");
         return;
       }
       var s = boltSession;
@@ -209,6 +237,8 @@
       get("play-pause-label").textContent = label;
       button.setAttribute("aria-label", "VidBolt " + label
         + (!s || s.paused === null && !s.controlPending ? "; state unknown" : ""));
+      button.setAttribute("data-playback", s && s.paused === false ? "playing" : "paused");
+      button.title = label;
     }
     function boltDiagnostic() {
       if (provider !== providers.VIDBOLT) return "VidBolt not selected.";
@@ -232,6 +262,7 @@
         + "; parent URL assignments " + s.parentUrlAssignments
         + "; provider error events no documented VidBolt message type"
         + "; mobile-panel messages " + s.mobilePanelCount + ", subtitle rows " + s.subtitleOptionCount
+        + ", English rows " + s.englishOptionCount + ", Off rows " + s.offOptionCount
         + ", last " + boltAge(s.mobilePanelAt)
         + "; watchdog " + (boltRecoveryGeneration === s.generation && boltRecoveryResult === "awaiting position advance"
           ? "recovering" : boltRecoveryGeneration === s.generation && boltRecoveryResultAt !== null
@@ -345,6 +376,8 @@
         s.mobilePanelCount = Math.min(999, s.mobilePanelCount + 1);
         s.mobilePanelAt = time;
         s.subtitleOptionCount = message.subtitleOptionCount;
+        s.englishOptionCount = message.englishOptionCount;
+        s.offOptionCount = message.offOptionCount;
       } else if (message.type === "vidbolt:timeupdate") {
         if (s.firstTimeupdateAt === null) s.firstTimeupdateAt = time;
         var seekArrival = s.seekTarget !== null && Math.abs(message.currentTime - s.seekTarget) <= 2;
@@ -423,6 +456,24 @@
       get("forward-label").textContent = "+" + SEEK_LABELS[seekLevels.forward];
       get("rewind").setAttribute("aria-label", "Rewind " + SEEK_LABELS[seekLevels.rewind]);
       get("forward").setAttribute("aria-label", "Forward " + SEEK_LABELS[seekLevels.forward]);
+      if (state === STATES.CONTROLS_VISIBLE && (selected === 0 || selected === 2))
+        renderSeekPreview(CONTROL_IDS[selected]);
+    }
+    function renderSeekPreview(id) {
+      var preview = get("seek-preview");
+      if (id !== "rewind" && id !== "forward") { preview.hidden = true; return; }
+      var delta = SEEK_COUNTS[seekLevels[id]] * 10 * (id === "forward" ? 1 : -1);
+      var detail = "";
+      if (provider === providers.VIDBOLT) {
+        if (boltPosition !== null && now() - boltPositionAt <= 15000) {
+          var target = Math.max(0, Math.min(boltDuration !== null && boltDuration > 0
+            ? boltDuration : Infinity, boltPosition + delta));
+          detail = " · target " + boltClock(target);
+        } else detail = " · waiting for current position";
+      }
+      preview.textContent = (delta < 0 ? "Rewind " : "Forward ")
+        + SEEK_LABELS[seekLevels[id]] + detail + " · OK to confirm";
+      preview.hidden = false;
     }
     function resetSeekSelection() {
       seekLevels.rewind = 0; seekLevels.forward = 0;
@@ -452,6 +503,7 @@
         seekLevels[id] + (increase ? 1 : -1)));
       renderSeekLabels();
       get("command-status").textContent = seekHint(id);
+      get("command-status").classList.add("is-seek-help");
       get("screen-reader-status").textContent = get("command-status").textContent;
       return true;
     }
@@ -460,12 +512,56 @@
       try { element.focus({ preventScroll: true }); }
       catch (_error) { element.focus(); }
     }
+    function playerFullscreen() {
+      return doc.fullscreenElement === playerShell || doc.webkitFullscreenElement === playerShell;
+    }
+    function syncDesktopFullscreen() {
+      if (!desktopWatch || disposed) return;
+      var active = playerFullscreen();
+      if (fullscreenWasActive && !active) {
+        fullscreenExitAt = now();
+        get("command-status").textContent = "Fullscreen exited.";
+      }
+      fullscreenWasActive = active;
+      var fullscreenText = active ? "Exit Fullscreen" : "Fullscreen";
+      var fullscreenLabel = desktopFullscreenButton.querySelector
+        ? desktopFullscreenButton.querySelector(".action-label") : null;
+      if (fullscreenLabel) fullscreenLabel.textContent = fullscreenText;
+      else desktopFullscreenButton.textContent = fullscreenText;
+      desktopFullscreenButton.title = fullscreenText;
+      desktopFullscreenButton.setAttribute("aria-pressed", active ? "true" : "false");
+    }
+    function toggleDesktopFullscreen() {
+      if (!desktopWatch || disposed) return;
+      var action = playerFullscreen()
+        ? doc.exitFullscreen || doc.webkitExitFullscreen
+        : playerShell.requestFullscreen || playerShell.webkitRequestFullscreen;
+      if (!action) {
+        get("command-status").textContent = "Fullscreen is unavailable in this browser.";
+        return;
+      }
+      try {
+        var target = playerFullscreen() ? doc : playerShell;
+        var result = action.call(target);
+        Promise.resolve(result).then(function () {
+          if (!disposed) { syncDesktopFullscreen();
+            get("command-status").textContent = playerFullscreen() ? "Fullscreen active." : "Fullscreen exited.";
+          }
+        }, function () {
+          if (!disposed) get("command-status").textContent = "Fullscreen request was blocked by the browser.";
+        });
+      } catch (_error) {
+        get("command-status").textContent = "Fullscreen request was blocked by the browser.";
+      }
+    }
     function clearIdle() {
       if (idleTimer !== null) { clock.clearTimeout(idleTimer); idleTimer = null; }
     }
     function resetIdle() {
       clearIdle();
-      if (state === STATES.CONTROLS_VISIBLE && !disposed && !activeBatch) {
+      if (state === STATES.CONTROLS_VISIBLE && !disposed && !activeBatch
+          && !(provider === providers.VIDBOLT && boltSession
+            && (boltSession.paused === true || boltSession.pauseIntent || boltSession.endedAt !== null))) {
         idleTimer = clock.setTimeout(function () {
           idleTimer = null;
           if (state === STATES.CONTROLS_VISIBLE) hideControls();
@@ -475,10 +571,13 @@
     function setOverlayVisible(visible) {
       if (visible) overlay.classList.add("is-visible");
       else overlay.classList.remove("is-visible");
+      if (visible) playerShell.classList.add("controls-open");
+      else playerShell.classList.remove("controls-open");
       overlay.setAttribute("aria-hidden", visible ? "false" : "true");
       controls.forEach(function (button, index) {
         if (button) button.tabIndex = visible && !button.hidden
-          && (index < 12 || usesExperimentalRow()) ? 0 : -1;
+          && (index < 12 || usesExperimentalRow() || index === 20 && route.fromSearch
+            || index === 21 && desktopWatch) ? 0 : -1;
       });
     }
     function focusControl(index) {
@@ -493,27 +592,40 @@
       if (state === STATES.CONTROLS_VISIBLE && !activeBatch
           && (id === "rewind" || id === "forward")) {
         get("command-status").textContent = seekHint(id);
-      }
+        get("command-status").classList.add("is-seek-help");
+      } else get("command-status").classList.remove("is-seek-help");
+      if (state === STATES.CONTROLS_VISIBLE) renderSeekPreview(id);
     }
     function showControls() {
       if (disposed || state !== STATES.PLAYBACK_HIDDEN) return;
       state = STATES.CONTROLS_VISIBLE;
+      renderTimeline();
       selected = usesExperimentalRow() ? 12 : 1;
       setOverlayVisible(true);
       focusControl(selected);
       markPause("overlayAt");
-      get("command-status").textContent = isCommandProvider()
+      get("command-status").classList.remove("is-seek-help");
+      get("command-status").textContent = provider === providers.VIDBOLT ? "" : isCommandProvider()
         ? "Experimental commands use the provider iframe; TV effect remains unverified."
         : adapter && typeof adapter.send === "function"
         ? "Preparing secure player connection…"
         : "Playback commands unavailable until the secure Pico bridge is connected.";
       if (!isCommandProvider() && adapter && typeof adapter.open === "function") {
+        var connectionTimer = clock.setTimeout(function () {
+          if (!disposed && state === STATES.CONTROLS_VISIBLE
+              && get("command-status").textContent === "Preparing secure player connection…") {
+            get("command-status").textContent = "Player Bridge is unavailable. YapGrid controls cannot be confirmed; use VidBolt or retry later.";
+            resetIdle();
+          }
+        }, 5000);
         adapter.open().then(function () {
+          clock.clearTimeout(connectionTimer);
           if (!disposed && state === STATES.CONTROLS_VISIBLE
               && get("command-status").textContent === "Preparing secure player connection…") {
             get("command-status").textContent = "Player connection ready; playback effect remains unverified.";
           }
         }, function (error) {
+          clock.clearTimeout(connectionTimer);
           if (!disposed && state === STATES.CONTROLS_VISIBLE
               && get("command-status").textContent === "Preparing secure player connection…") {
             get("command-status").textContent =
@@ -524,8 +636,10 @@
       resetIdle();
       get("screen-reader-status").textContent = "Playback controls visible. Use arrows to navigate; OK selects; Back hides controls.";
     }
-    function hideControls() {
+    function hideControls(force) {
       if (disposed || state !== STATES.CONTROLS_VISIBLE) return;
+      if (!force && provider === providers.VIDBOLT && boltSession
+          && (boltSession.paused === true || boltSession.pauseIntent || boltSession.endedAt !== null)) return;
       clearIdle();
       episodeLookup += 1;
       episodeLookupPending = false;
@@ -535,9 +649,12 @@
       setOverlayVisible(false);
       overlay.classList.remove("is-quick-pause");
       get("command-status").textContent = "";
+      get("command-status").classList.remove("is-seek-help");
+      get("seek-preview").hidden = true;
       if (adapter && typeof adapter.close === "function") adapter.close();
       focus(capture);
-      get("screen-reader-status").textContent = "Controls hidden. Press an arrow or OK to show controls. Back exits to Video Lab.";
+      get("screen-reader-status").textContent = "Controls hidden. Press an arrow or OK to show controls. Back exits to "
+        + (route.fromSearch ? "Watch." : "Video Lab.");
     }
     function endNativeFocus(reason) {
       if (state !== STATES.NATIVE_FOCUS) return;
@@ -558,7 +675,8 @@
         && vidLinkMode !== "jwOn" && state === STATES.DIAGNOSTICS_OPEN;
       var fromVidRiftControls = provider === providers.VIDRIFT && state === STATES.CONTROLS_VISIBLE;
       var fromVidBoltDiagnostics = provider === providers.VIDBOLT && state === STATES.DIAGNOSTICS_OPEN;
-      if ((!fromVidLinkDiagnostics && !fromVidRiftControls && !fromVidBoltDiagnostics) || route.invalid) return;
+      if ((!fromVidLinkDiagnostics && !fromVidRiftControls && !fromVidBoltDiagnostics)
+          || route.invalid || desktopWatch && fromVidBoltDiagnostics) return;
       if (!frameLoaded || frame.src === "about:blank") {
         get(fromVidLinkDiagnostics ? "vidlink-compat-status"
           : fromVidBoltDiagnostics ? "vidbolt-compat-status" : "command-status").textContent =
@@ -566,7 +684,7 @@
         return;
       }
       if (fromVidLinkDiagnostics || fromVidBoltDiagnostics) closeDiagnostics();
-      hideControls();
+      hideControls(true);
       state = STATES.NATIVE_FOCUS;
       focusAttempts = Math.min(999, focusAttempts + 1);
       parentKeysDuringFocus = 0;
@@ -586,6 +704,28 @@
         + " seconds. Horizon will restore its controls automatically.";
     }
     function navigate(key) {
+      if ((provider === providers.YAPGRID || provider === providers.VIDBOLT)
+          && navigateSharedControls(key)) return;
+      if (desktopWatch && selected === 21) {
+        if (key === "ArrowLeft" || key === "ArrowUp") focusControl(11);
+        else if (key === "ArrowRight" || key === "ArrowDown") focusControl(20);
+        return;
+      }
+      if (desktopWatch && selected === 20) {
+        if (key === "ArrowLeft") focusControl(desktopFullscreenButton.disabled ? 11 : 21);
+        else if (key === "ArrowUp") focusControl(11);
+        return;
+      }
+      if (desktopWatch && selected === 11 && (key === "ArrowRight" || key === "ArrowDown")) {
+        focusControl(desktopFullscreenButton.disabled ? 20 : 21); return;
+      }
+      if (route.fromSearch && selected === 20) {
+        if (key === "ArrowLeft" || key === "ArrowUp") focusControl(11);
+        return;
+      }
+      if (route.fromSearch && selected === 11 && (key === "ArrowRight" || key === "ArrowDown")) {
+        focusControl(20); return;
+      }
       if (usesExperimentalRow()) {
         if (selected >= 12) {
           var last = provider === providers.VIDRIFT ? 19 : 16;
@@ -656,6 +796,35 @@
         else if (selected === 10) next = !get("unload-provider").hidden ? 9 : 8;
       }
       if (next !== selected) focusControl(next);
+    }
+    function navigateSharedControls(key) {
+      var rows = [[0, 1, 2], [3, 5, 6, 8, 11, 7, 9, 4, 10, 21, 20]]
+        .map(function (row) { return row.filter(function (index) {
+          return controls[index] && !controls[index].hidden && !controls[index].disabled;
+        }); }).filter(function (row) { return row.length; });
+      var rowIndex = rows.findIndex(function (row) { return row.indexOf(selected) !== -1; });
+      if (rowIndex < 0) { focusControl(1); return true; }
+      var row = rows[rowIndex];
+      var column = row.indexOf(selected);
+      if (key === "ArrowLeft" || key === "ArrowRight") {
+        var nextColumn = column + (key === "ArrowRight" ? 1 : -1);
+        if (nextColumn >= 0 && nextColumn < row.length) focusControl(row[nextColumn]);
+      } else if (key === "ArrowUp" || key === "ArrowDown") {
+        var nextRow = rows[rowIndex + (key === "ArrowDown" ? 1 : -1)];
+        if (nextRow) {
+          var target = Math.round(column * (nextRow.length - 1) / Math.max(1, row.length - 1));
+          if (rowIndex === 0 && key === "ArrowDown" && !isMovie) {
+            var preferred = [3, 5, 6][column];
+            if (nextRow.indexOf(preferred) !== -1) target = nextRow.indexOf(preferred);
+          }
+          if (rowIndex === 0 && key === "ArrowDown" && isMovie) {
+            var moviePreferred = [8, 11, 21][column];
+            if (nextRow.indexOf(moviePreferred) !== -1) target = nextRow.indexOf(moviePreferred);
+          }
+          focusControl(nextRow[target]);
+        }
+      }
+      return true;
     }
     function closeMenu() {
       if (state !== STATES.SUBMENU_OPEN) return;
@@ -984,6 +1153,11 @@
       nav.replace(url);
     }
     function episodeListUrl() {
+      if (route.fromSearch && !isMovie && !route.invalid) {
+        return "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/?return=1&episodes=1"
+          + "&showId=" + currentEpisode.showId + "&season=" + currentEpisode.season
+          + "&episode=" + currentEpisode.episode + "&sub=" + subtitleMode;
+      }
       return catalog.pageUrl(currentEpisode, subtitleMode, manualEndEnabled, "list", route.fromSearch, route.showTitle, route.tvdbId, provider);
     }
     function launchEpisode(target) {
@@ -1096,6 +1270,45 @@
     function boltClock(seconds) {
       var whole = Math.max(0, Math.floor(seconds));
       return Math.floor(whole / 60) + ":" + (whole % 60 < 10 ? "0" : "") + whole % 60;
+    }
+    function renderTimeline() {
+      var timeline = get("playback-timeline");
+      var usable = provider === providers.VIDBOLT && boltSession
+        && boltSession.identity === boltIdentity() && frame.src !== "about:blank"
+        && boltPosition !== null && isFinite(boltPosition) && boltPosition >= 0
+        && boltDuration !== null && isFinite(boltDuration) && boltDuration > 0
+        && boltPosition <= boltDuration + 2
+        && (boltSession.paused === true || now() - boltPositionAt <= 15000);
+      timeline.hidden = !usable;
+      var fillEl = get("timeline-fill");
+      var playheadEl = get("timeline-playhead");
+      if (!usable) {
+        if (fillEl) {
+          if (fillEl.style) fillEl.style.width = "0%";
+          fillEl.setAttribute("style", "width:0%");
+        }
+        if (playheadEl) {
+          if (playheadEl.style) playheadEl.style.left = "0%";
+          playheadEl.setAttribute("style", "left:0%");
+        }
+        return;
+      }
+      get("timeline-current").textContent = boltClock(boltPosition);
+      get("timeline-duration").textContent = boltClock(boltDuration);
+      var progress = Math.max(0, Math.min(100, boltPosition / boltDuration * 100));
+      var widthPct = progress.toFixed(2) + "%";
+      var width = "width:" + widthPct;
+      var left = "left:" + widthPct;
+      if (fillEl) {
+        if (fillEl.style) fillEl.style.width = widthPct;
+        if (fillEl.getAttribute("style") !== width)
+          fillEl.setAttribute("style", width);
+      }
+      if (playheadEl) {
+        if (playheadEl.style) playheadEl.style.left = widthPct;
+        if (playheadEl.getAttribute("style") !== left)
+          playheadEl.setAttribute("style", left);
+      }
     }
     function sendBoltSeek(delta) {
       if (provider !== providers.VIDBOLT || !boltSession || !frameLoaded || frame.src === "about:blank") return false;
@@ -1245,11 +1458,13 @@
     }
     function activateControl() {
       var id = CONTROL_IDS[selected];
+      get("command-status").classList.remove("is-seek-help");
       if (id.indexOf("experiment-") === 0) { activateExperimental(id); return; }
       if (usesExperimentalRow() && selected <= 2) return;
       if (provider === providers.VIDBOLT && selected <= 2) {
         if (selected === 1) {
-          if (frameLoaded && (providerReady || providerPlaying || boltSession && boltSession.paused === true))
+          if (frameLoaded && (route.fromSearch || providerReady || providerPlaying
+              || boltSession && boltSession.paused === true))
             toggleBoltPlayPause();
           else get("command-status").textContent = "Wait for VidBolt ready; no command sent.";
         } else sendBoltSeek((selected === 2 ? 1 : -1) * 10
@@ -1264,6 +1479,8 @@
         else if (provider === providers.VIDBOLT) recoverBolt("manual");
         return;
       }
+      if (id === "watch-exit" && route.fromSearch) { exitPlayer(); return; }
+      if (id === "watch-fullscreen" && desktopWatch) { toggleDesktopFullscreen(); return; }
       if (isMovie && !COMMANDS[id]) return;
       if (activeBatch) {
         get("command-status").textContent = "Seek in progress; wait for completion or timeout.";
@@ -1277,8 +1494,18 @@
       else if (id === "manual-end") startUpNext();
     }
     function onKey(event) {
-      if (disposed) return;
+      if (disposed || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      if (desktopWatch && event.key === "Escape"
+          && (playerFullscreen() || now() - fullscreenExitAt < 500)) {
+        event.preventDefault();
+        if (playerFullscreen()) toggleDesktopFullscreen();
+        return;
+      }
       var key = keyName(event);
+      if (route.fromSearch && provider === providers.VIDBOLT && event.key === " "
+          && state === STATES.PLAYBACK_HIDDEN) {
+        event.preventDefault(); showControls(); activateControl(); return;
+      }
       if (state === STATES.NATIVE_FOCUS) {
         if (key === "OK" || key === "Back" || key.indexOf("Arrow") === 0) {
           parentKeysDuringFocus = Math.min(999, parentKeysDuringFocus + 1);
@@ -1355,15 +1582,19 @@
         else if (provider === providers.VIDLINK && key === "ArrowLeft" && diagnosticSelected >= 7)
           focusDiagnostic(diagnosticSelected === 7 ? (vidLinkMode === "jwOn" ? 9 : 10) : diagnosticSelected - 1);
         else if (provider === providers.VIDBOLT && key === "ArrowRight" && diagnosticSelected >= 11)
-          focusDiagnostic(diagnosticSelected === 14 ? 11 : diagnosticSelected + 1);
+          focusDiagnostic(diagnosticSelected === (desktopWatch ? 13 : 14) ? 11 : diagnosticSelected + 1);
         else if (provider === providers.VIDBOLT && key === "ArrowLeft" && diagnosticSelected >= 11)
-          focusDiagnostic(diagnosticSelected === 11 ? 14 : diagnosticSelected - 1);
+          focusDiagnostic(diagnosticSelected === 11 ? (desktopWatch ? 13 : 14) : diagnosticSelected - 1);
         else if (provider === providers.VIDBOLT && key === "ArrowDown" && diagnosticSelected === 0)
           focusDiagnostic(11);
         return;
       }
       resetIdle();
-      if (key === "Back") { if (!event.repeat) { if (activeBatch) cancelActiveBatch(); else hideControls(); } }
+      if (key === "Back") { if (!event.repeat) {
+        if (activeBatch) cancelActiveBatch();
+        else if (desktopWatch) exitPlayer();
+        else hideControls(true);
+      } }
       else if (key === "OK") { if (!event.repeat) activateControl(); }
       else if ((selected === 0 || selected === 2)
           && (key === "ArrowLeft" || key === "ArrowRight")) {
@@ -1453,7 +1684,7 @@
     }
     function activateDiagnostic() {
       if (diagnosticSelected === 0) { closeDiagnostics(); return; }
-      if (provider === providers.VIDBOLT && diagnosticSelected === 14) {
+      if (provider === providers.VIDBOLT && diagnosticSelected === 14 && !desktopWatch) {
         startNativeFocus();
         return;
       }
@@ -1528,6 +1759,7 @@
       get("vidfast-compat-controls").hidden = provider !== providers.VIDFAST;
       get("vidlink-compat-controls").hidden = provider !== providers.VIDLINK;
       get("vidbolt-compat-controls").hidden = provider !== providers.VIDBOLT;
+      get("vidbolt-native-focus").hidden = desktopWatch || provider !== providers.VIDBOLT;
       get("vidlink-focus-default").hidden = provider !== providers.VIDLINK || vidLinkMode === "jwOn";
       overlay.classList.add("is-diagnostics");
       controls.forEach(function (button) { button.tabIndex = -1; });
@@ -1536,7 +1768,7 @@
           || (provider === providers.VIDFAST && index >= 5 && index <= 6)
           || (provider === providers.VIDLINK && index >= 7
             && index <= 10 && (index < 10 || vidLinkMode !== "jwOn"))
-          || (provider === providers.VIDBOLT && index >= 11 && index <= 14) ? 0 : -1;
+          || (provider === providers.VIDBOLT && index >= 11 && index <= (desktopWatch ? 13 : 14)) ? 0 : -1;
       });
       focusDiagnostic(0);
       tickDiagnostics();
@@ -1566,6 +1798,8 @@
       providerFailed = false;
       boltPosition = null;
       boltDuration = null;
+      get("playback-timeline").hidden = true;
+      renderTimeline();
       boltSeekPending = false;
       riftState = null;
       riftPosition = null;
@@ -1649,6 +1883,7 @@
           loadedAt: null, latestLoadAt: null, loadCount: 0, parentUrlAssignments: 1,
           frameErrorAt: null, readyAt: null, playAt: null, pauseAt: null,
           mobilePanelCount: 0, mobilePanelAt: null, subtitleOptionCount: 0,
+          englishOptionCount: 0, offOptionCount: 0,
           firstTimeupdateAt: null,
           position: null, positionAt: null, progressReference: null, advancedAt: null,
           duration: null, endedAt: null,
@@ -1695,7 +1930,16 @@
 
       if (provider === providers.VIDRIFT || provider === providers.VIDBOLT) {
         if (provider === providers.VIDBOLT) {
+          var wasPlaying = boltSession && boltSession.paused === false;
+          var firstPlay = boltSession && boltSession.playAt === null;
           recordBoltEvent(message);
+          if (message.type === "vidbolt:play" && (firstPlay || !wasPlaying)) {
+            if (state === STATES.PLAYBACK_HIDDEN) showControls();
+            else if (state === STATES.CONTROLS_VISIBLE) resetIdle();
+          } else if (message.type === "vidbolt:pause" || message.type === "vidbolt:ended") {
+            if (state === STATES.PLAYBACK_HIDDEN) showControls();
+            else if (state === STATES.CONTROLS_VISIBLE) resetIdle();
+          }
           if (state === STATES.DIAGNOSTICS_OPEN) renderDiagnostics();
         }
         if (provider === providers.VIDRIFT && typeof message.currentTime === "number"
@@ -1726,6 +1970,13 @@
           if (provider === providers.VIDBOLT) {
             boltPosition = message.currentTime;
             boltPositionAt = now();
+            if (message.duration !== null && message.duration !== undefined
+                && isFinite(message.duration) && message.duration > 0) {
+              boltDuration = message.duration;
+            }
+            renderTimeline();
+            if (state === STATES.CONTROLS_VISIBLE && (selected === 0 || selected === 2))
+              renderSeekPreview(CONTROL_IDS[selected]);
             if (boltSeekPending && boltSession && boltSession.seekTarget === null) {
               boltSeekPending = false;
             }
@@ -1745,6 +1996,7 @@
             get("screen-reader-status").textContent = get("command-status").textContent;
         } else if (message.type === "vidbolt:durationchange") {
           boltDuration = message.duration;
+          renderTimeline();
         } else if (message.type === "vidbolt:ready") {
           providerReady = true;
         } else if (message.type === "vidrift:unpaused" || message.type === "vidbolt:play") {
@@ -1866,7 +2118,7 @@
     }
     function switchProvider() {
       if (disposed || state !== STATES.CONTROLS_VISIBLE || activeBatch || route.invalid) return;
-      hideControls();
+      hideControls(true);
       unloadFrame();
       provider = providers.next(provider);
       compatibilityMode = providers.BASELINE;
@@ -1901,6 +2153,7 @@
       get("screen-reader-status").textContent = "Switching to " + providerLabel()
         + ". Playback is unverified. Press an arrow to show Horizon controls.";
       loadProviderFrame();
+      if (desktopWatch) showControls();
     }
     function bindFrameEvents(activeFrame) {
     activeFrame.addEventListener("load", function () {
@@ -2015,9 +2268,16 @@
     get("subtitle-mode").textContent = provider === providers.VIDBOLT ? "NATIVE" : subtitleMode.toUpperCase();
     controls.forEach(function (button, index) {
       if (!button) return;
+      button.addEventListener("focus", function () {
+        if (state !== STATES.CONTROLS_VISIBLE || button.hidden) return;
+        selected = index;
+        renderSeekPreview(CONTROL_IDS[index]);
+        resetIdle();
+      });
       button.addEventListener("click", function () {
         if (disposed || state !== STATES.CONTROLS_VISIBLE) return;
-        if (button.hidden || (index >= 12 && !usesExperimentalRow())) return;
+        if (button.hidden || (index >= 12 && !usesExperimentalRow() && index !== 20
+            && !(index === 21 && desktopWatch))) return;
         if (selected !== index) {
           pendingEpisode = null;
           episodeLookup += 1;
@@ -2033,7 +2293,8 @@
         if (state !== STATES.DIAGNOSTICS_OPEN || (index > 0 && index < 5 && provider !== providers.CINESRC)
             || (index >= 5 && index <= 6 && provider !== providers.VIDFAST)
             || (index >= 7 && index <= 10 && provider !== providers.VIDLINK)
-            || (index >= 11 && provider !== providers.VIDBOLT)) return;
+            || (index >= 11 && provider !== providers.VIDBOLT)
+            || (index === 14 && desktopWatch)) return;
         diagnosticSelected = index;
         activateDiagnostic();
       });
@@ -2053,10 +2314,33 @@
       });
     });
     doc.addEventListener("keydown", onKey);
+    if (desktopWatch) {
+      doc.addEventListener("fullscreenchange", syncDesktopFullscreen);
+      doc.addEventListener("webkitfullscreenchange", syncDesktopFullscreen);
+      desktopFullscreenButton.disabled = doc.fullscreenEnabled === false
+        || !playerShell.requestFullscreen && !playerShell.webkitRequestFullscreen;
+      if (desktopFullscreenButton.disabled)
+        desktopFullscreenButton.title = "Fullscreen is unavailable in this browser";
+      syncDesktopFullscreen();
+    }
+    playerShell.addEventListener("click", function (event) {
+      if (route.fromSearch && state === STATES.PLAYBACK_HIDDEN
+          && event.target === playerShell) showControls();
+    });
+    playerShell.addEventListener("pointermove", function () {
+      if (route.fromSearch && state === STATES.PLAYBACK_HIDDEN) showControls();
+    });
+    overlay.addEventListener("pointermove", function () {
+      if (route.fromSearch && state === STATES.CONTROLS_VISIBLE) resetIdle();
+    });
     clock.addEventListener("pagehide", dispose);
     setOverlayVisible(false);
     renderSeekLabels();
-    focus(capture);
+    if (desktopWatch) showControls();
+    else focus(capture);
+    if (route.fromSearch) get("screen-reader-status").textContent = desktopWatch
+      ? "Horizon controls visible. Back exits to Watch; Fullscreen stays in the control row."
+      : "Video playing. Press an arrow, OK, or click to show controls. Back exits to Watch.";
     return { onKey: onKey, getState: function () { return state; },
       getLastPauseTiming: function () {
         if (!lastPauseTiming) return null;

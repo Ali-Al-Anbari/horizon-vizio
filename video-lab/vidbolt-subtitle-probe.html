@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; frame-src https://vidbolt.xyz; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Video Lab · VidBolt Subtitle Probe</title>
+  <link rel="stylesheet" href="vidbolt-subtitle-probe.css">
+  <script src="vidbolt-subtitle-probe.js" defer></script>
+</head>
+<body>
+  <main class="probe-panel">
+    <h1>VidBolt subtitle probe</h1>
+    <p>Diagnostic only. Open VidBolt's own CC button inside the iframe. Track changes require visible confirmation.</p>
+    <form id="probe-form">
+      <label>Media <select id="media-type"><option value="movie">Movie</option><option value="tv">TV episode</option></select></label>
+      <label>TMDB ID <input id="media-id" type="number" min="1" step="1" required></label>
+      <label>Season <input id="season" type="number" min="1" step="1" value="1"></label>
+      <label>Episode <input id="episode" type="number" min="1" step="1" value="1"></label>
+      <label>Iframe width <select id="probe-width"><option value="mobile">520px mobile API</option><option value="full">Full TV width</option></select></label>
+      <button type="submit">Load test iframe</button>
+      <button id="unload" type="button">Unload</button>
+    </form>
+    <p id="probe-status" role="status">Load a title, then click CC inside VidBolt.</p>
+    <p id="probe-events">No iframe events yet.</p>
+    <p id="english-status">English track: unknown until a valid mobile-panel arrives.</p>
+    <div id="subtitle-rows" aria-label="Provider subtitle options"></div>
+  </main>
+  <div id="frame-host" class="frame-host mobile"></div>
+</body>
+</html>

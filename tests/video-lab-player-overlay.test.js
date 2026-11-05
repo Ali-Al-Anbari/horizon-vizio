@@ -12,10 +12,10 @@ const diagnosticsScript = readFileSync(new URL("../video-lab/player-diagnostics.
 const listHtml = readFileSync(new URL("../video-lab/episode-list-placeholder.html", import.meta.url), "utf8");
 const listScript = readFileSync(new URL("../video-lab/episode-list-placeholder.js", import.meta.url), "utf8");
 const playerScript = readFileSync(new URL("../video-lab/player-overlay.js", import.meta.url), "utf8");
-const ids = ["player-frame", "player-loading", "remote-capture", "overlay", "rewind", "rewind-label", "play-pause", "play-pause-label", "forward", "forward-label", "subtitles",
+const ids = ["player-frame", "player-loading", "remote-capture", "overlay", "seek-preview", "playback-timeline", "timeline-current", "timeline-duration", "timeline-fill", "timeline-playhead", "provider-indicator", "rewind", "rewind-label", "play-pause", "play-pause-label", "forward", "forward-label", "subtitles",
   "episodes", "previous-episode", "next-episode", "manual-end", "show-title", "metadata-credit", "metadata-provider-credit", "episode-caption", "up-next", "up-next-title", "up-next-countdown", "up-next-play", "up-next-cancel",
   "subtitle-menu", "subtitle-mode", "menu-title", "menu-description", "menu-cancel", "menu-change",
-  "command-status", "screen-reader-status", "provider-choice", "unload-provider", "recover-provider", "provider-telemetry", "diagnostics-open", "diagnostics-close", "diagnostics-panel", "diag-user-agent", "diag-media-source", "diag-native-hls", "diag-html5", "diag-permissions", "diag-frame-events", "diag-events", "diag-message-checks", "diag-sources", "diag-elapsed", "diag-assessment", "diag-vidbolt-session", "compat-controls", "compat-quality", "compat-play", "compat-autoplay", "compat-reset", "compat-status", "diag-variant", "vidfast-compat-controls", "vidfast-autoplay", "vidfast-reset", "vidfast-compat-status", "diag-vidfast-mode", "vidlink-compat-controls", "vidlink-default-off", "vidlink-default-on", "vidlink-jw-on", "vidlink-focus-default", "vidlink-focus-status", "vidlink-compat-status", "diag-vidlink-mode", "vidbolt-compat-controls", "vidbolt-autoplay-toggle", "vidbolt-auto-recover", "vidbolt-stop", "vidbolt-native-focus", "diag-vidbolt-mode", "vidbolt-compat-status", "experimental-controls", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip", "player-shell"];
+  "command-status", "screen-reader-status", "provider-choice", "unload-provider", "recover-provider", "watch-fullscreen", "watch-exit", "provider-telemetry", "diagnostics-open", "diagnostics-close", "diagnostics-panel", "diag-user-agent", "diag-media-source", "diag-native-hls", "diag-html5", "diag-permissions", "diag-frame-events", "diag-events", "diag-message-checks", "diag-sources", "diag-elapsed", "diag-assessment", "diag-vidbolt-session", "compat-controls", "compat-quality", "compat-play", "compat-autoplay", "compat-reset", "compat-status", "diag-variant", "vidfast-compat-controls", "vidfast-autoplay", "vidfast-reset", "vidfast-compat-status", "diag-vidfast-mode", "vidlink-compat-controls", "vidlink-default-off", "vidlink-default-on", "vidlink-jw-on", "vidlink-focus-default", "vidlink-focus-status", "vidlink-compat-status", "diag-vidlink-mode", "vidbolt-compat-controls", "vidbolt-autoplay-toggle", "vidbolt-auto-recover", "vidbolt-stop", "vidbolt-native-focus", "diag-vidbolt-mode", "vidbolt-compat-status", "experimental-controls", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip", "player-shell"];
 const baseUrl = "https://yapgrid.com/embed/tv/2190/13/2";
 const previewOrigin = "https://horizon-video-lab-preview.ali-al-anbari.workers.dev";
 
@@ -29,7 +29,8 @@ function fixtureResolver() {
     resolve(item, direction) { return Promise.resolve(episodes.resolveFromRows(rows, item, direction)); } };
 }
 
-function setup({ search = "?sub=on", adapter = null, animationFrame = true, episodeResolver = fixtureResolver() } = {}) {
+function setup({ search = "?sub=on", adapter = null, animationFrame = true, episodeResolver = fixtureResolver(),
+  desktop = false, fullscreenOutcome = "allow" } = {}) {
   const nodes = new Map();
   const documentEvents = {};
   const windowEvents = {};
@@ -42,7 +43,11 @@ function setup({ search = "?sub=on", adapter = null, animationFrame = true, epis
     activeElement: null,
     getElementById(id) { return nodes.get(id); },
     addEventListener(name, handler) { (documentEvents[name] ||= []).push(handler); },
+    fire(name, event = {}) { emit(documentEvents, name, event); },
     createElement() { return { canPlayType() { return "maybe"; } }; },
+    fullscreenEnabled: fullscreenOutcome !== "unsupported",
+    fullscreenElement: null,
+    exitFullscreen() { this.fullscreenElement = null; this.fire("fullscreenchange"); return Promise.resolve(); },
   };
   function emit(handlers, name, event = {}) { for (const handler of handlers[name] || []) handler(event); }
   function node(id) {
@@ -50,9 +55,11 @@ function setup({ search = "?sub=on", adapter = null, animationFrame = true, epis
     const attributes = {};
     const classes = new Set();
     let source = "";
+    const style = {};
     const element = {
-      id, hidden: id === "subtitle-menu" || id === "up-next" || id === "manual-end" || id === "diagnostics-panel" || id === "compat-controls" || id === "vidfast-compat-controls" || id === "vidlink-compat-controls" || id === "vidbolt-compat-controls" || id === "experimental-controls", textContent: "", tabIndex: -1, sourceChanges: 0,
+      id, hidden: id === "subtitle-menu" || id === "up-next" || id === "manual-end" || id === "playback-timeline" || id === "diagnostics-panel" || id === "compat-controls" || id === "vidfast-compat-controls" || id === "vidlink-compat-controls" || id === "vidbolt-compat-controls" || id === "experimental-controls", textContent: "", tabIndex: -1, sourceChanges: 0,
       attributes,
+      style,
       classList: {
         add(name) { classes.add(name); },
         remove(name) { classes.delete(name); },
@@ -78,11 +85,18 @@ function setup({ search = "?sub=on", adapter = null, animationFrame = true, epis
       element.setAttribute("allowfullscreen", "");
       element.setAttribute("referrerpolicy", "no-referrer");
     }
+    if (id === "player-shell" && fullscreenOutcome !== "unsupported") element.requestFullscreen = function () {
+      if (fullscreenOutcome === "reject") return Promise.reject(Error("blocked"));
+      document.fullscreenElement = element;
+      document.fire("fullscreenchange");
+      return Promise.resolve();
+    };
     return element;
   }
   for (const id of ids) nodes.set(id, node(id));
   const window = {
-    navigator: { userAgent: "Mock Vizio Test" },
+    navigator: { userAgent: desktop ? "Mock Mac Desktop" : "Mock Vizio Test" },
+    matchMedia() { return { matches: desktop }; },
     MediaSource: { isTypeSupported() { return true; } },
     getComputedStyle() { return { pointerEvents: "none" }; },
     performance: { now() { return time; } },
@@ -155,10 +169,11 @@ function catalog() {
   return window.HorizonEpisodes;
 }
 
-test("preview has no persistent overlay, fake progress, or browser credentials", () => {
+test("preview starts hidden without fabricated progress or browser credentials", () => {
   assert.match(html, /id="overlay"[^>]*aria-hidden="true"/);
   assert.match(css, /\.overlay \{[^}]*opacity: 0; visibility: hidden; pointer-events: none/);
-  assert.doesNotMatch(html, /<progress|currentTime|duration/);
+  assert.match(html, /id="playback-timeline"[^>]*hidden/);
+  assert.doesNotMatch(html, /<progress|value="[0-9]+"/);
   assert.doesNotMatch(playerScript, /contentDocument|contentWindow|AUTH_TOKEN|key_command|fetch\(/);
   assert.match(html, /frame-src https:\/\/yapgrid\.com/);
 });
@@ -265,7 +280,7 @@ test("visible controls keep normal navigation and hide only on the existing idle
   app.key("ArrowLeft");
   assert.equal(app.document.activeElement.id, "episodes");
   app.key("ArrowUp");
-  assert.equal(app.document.activeElement.id, "play-pause");
+  assert.equal(app.document.activeElement.id, "rewind");
   app.advance(4999);
   assert.equal(app.state(), "CONTROLS_VISIBLE");
   app.advance(1);
@@ -273,6 +288,113 @@ test("visible controls keep normal navigation and hide only on the existing idle
   assert.equal(app.document.activeElement.id, "remote-capture");
   assert.equal(app.get("overlay").classList.contains("is-visible"), false);
   assert.equal(app.get("player-frame").sourceChanges, 1);
+});
+
+test("VidBolt playback shows controls, idle hides them, and pause holds them visible", () => {
+  const app = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt" });
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  app.advance(4500);
+  app.key("ArrowRight");
+  app.advance(4500);
+  assert.equal(app.state(), "CONTROLS_VISIBLE", "active navigation resets idle time");
+  app.advance(500);
+  assert.equal(app.state(), "PLAYBACK_HIDDEN");
+  app.key("ArrowUp");
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  app.message({ type: "pause" }, "https://vidbolt.xyz");
+  app.advance(12000);
+  assert.equal(app.state(), "CONTROLS_VISIBLE", "intentional pause suspends auto-hide");
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.advance(5000);
+  assert.equal(app.state(), "PLAYBACK_HIDDEN", "resume restarts idle hiding");
+});
+
+test("desktop pointer movement wakes controls in fullscreen without iframe reload", () => {
+  const app = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt", desktop: true });
+  const frame = app.get("player-frame"), loads = frame.sourceChanges;
+  app.get("watch-fullscreen").click();
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.advance(5000);
+  assert.equal(app.state(), "PLAYBACK_HIDDEN");
+  app.get("player-shell").fire("pointermove");
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  app.get("overlay").fire("pointermove");
+  app.advance(4900);
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  app.advance(100);
+  assert.equal(app.state(), "PLAYBACK_HIDDEN");
+  assert.equal(app.get("player-frame"), frame);
+  assert.equal(frame.sourceChanges, loads);
+});
+
+test("hidden Watch overlay has no transparent pointer capture layer", () => {
+  const app = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt" });
+  assert.equal(app.state(), "PLAYBACK_HIDDEN");
+  app.get("remote-capture").click();
+  assert.equal(app.state(), "PLAYBACK_HIDDEN");
+  app.get("player-shell").click();
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  app.advance(5000);
+  assert.equal(app.state(), "PLAYBACK_HIDDEN");
+  assert.equal(app.get("player-shell").classList.contains("controls-open"), false);
+});
+
+test("seek preview displays all acceleration levels and a validated VidBolt target", () => {
+  const app = setup({ search: "?type=movie&id=550&provider=vidbolt" });
+  app.message({ type: "timeupdate", time: 120 }, "https://vidbolt.xyz");
+  app.key("ArrowUp"); app.key("ArrowRight");
+  const preview = app.get("seek-preview");
+  assert.equal(preview.hidden, false);
+  assert.match(preview.textContent, /Forward 10s · target 2:10 · OK to confirm/);
+  for (const level of ["30s", "1m", "2m", "5m", "10m"]) {
+    app.key("ArrowRight", true);
+    assert.match(preview.textContent, new RegExp("Forward " + level));
+  }
+  assert.equal(app.posted.filter(item => item.data.type === "seek").length, 0);
+  app.get("diagnostics-open").focus();
+  assert.equal(preview.hidden, true);
+});
+
+test("reference timeline uses only matching fresh VidBolt position and duration", () => {
+  const app = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt" });
+  const timeline = app.get("playback-timeline");
+  assert.equal(timeline.hidden, true);
+  app.message({ type: "timeupdate", time: 84 }, "https://vidbolt.xyz");
+  assert.equal(timeline.hidden, true, "position alone does not create a duration");
+  app.message({ type: "durationchange", duration: 280 }, "https://vidbolt.xyz");
+  assert.equal(timeline.hidden, false);
+  assert.equal(app.get("timeline-current").textContent, "1:24");
+  assert.equal(app.get("timeline-duration").textContent, "4:40");
+  assert.equal(app.get("timeline-fill").getAttribute("style"), "width:30.00%");
+  assert.equal(app.get("timeline-playhead").getAttribute("style"), "left:30.00%");
+  app.message({ type: "timeupdate", time: 140 }, "https://vidbolt.xyz");
+  assert.equal(app.get("timeline-fill").getAttribute("style"), "width:50.00%");
+  assert.equal(app.get("timeline-playhead").getAttribute("style"), "left:50.00%");
+  app.advance(16000);
+  app.key("ArrowUp");
+  assert.equal(timeline.hidden, true, "stale progress is not presented as a live timeline");
+  app.get("provider-choice").focus(); app.key("Enter");
+  assert.equal(timeline.hidden, true, "YapGrid has no validated timeline");
+});
+
+test("single secondary icon row reaches every VidBolt action without skipping", () => {
+  const app = setup({ search: "?showId=1396&season=1&episode=2&from=search&provider=vidbolt" });
+  app.key("ArrowUp"); app.get("previous-episode").focus();
+  const visited = [app.document.activeElement.id];
+  for (let i = 0; i < 8; i += 1) {
+    const before = app.document.activeElement.id;
+    app.key("ArrowRight");
+    if (app.document.activeElement.id === before) break;
+    visited.push(app.document.activeElement.id);
+  }
+  assert.deepEqual(visited, ["previous-episode", "episodes", "next-episode",
+    "provider-choice", "recover-provider", "diagnostics-open", "watch-exit"]);
+  assert.equal(app.get("subtitles").hidden, true);
+  assert.equal(app.get("player-shell").classList.contains("controls-open"), true);
+  app.key("Backspace");
+  assert.equal(app.get("player-shell").classList.contains("controls-open"), false);
+  assert.match(css, /\.player-shell:not\(\.controls-open\) \.player-loading \{ visibility: hidden; \}/);
 });
 
 test("Back hides visible controls, then exits from hidden playback", () => {
@@ -365,7 +487,7 @@ test("subtitle ON/OFF URLs match existing launch modes and switching requires co
   const on = setup();
   assert.equal(on.get("player-frame").src, baseUrl + "?lang=en");
   on.key("ArrowUp");
-  on.key("ArrowDown");
+  on.get("subtitles").focus();
   on.key("Enter");
   assert.equal(on.state(), "SUBMENU_OPEN");
   on.advance(20000); // Menu suspends auto-hide.
@@ -384,7 +506,7 @@ test("subtitle ON/OFF URLs match existing launch modes and switching requires co
     + encodeURIComponent(previewOrigin + "/empty.vtt") + "&sub_lang=en&sub_label=Off");
   assert.equal(off.get("subtitle-mode").textContent, "OFF");
   off.key("ArrowUp");
-  off.key("ArrowDown");
+  off.get("subtitles").focus();
   off.key("Enter");
   off.key("ArrowRight");
   off.key("Enter");
@@ -472,6 +594,7 @@ test("visible controls open and renew via adapter; hide and unload close without
   } });
   app.key("ArrowUp");
   assert.equal(opens, 1);
+  await Promise.resolve();
   app.advance(5000);
   assert.equal(closes, 1);
   app.key("ArrowDown");
@@ -548,12 +671,11 @@ test("arrows immediately adjust seek labels without Up or issuing playback", () 
   assert.deepEqual(sent, []);
   app.key("ArrowDown");
   assert.equal(app.document.activeElement.id, "next-episode");
-  app.key("ArrowLeft");
-  app.key("ArrowLeft");
+  app.get("subtitles").focus();
   assert.equal(app.document.activeElement.id, "subtitles");
-  app.key("ArrowRight");
+  app.key("ArrowLeft"); app.key("ArrowLeft"); app.key("ArrowLeft"); app.key("ArrowLeft");
   assert.equal(app.document.activeElement.id, "episodes");
-  app.key("ArrowUp");
+  app.get("play-pause").focus();
   assert.equal(app.document.activeElement.id, "play-pause");
   app.key("ArrowLeft");
   assert.equal(app.document.activeElement.id, "rewind");
@@ -613,7 +735,7 @@ test("seek amount does not reset after four seconds while the control bar remain
 test("both seek amounts reset only when controls hide or the player exits", () => {
   const app = setup();
   app.key("ArrowUp"); app.key("ArrowRight"); app.key("ArrowRight"); // Forward +30s
-  app.key("ArrowUp"); app.key("ArrowLeft"); app.key("ArrowLeft"); // Rewind −30s
+  app.get("rewind").focus(); app.key("ArrowLeft"); // Rewind −30s
   assert.equal(app.get("forward-label").textContent, "+30s");
   assert.equal(app.get("rewind-label").textContent, "−30s");
   app.key("Backspace");
@@ -868,7 +990,9 @@ test("movie uses the same player shell with a TMDB movie URL and returns to Watc
   app.key("ArrowDown");
   assert.equal(app.document.activeElement.id, "play-pause");
   app.key("ArrowDown");
-  assert.equal(app.document.activeElement.id, "provider-choice", "movie focus can reach provider selection");
+  assert.equal(app.document.activeElement.id, "recover-provider", "movie focus can reach the player actions");
+  app.key("ArrowLeft");
+  assert.equal(app.document.activeElement.id, "provider-choice");
   app.get("player-frame").fire("load");
   assert.equal(app.get("player-loading").hidden, true);
   app.key("Backspace");
@@ -894,13 +1018,14 @@ test("movie provider cycles YapGrid, VidBolt, YapGrid by D-pad", () => {
   assert.equal(app.get("player-frame").src, "https://yapgrid.com/embed/movie/550");
   app.key("ArrowDown");
   app.key("ArrowDown");
+  app.key("ArrowLeft");
   assert.equal(app.document.activeElement.id, "provider-choice");
   app.key("Enter");
   assert.equal(app.get("player-frame").src, "https://vidbolt.xyz/movie/550?autoPlay=true");
   assert.equal(app.get("provider-choice").textContent, "Provider: VidBolt");
   assert.equal(app.get("unload-provider").hidden, true);
   assert.equal(app.get("recover-provider").hidden, false);
-  app.key("ArrowDown"); app.key("ArrowDown");
+  app.key("ArrowDown"); app.key("ArrowDown"); app.key("ArrowLeft");
   assert.equal(app.document.activeElement.id, "provider-choice");
   app.key("Enter");
   assert.equal(app.get("player-frame").src, "https://yapgrid.com/embed/movie/550");
@@ -908,6 +1033,156 @@ test("movie provider cycles YapGrid, VidBolt, YapGrid by D-pad", () => {
   assert.equal(app.get("unload-provider").hidden, true);
   assert.equal(app.get("recover-provider").hidden, false);
   assert.equal(app.get("recover-provider").textContent, "Reload Player");
+});
+
+test("Watch opens VidBolt, pointer reveals controls, and Exit returns to Watch", () => {
+  const app = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt" });
+  assert.equal(app.get("player-frame").src, "https://vidbolt.xyz/movie/550?autoPlay=true");
+  assert.equal(app.get("player-shell").classList.contains("watch-player"), true);
+  assert.equal(app.get("watch-exit").hidden, false);
+  app.get("player-shell").click();
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  app.key("ArrowDown");
+  assert.equal(app.document.activeElement.id, "recover-provider");
+  app.key("ArrowRight"); app.key("ArrowRight");
+  assert.equal(app.document.activeElement.id, "watch-exit");
+  app.key("Enter");
+  assert.equal(app.get("player-frame").src, "about:blank");
+  assert.match(app.navigation[0], /horizon-universal-search-preview.*return=1&type=movie&id=550/);
+});
+
+test("desktop Watch auto-hides Horizon controls and blocks native iframe clicks", () => {
+  const app = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt", desktop: true });
+  assert.equal(app.get("player-shell").classList.contains("watch-desktop"), true);
+  assert.equal(app.get("remote-capture").tabIndex, -1);
+  assert.match(css, /#player-frame \{[^}]*pointer-events: none/);
+  assert.doesNotMatch(css, /\.watch-desktop #player-frame \{ pointer-events: auto/);
+  assert.match(css, /\.player-shell\.watch-player #remote-capture \{ pointer-events: none/);
+  assert.match(css, /\.overlay\.is-visible \{[^}]*pointer-events: auto/);
+  assert.match(css, /\.player-shell\.watch-desktop \.test-row \{ flex-wrap: wrap; \}/);
+  assert.doesNotMatch(html, /id="desktop-controls-toggle"/);
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  assert.equal(app.document.activeElement.id, "play-pause");
+  app.get("player-frame").fire("load");
+  app.message({ type: "ready" }, "https://vidbolt.xyz");
+  app.get("play-pause").click();
+  assert.equal(app.posted.at(-1).data.type, "play", "Horizon mouse control still sends VidBolt play");
+  app.advance(10000);
+  assert.equal(app.state(), "PLAYBACK_HIDDEN", "idle playback hides desktop controls");
+  app.get("player-shell").fire("pointermove");
+  assert.equal(app.state(), "CONTROLS_VISIBLE", "pointer movement restores controls");
+  app.get("provider-choice").click();
+  assert.equal(app.state(), "CONTROLS_VISIBLE", "provider switching restores the visible control row");
+  assert.equal(app.get("player-frame").src, "https://yapgrid.com/embed/movie/550");
+});
+
+test("desktop Watch fullscreen lives in the control row, keeps the iframe, and consumes Escape", () => {
+  const app = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt", desktop: true });
+  const frame = app.get("player-frame"), changes = frame.sourceChanges;
+  assert.match(html, /id="recover-provider"[\s\S]*id="watch-fullscreen"[\s\S]*id="watch-exit"/);
+  app.key("ArrowDown"); app.key("ArrowRight"); app.key("ArrowRight");
+  assert.equal(app.document.activeElement.id, "watch-fullscreen", "D-pad reaches Fullscreen from Recover");
+  app.key("Enter");
+  assert.equal(app.document.fullscreenElement, app.get("player-shell"));
+  assert.equal(app.get("watch-fullscreen").textContent, "Exit Fullscreen");
+  assert.equal(app.get("watch-fullscreen").getAttribute("aria-pressed"), "true");
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  assert.equal(app.key("Escape").prevented, true);
+  assert.equal(app.document.fullscreenElement, null);
+  assert.equal(app.navigation.length, 0);
+  assert.equal(app.get("player-frame"), frame);
+  assert.equal(frame.sourceChanges, changes);
+  app.get("watch-fullscreen").click();
+  app.document.fullscreenElement = null;
+  app.document.fire("fullscreenchange");
+  assert.equal(app.get("watch-fullscreen").textContent, "Fullscreen");
+  assert.equal(app.get("watch-fullscreen").getAttribute("aria-pressed"), "false");
+  assert.equal(app.get("command-status").textContent, "Fullscreen exited.");
+  assert.equal(app.key("Escape").prevented, true, "browser Escape does not also exit Watch");
+  assert.equal(app.navigation.length, 0);
+  app.key("ArrowRight");
+  assert.equal(app.document.activeElement.id, "watch-exit", "D-pad reaches Exit after Fullscreen");
+});
+
+test("desktop Watch reports unavailable or rejected fullscreen without replacing the player", async () => {
+  const unsupported = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt",
+    desktop: true, fullscreenOutcome: "unsupported" });
+  assert.equal(unsupported.get("watch-fullscreen").disabled, true);
+  unsupported.key("ArrowDown"); unsupported.key("ArrowRight"); unsupported.key("ArrowRight");
+  assert.equal(unsupported.document.activeElement.id, "watch-exit", "disabled Fullscreen is skipped");
+  const rejected = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt",
+    desktop: true, fullscreenOutcome: "reject" });
+  const frame = rejected.get("player-frame");
+  rejected.get("watch-fullscreen").click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(rejected.get("command-status").textContent, /blocked by the browser/);
+  assert.equal(rejected.get("player-frame"), frame);
+  assert.equal(rejected.document.fullscreenElement, null);
+});
+
+test("Watch Fullscreen remains hidden on Vizio and standalone Video Lab routes", () => {
+  const app = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt" });
+  assert.equal(app.get("watch-fullscreen").hidden, true);
+  assert.equal(app.get("player-shell").classList.contains("watch-desktop"), false);
+  app.get("player-shell").click();
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  const lab = setup({ search: "?type=movie&id=550&provider=vidbolt", desktop: true });
+  assert.equal(lab.get("watch-fullscreen").hidden, true);
+  assert.equal(lab.get("player-shell").classList.contains("watch-desktop"), false);
+});
+
+test("desktop Watch removes the native VidBolt focus trial while Vizio keeps it", () => {
+  const desktop = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt", desktop: true });
+  desktop.get("diagnostics-open").click();
+  assert.equal(desktop.get("vidbolt-native-focus").hidden, true);
+  desktop.key("ArrowDown"); desktop.key("ArrowLeft");
+  assert.equal(desktop.document.activeElement.id, "vidbolt-stop", "diagnostic navigation skips native focus");
+  desktop.get("vidbolt-native-focus").click();
+  assert.equal(desktop.state(), "DIAGNOSTICS_OPEN");
+  const tv = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt" });
+  tv.get("player-shell").click(); tv.get("diagnostics-open").click();
+  assert.equal(tv.get("vidbolt-native-focus").hidden, false);
+});
+
+test("Watch provider switch remains explicit and Space exposes VidBolt Play", () => {
+  const app = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt" });
+  const space = app.key(" ");
+  assert.equal(space.prevented, true);
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  assert.equal(app.document.activeElement.id, "play-pause");
+  app.get("provider-choice").click();
+  assert.equal(app.get("player-frame").src, "https://yapgrid.com/embed/movie/550");
+  assert.equal(app.get("provider-choice").textContent, "Provider: YapGrid");
+  assert.equal(app.get("watch-exit").hidden, false);
+});
+
+test("Watch offers a deliberate Play request after iframe load when autoplay readiness is missing", () => {
+  const app = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt" });
+  app.get("player-frame").fire("load");
+  app.get("player-shell").click();
+  app.get("play-pause").click();
+  assert.deepEqual(JSON.parse(JSON.stringify(app.posted.at(-1))),
+    { data: { type: "play" }, origin: "https://vidbolt.xyz" });
+  assert.match(app.get("command-status").textContent, /requested; awaiting provider event/);
+});
+
+test("Watch Episode List returns to the selected TV episode in Watch", () => {
+  const app = setup({ search: "?showId=1396&season=1&episode=2&sub=off&from=search&provider=vidbolt" });
+  app.key("ArrowDown"); app.get("episodes").focus(); app.key("Enter");
+  assert.equal(app.navigation[0],
+    "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/?return=1&episodes=1&showId=1396&season=1&episode=2&sub=off");
+});
+
+test("Watch YapGrid reports a stalled bridge preparation without blocking provider switching", () => {
+  const app = setup({ search: "?type=movie&id=550&from=search", adapter: {
+    open() { return new Promise(() => {}); }, close() {}, send() { return new Promise(() => {}); },
+  } });
+  app.key("ArrowDown");
+  app.advance(5000);
+  assert.match(app.get("command-status").textContent, /Player Bridge is unavailable/);
+  app.key("ArrowDown");
+  app.get("provider-choice").click();
+  assert.equal(app.get("player-frame").src, "https://vidbolt.xyz/movie/550?autoPlay=true");
 });
 
 test("YapGrid Reload Player replaces only its iframe and retains movie or exact TV URL", () => {
@@ -921,11 +1196,7 @@ test("YapGrid Reload Player replaces only its iframe and retains movie or exact 
     const oldFrame = app.get("player-frame");
     assert.equal(oldFrame.src, expected);
     app.key("ArrowDown");
-    if (search.startsWith("?type=movie")) {
-      app.key("ArrowDown"); app.key("ArrowDown"); app.key("ArrowDown");
-    } else {
-      app.key("ArrowDown"); app.key("ArrowDown"); app.key("ArrowDown"); app.key("ArrowDown");
-    }
+    app.get("recover-provider").focus();
     assert.equal(app.document.activeElement.id, "recover-provider");
     app.key("Enter");
     assert.equal(oldFrame.src, "about:blank");
@@ -943,11 +1214,10 @@ test("YapGrid and VidBolt render the same control rows and D-pad targets", () =>
   const paths = [
     ["play-pause", []], ["rewind", ["ArrowLeft"]], ["forward", ["ArrowRight"]],
     ["previous-episode", ["ArrowLeft", "ArrowDown"]],
-    ["subtitles", ["ArrowDown"]], ["episodes", ["ArrowDown", "ArrowRight"]],
+    ["episodes", ["ArrowDown"]],
     ["next-episode", ["ArrowRight", "ArrowDown"]],
-    ["provider-choice", ["ArrowDown", "ArrowDown"]],
-    ["diagnostics-open", ["ArrowDown", "ArrowDown", "ArrowDown"]],
-    ["recover-provider", ["ArrowDown", "ArrowDown", "ArrowDown", "ArrowRight"]],
+    ["provider-choice", ["ArrowDown", "ArrowRight", "ArrowRight"]],
+    ["recover-provider", ["ArrowDown", "ArrowRight", "ArrowRight", "ArrowRight"]],
   ];
   const ids = paths.map(item => item[0]);
   for (const [provider, search] of [["YapGrid", "?sub=on"], ["VidBolt", "?sub=on&provider=vidbolt"]]) {
@@ -972,14 +1242,28 @@ test("YapGrid and VidBolt render the same control rows and D-pad targets", () =>
     }
   }
   assert.match(html, /class="control-row primary"[^>]*>[\s\S]*id="rewind"[\s\S]*id="play-pause"[\s\S]*id="forward"/);
-  assert.match(css, /\.primary button \{[^}]*width: clamp\(100px, 8vw, 150px\)/);
+  assert.match(css, /\.primary #play-pause \{[^}]*border: 3px solid #fff/);
+});
+
+test("minimal control grouping keeps subtitles and Exit outside the main action row", () => {
+  const secondary = html.match(/class="control-row secondary"[\s\S]*?<\/div>/)[0];
+  const utility = html.match(/class="control-row test-row utility-row"[\s\S]*?<\/div>/)[0];
+  for (const id of ["previous-episode", "episodes", "next-episode", "provider-choice",
+    "recover-provider"]) assert.match(secondary, new RegExp('id="' + id + '"'));
+  for (const id of ["subtitles", "diagnostics-open", "watch-fullscreen", "watch-exit"])
+    assert.match(utility, new RegExp('id="' + id + '"'));
+  assert.doesNotMatch(secondary, /id="(?:subtitles|watch-exit|diagnostics-open)"/);
+  const bolt = setup({ search: "?sub=off&provider=vidbolt" });
+  assert.equal(bolt.get("subtitles").hidden, true, "no unverified VidBolt subtitle action");
+  const yap = setup({ search: "?sub=off" });
+  assert.equal(yap.get("subtitles").hidden, false, "YapGrid subtitle setting remains reachable");
 });
 
 test("provider switching keeps the same primary buttons and focus entry", () => {
   const app = setup({ search: "?type=movie&id=550" });
   const primary = ["rewind", "play-pause", "forward"].map(id => app.get(id));
   for (const name of ["VidBolt", "YapGrid"]) {
-    app.key("ArrowDown"); app.key("ArrowDown"); app.key("Enter");
+    app.key("ArrowDown"); app.get("provider-choice").focus(); app.key("Enter");
     assert.equal(app.get("provider-choice").textContent, "Provider: " + name);
     assert.deepEqual(["rewind", "play-pause", "forward"].map(id => app.get(id)), primary);
     assert.equal(app.get("experimental-controls").hidden, true);
@@ -1096,7 +1380,7 @@ test("TV diagnostics are reachable without changing episode or sending Pico comm
   const sent = [];
   const app = setup({ adapter: { send(command) { sent.push(command); return Promise.resolve({ accepted: true }); } } });
   const original = app.get("player-frame").src;
-  app.key("ArrowDown"); app.key("ArrowDown"); app.key("ArrowDown"); app.key("ArrowDown");
+  app.key("ArrowDown"); app.get("diagnostics-open").focus();
   assert.equal(app.document.activeElement.id, "diagnostics-open");
   app.key("Enter");
   assert.equal(app.state(), "DIAGNOSTICS_OPEN");
@@ -1137,7 +1421,7 @@ test("iframe events and rejected direct-frame messages are distinct from VidFast
 test("YapGrid diagnostics expose no CineSrc compatibility controls or URL changes", () => {
   const app = setup({ search: "?type=movie&id=550" });
   const original = app.get("player-frame").src;
-  app.key("ArrowDown"); app.key("ArrowDown"); app.key("ArrowDown"); app.key("Enter");
+  app.key("ArrowDown"); app.get("diagnostics-open").focus(); app.key("Enter");
   assert.equal(app.get("compat-controls").hidden, true);
   app.key("ArrowDown");
   assert.equal(app.document.activeElement.id, "diagnostics-close");
@@ -1153,7 +1437,7 @@ test("legacy VidFast route returns to YapGrid then enters VidBolt", () => {
   app.key("Enter");
   assert.equal(app.get("player-frame").src, "https://yapgrid.com/embed/movie/550");
   assert.equal(app.get("provider-choice").textContent, "Provider: YapGrid");
-  app.key("ArrowDown"); app.key("ArrowDown");
+  app.key("ArrowDown"); app.get("provider-choice").focus();
   assert.equal(app.document.activeElement.id, "provider-choice");
   app.key("Enter");
   assert.equal(app.get("player-frame").src, "https://vidbolt.xyz/movie/550?autoPlay=true");
@@ -1465,8 +1749,6 @@ test("VidBolt initializes internal volume once after ready, or after play if rea
     assert.equal(app.posted.length, 1);
     assert.equal(JSON.stringify(app.posted[0].data), '{"type":"volume","volume":1}');
     assert.equal(app.posted[0].origin, "https://vidbolt.xyz");
-    app.get("recover-provider").click(); // Hidden controls do not activate.
-    assert.equal(app.get("player-frame"), oldFrame);
     const report = boltDiagnostics(app);
     assert.match(report, /volume 100% command sent .*no provider acknowledgement/);
     assert.match(report, /last advance 0s ago/);
@@ -1730,7 +2012,7 @@ test("VidBolt manual recovery restores only confirmed same-title position and re
   const oldFrame = app.get("player-frame");
   boltProgress(app, 10, 11.5);
   const sentBeforeRecovery = app.posted.length;
-  app.key("ArrowDown"); app.key("ArrowDown"); app.key("ArrowRight"); app.key("ArrowRight");
+  app.get("recover-provider").focus();
   assert.equal(app.document.activeElement.id, "recover-provider");
   app.key("Enter");
   assert.equal(app.get("player-frame").src, "https://vidbolt.xyz/movie/550?autoPlay=true&startAt=11.5");
@@ -1749,8 +2031,7 @@ test("VidBolt manual recovery restores only confirmed same-title position and re
 test("VidBolt episode identity and provider switches never reuse another position", () => {
   const episode = boltApp("?showId=1396&season=1&episode=2&provider=vidbolt");
   boltProgress(episode, 34, 35);
-  episode.key("ArrowDown"); episode.key("ArrowDown"); episode.key("ArrowDown");
-  episode.key("ArrowRight"); episode.key("ArrowRight"); episode.key("Enter");
+  episode.get("recover-provider").focus(); episode.key("Enter");
   assert.match(episode.get("player-frame").src, /\/tv\/1396\/1\/2\?autoPlay=true&startAt=35$/);
   const next = boltApp("?showId=1396&season=1&episode=3&provider=vidbolt");
   assert.equal(next.get("player-frame").src, "https://vidbolt.xyz/tv/1396/1/3?autoPlay=true");
@@ -1794,7 +2075,7 @@ test("VidBolt missing play/pause response returns to unknown without contradicto
   app.get("player-frame").fire("load");
   app.message({ type: "ready" }, "https://vidbolt.xyz");
   app.message({ type: "play" }, "https://vidbolt.xyz");
-  app.key("ArrowDown");
+  app.get("play-pause").focus();
   app.key("Enter");
   assert.equal(app.posted.at(-1).data.type, "pause");
   app.advance(3000);
@@ -1808,7 +2089,7 @@ test("VidBolt unconfirmed user Pause does not trigger automatic recovery", () =>
   const app = boltApp();
   app.get("player-frame").fire("load");
   boltProgress(app, 20, 21);
-  app.key("ArrowDown");
+  app.get("play-pause").focus();
   app.key("Enter");
   const active = app.get("player-frame");
   app.advance(70000);
@@ -1905,9 +2186,9 @@ test("VidBolt repeat selection needs OK and resets on Back, stale position and i
   assert.equal(app.get("forward-label").textContent, "+1m");
   app.blur(); app.advance(1000); app.keyup("ArrowRight");
   assert.equal(app.posted.filter(item => item.data.type === "seek").length, 0);
-  app.key("ArrowUp");
+  app.get("play-pause").focus();
   assert.equal(app.document.activeElement.id, "play-pause");
-  app.key("ArrowDown"); app.key("ArrowRight"); app.key("ArrowRight");
+  app.get("forward").focus(); app.key("ArrowRight");
   app.key("Backspace");
   assert.equal(app.get("forward-label").textContent, "+10s");
   app.advance(16000);
@@ -1966,6 +2247,17 @@ test("VidBolt native CC trial lives in Diagnostics and returns to a visible focu
   assert.equal(app.get("player-frame"), frame);
 });
 
+test("VidBolt native CC trial accepts parent Back without leaving focus trapped", () => {
+  const app = boltApp();
+  app.get("player-frame").fire("load");
+  app.key("ArrowDown"); app.get("diagnostics-open").click();
+  app.get("vidbolt-native-focus").click();
+  assert.equal(app.state(), "NATIVE_FOCUS");
+  assert.equal(app.parentKey("Backspace").prevented, true);
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  assert.equal(app.document.activeElement.id, "diagnostics-open");
+});
+
 test("VidBolt passively counts validated mobile subtitle rows without applying a track", () => {
   const app = boltApp();
   const frame = app.get("player-frame");
@@ -1977,7 +2269,8 @@ test("VidBolt passively counts validated mobile subtitle rows without applying a
   app.message(panel, "https://vidbolt.xyz", {});
   assert.match(boltDiagnostics(app), /mobile-panel messages 0, subtitle rows 0/);
   app.message(panel, "https://vidbolt.xyz", frame.contentWindow);
-  assert.match(app.get("diag-vidbolt-session").textContent, /mobile-panel messages 1, subtitle rows 2/);
+  assert.match(app.get("diag-vidbolt-session").textContent,
+    /mobile-panel messages 1, subtitle rows 2, English rows 1, Off rows 1/);
   assert.equal(app.posted.length, 0);
 });
 
@@ -1991,9 +2284,11 @@ test("VidBolt Auto Recover opt-out survives manual reload and provider switching
   app.advance(60000);
   assert.match(boltDiagnostics(app), /watchdog recovery failed.*progress threshold reached/);
   app.key("Backspace");
-  app.key("ArrowDown"); app.key("ArrowUp"); app.key("ArrowLeft"); app.key("ArrowLeft"); app.key("Enter");
+  app.key("ArrowDown");
+  app.get("provider-choice").focus(); app.key("Enter");
   assert.equal(app.get("provider-choice").textContent, "Provider: YapGrid");
-  app.key("ArrowDown"); app.key("ArrowDown"); app.key("Enter");
+  app.key("ArrowDown");
+  app.get("provider-choice").focus(); app.key("Enter");
   assert.equal(app.get("provider-choice").textContent, "Provider: VidBolt");
   boltDiagnostics(app);
   assert.match(app.get("vidbolt-auto-recover").textContent, /OFF/);
@@ -2002,7 +2297,7 @@ test("VidBolt Auto Recover opt-out survives manual reload and provider switching
 test("provider switch rejects stale messages and VidBolt Stop / Unload stays reachable in diagnostics", () => {
   const app = setup({ search: "?type=movie&id=550" });
   const oldFrame = app.get("player-frame");
-  app.key("ArrowDown"); app.key("ArrowDown");
+  app.key("ArrowDown"); app.get("provider-choice").focus();
   assert.equal(app.document.activeElement.id, "provider-choice");
   app.key("Enter");
   assert.equal(app.get("player-frame").src, "https://vidbolt.xyz/movie/550?autoPlay=true");
@@ -2159,10 +2454,12 @@ test("remote reaches Previous, Next, Subtitles, Episode List and keeps playback 
   const reached = new Set([app.document.activeElement.id]);
   app.key("ArrowLeft"); reached.add(app.document.activeElement.id); // Rewind
   app.key("ArrowDown"); reached.add(app.document.activeElement.id); // Previous
-  app.key("ArrowRight"); reached.add(app.document.activeElement.id); // Subtitles
   app.key("ArrowRight"); reached.add(app.document.activeElement.id); // List
   app.key("ArrowRight"); reached.add(app.document.activeElement.id); // Next
-  app.key("ArrowUp"); reached.add(app.document.activeElement.id); // Forward
+  app.key("ArrowRight"); app.key("ArrowRight"); app.key("ArrowRight");
+  reached.add(app.document.activeElement.id); // Subtitles
+  app.key("ArrowUp");
+  reached.add(app.document.activeElement.id); // Forward
   assert.deepEqual([...reached].sort(), ["episodes", "forward", "next-episode", "play-pause",
     "previous-episode", "rewind", "subtitles"].sort());
   assert.deepEqual(app.navigation, []);
@@ -2220,7 +2517,7 @@ test("switching provider retains the TVmaze metadata link and updates its provid
   assert.match(html, /id="metadata-credit"[^>]*>Episode metadata: <a href="https:\/\/www\.tvmaze\.com/);
   const app = setup();
   assert.equal(app.get("metadata-provider-credit").textContent, "YapGrid playback availability is unverified");
-  app.key("ArrowDown"); app.key("ArrowDown"); app.key("ArrowDown"); app.key("Enter");
+  app.key("ArrowDown"); app.get("provider-choice").focus(); app.key("Enter");
   assert.equal(app.get("metadata-provider-credit").textContent, "VidBolt playback availability is unverified");
 });
 
@@ -2275,7 +2572,7 @@ test("metadata boundaries cannot launch unlisted episodes or autoplay", async ()
 
 test("preview manual end trigger counts down ten seconds and launches once", async () => {
   const app = setup({ search: "?season=13&episode=2&sub=off&testEnd=1" });
-  app.key("ArrowUp"); app.key("ArrowDown"); app.key("ArrowDown");
+  app.key("ArrowUp"); app.get("manual-end").focus();
   assert.equal(app.document.activeElement.id, "manual-end");
   app.key("Enter");
   app.get("manual-end").click(); // Duplicate end while prompt is active.
@@ -2375,8 +2672,85 @@ test("Episode List preserves a manually chosen VidFast provider", () => {
 
 test("subtitle reload keeps the selected episode while switching mode", () => {
   const app = setup({ search: "?season=13&episode=3&sub=off" });
-  app.key("ArrowUp"); app.key("ArrowDown"); app.key("Enter");
+  app.key("ArrowUp"); app.get("subtitles").focus(); app.key("Enter");
   app.key("ArrowRight"); app.key("Enter");
   app.key("ArrowRight"); app.key("Enter");
   assert.deepEqual(app.navigation, ["player-overlay.html?season=13&episode=3&sub=on"]);
+});
+
+test("timeline track anchors playhead with relative positioning context and negative margins", () => {
+  assert.match(css, /\.timeline-track \{[^}]*position: relative;/);
+  assert.match(css, /#timeline-fill \{[^}]*position: absolute;[^}]*top: 0;[^}]*left: 0;/);
+  assert.match(css, /#timeline-playhead \{[^}]*position: absolute;[^}]*top: 50%;[^}]*left: 0;/);
+  assert.match(css, /#timeline-playhead \{[^}]*margin-top: -9px;[^}]*margin-left: -9px;/);
+  assert.doesNotMatch(css, /#timeline-playhead \{[^}]*transform: translate/);
+});
+
+test("timeline updates style properties at 0, 50, 100 percent, freezes on pause, and clears on stale or unload", () => {
+  const app = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt" });
+  const timeline = app.get("playback-timeline");
+  const fill = app.get("timeline-fill");
+  const playhead = app.get("timeline-playhead");
+
+  // 0%
+  app.message({ type: "durationchange", duration: 200 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 0 }, "https://vidbolt.xyz");
+  assert.equal(timeline.hidden, false);
+  assert.equal(fill.style.width, "0.00%");
+  assert.equal(playhead.style.left, "0.00%");
+  assert.equal(fill.getAttribute("style"), "width:0.00%");
+  assert.equal(playhead.getAttribute("style"), "left:0.00%");
+
+  // 50%
+  app.message({ type: "timeupdate", time: 100 }, "https://vidbolt.xyz");
+  assert.equal(fill.style.width, "50.00%");
+  assert.equal(playhead.style.left, "50.00%");
+
+  // 100%
+  app.message({ type: "timeupdate", time: 200 }, "https://vidbolt.xyz");
+  assert.equal(fill.style.width, "100.00%");
+  assert.equal(playhead.style.left, "100.00%");
+
+  // Pause freezes playhead without expiring as stale
+  app.message({ type: "pause" }, "https://vidbolt.xyz");
+  app.advance(20000);
+  app.key("ArrowUp");
+  assert.equal(timeline.hidden, false, "paused playback preserves timeline visibility");
+  assert.equal(playhead.style.left, "100.00%");
+
+  // Resumed play expires after 16s without fresh position
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.advance(16000);
+  app.key("ArrowUp");
+  assert.equal(timeline.hidden, true, "stale playing playback hides timeline");
+  assert.equal(fill.style.width, "0%");
+  assert.equal(playhead.style.left, "0%");
+
+  // Combined timeupdate with duration updates timeline without separate durationchange
+  app.message({ type: "timeupdate", time: 60, duration: 300 }, "https://vidbolt.xyz");
+  assert.equal(timeline.hidden, false);
+  assert.equal(app.get("timeline-current").textContent, "1:00");
+  assert.equal(app.get("timeline-duration").textContent, "5:00");
+  assert.equal(fill.style.width, "20.00%");
+  assert.equal(playhead.style.left, "20.00%");
+
+  // Switching provider unloads and clears timeline
+  app.get("provider-choice").focus();
+  app.key("Enter");
+  assert.equal(timeline.hidden, true);
+  assert.equal(fill.style.width, "0%");
+  assert.equal(playhead.style.left, "0%");
+});
+
+test("secondary controls render self-contained inline SVG icons without visible overlapping labels", () => {
+  for (const id of ["previous-episode", "episodes", "next-episode", "provider-choice",
+    "recover-provider", "diagnostics-open", "watch-fullscreen", "watch-exit"]) {
+    const pattern = new RegExp('id="' + id + '"[^>]*>[\\s\\S]*?<svg[^>]*aria-hidden="true"[\\s\\S]*?<\\/svg>[\\s\\S]*?<span class="action-label"');
+    assert.match(html, pattern, id + " must have inline SVG and hidden action-label");
+  }
+  assert.match(css, /\.action-row button \{[^}]*font-size: 0;[^}]*line-height: 0;[^}]*overflow: hidden;/);
+  assert.match(css, /\.action-row button \{[^}]*border-radius: 50%;/);
+  assert.match(css, /\.action-row button::before \{ content: none !important; \}/);
+  assert.match(css, /\.action-label \{ position: absolute; width: 1px; height: 1px;/);
+  assert.match(css, /\.action-row button:focus[^{]*\{ outline: 2px solid/);
 });

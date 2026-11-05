@@ -70,6 +70,7 @@ try {
   assert.equal(playerUrl.searchParams.get("episode"), "2");
   assert.equal(playerUrl.searchParams.get("sub"), "off");
   assert.equal(playerUrl.searchParams.get("from"), "search");
+  assert.equal(playerUrl.searchParams.get("provider"), "vidbolt");
   const returned = origin + "/universal-search/index.html?mock=1&return=1&showId=2190&season=13&episode=2&sub=off";
   await send("Page.navigate", { url: returned });
   await until(async () => await evaluate("!document.querySelector('#episodes-view')?.hidden && document.querySelectorAll('#episode-list button').length === 3 && document.activeElement.dataset.episode === '2'"), "selected episode restored");
@@ -88,6 +89,7 @@ try {
   await until(async () => requests.filter(url => url.startsWith("https://horizon-video-lab-preview.ali-al-anbari.workers.dev/player-overlay.html?")).length > launchesBeforeHistory, "history episode launch");
   const historyLaunch = new URL(requests.filter(url => url.startsWith("https://horizon-video-lab-preview.ali-al-anbari.workers.dev/player-overlay.html?")).at(-1));
   assert.equal(historyLaunch.searchParams.get("episode"), "2");
+  assert.equal(historyLaunch.searchParams.get("provider"), "vidbolt");
   await send("Page.navigate", { url: returned });
   await until(async () => await evaluate("!document.querySelector('#episodes-view')?.hidden && document.activeElement.dataset.episode === '2'"), "history playback returns to episode list");
   await evaluate("document.querySelector('#history-toggle').click()");

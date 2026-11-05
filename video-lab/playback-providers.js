@@ -229,20 +229,29 @@
         if (["ready", "play", "pause", "ended"].indexOf(b.type) >= 0)
           return { type: "vidbolt:" + b.type };
         if (b.type === "timeupdate" && finiteNonnegative(b.time))
-          return { type: "vidbolt:timeupdate", currentTime: b.time };
+          return { type: "vidbolt:timeupdate", currentTime: b.time,
+            duration: finiteNonnegative(b.duration) ? b.duration : null };
         if (b.type === "durationchange" && finiteNonnegative(b.duration))
           return { type: "vidbolt:durationchange", duration: b.duration };
         // Passive diagnostics only. The documented mobile-panel API is limited to
         // mobile iframe layouts; never reply with mobile-option on the TV.
         if (b.type === "mobile-panel" && Array.isArray(b.options)) {
           var subtitleOptions = 0;
+          var englishOptions = 0;
+          var offOptions = 0;
           for (var bi = 0; bi < b.options.length && bi < 99; bi += 1) {
             if (b.options[bi] && typeof b.options[bi] === "object"
-                && b.options[bi].option === "subtitles" && b.options[bi].group === "Subtitles")
+                && b.options[bi].option === "subtitles" && b.options[bi].group === "Subtitles") {
               subtitleOptions += 1;
+              if (typeof b.options[bi].label === "string" && /\benglish\b/i.test(b.options[bi].label))
+                englishOptions += 1;
+              if (typeof b.options[bi].label === "string" && /^off$/i.test(b.options[bi].label.trim()))
+                offOptions += 1;
+            }
           }
           return { type: "vidbolt:mobile-panel", optionCount: Math.min(99, b.options.length),
-            subtitleOptionCount: subtitleOptions };
+            subtitleOptionCount: subtitleOptions, englishOptionCount: englishOptions,
+            offOptionCount: offOptions };
         }
         return null;
       }

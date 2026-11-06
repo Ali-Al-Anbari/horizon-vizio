@@ -8,6 +8,7 @@
   <link rel="icon" href="data:," />
   <link rel="stylesheet" href="search.css" />
   <script src="core.js" defer></script>
+  <script src="recommendations.js" defer></script>
   <script src="player-adapter.js" defer></script>
   <script src="mock-data.js" defer></script>
   <script src="search.js" defer></script>
@@ -27,6 +28,7 @@
     </header>
     <section id="watch-view" class="view watch-home" aria-label="Watch homepage">
       <div id="watch-hero" class="watch-hero">
+        <span class="watch-home-wordmark" aria-hidden="true">HORIZON<small>WATCH</small></span>
         <div id="watch-hero-art" class="watch-hero-art" aria-hidden="true"></div>
         <div class="watch-hero-shade" aria-hidden="true"></div>
         <div class="watch-hero-copy">
@@ -35,9 +37,17 @@
           <p id="watch-hero-description" class="watch-hero-description"></p>
         </div>
       </div>
+      <section id="watch-top-section" class="watch-home-section" aria-label="Top Picks for You" hidden>
+        <h2>Top Picks for You</h2>
+        <div id="watch-top-row" class="watch-home-row"></div>
+      </section>
       <section id="watch-continue-section" class="watch-home-section" aria-label="Continue Watching" hidden>
         <h2>Continue Watching</h2>
         <div id="watch-continue-row" class="watch-home-row"></div>
+      </section>
+      <section id="watch-because-section" class="watch-home-section" aria-label="Because You Watched" hidden>
+        <h2 id="watch-because-heading"></h2>
+        <div id="watch-because-row" class="watch-home-row"></div>
       </section>
       <section id="watch-recent-section" class="watch-home-section" aria-label="Recently Finished" hidden>
         <h2>Recently Finished</h2>

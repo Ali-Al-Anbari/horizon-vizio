@@ -2,6 +2,7 @@ const TMDB = "https://api.themoviedb.org/3";
 const TYPES = new Set(["movie", "tv"]);
 const buckets = new Map(); // Best-effort per-isolate guard; Cloudflare edge cache is the main cost control.
 const searchCache = new Map();
+const recommendationCache = new Map();
 const SEARCH_LIMIT = 18;
 const EXPANSIONS = "etaoinsh"; // Common next letters, including continuations such as t and h.
 const SEARCH_CACHE_MS = 5 * 60 * 1000;
@@ -43,6 +44,74 @@ function title(row, type) {
         && Number.isInteger(s.episode_count) && s.episode_count > 0)
       .map(s => ({ number: s.season_number, count: s.episode_count,
         name: String(s.name || `Season ${s.season_number}`).slice(0, 100) })) : undefined };
+}
+function recommendationTitle(row, type) {
+  const base = title(row, type);
+  return { ...base, genreIds: Array.isArray(row.genre_ids) ? row.genre_ids.filter(id => Number.isInteger(id) && id > 0).slice(0, 8) : [],
+    keywordIds: [], voteAverage: Number.isFinite(row.vote_average) ? Math.max(0, Math.min(10, row.vote_average)) : 0,
+    sources: [] };
+}
+function recommendationSeeds(text) {
+  if (!text) return [];
+  const parts = text.split(",");
+  if (parts.length > 3 || new Set(parts).size !== parts.length) return null;
+  return parts.map(part => {
+    const match = /^(movie|tv):([1-9][0-9]*)$/.exec(part);
+    return match && positive(match[2]) ? { type: match[1], id: Number(match[2]), key: part } : null;
+  }).every(Boolean) ? parts.map(part => { const [type, id] = part.split(":");
+    return { type, id: Number(id), key: part }; }) : null;
+}
+async function recommendTmdb(fetcher, env, seeds, avoids, signal) {
+  const details = async seed => {
+    try {
+      const data = await tmdbJson(fetcher, env,
+        `/${seed.type}/${seed.id}?language=en-US&append_to_response=keywords`, signal);
+      const keywords = seed.type === "movie" ? data.keywords?.keywords : data.keywords?.results;
+      return { type: seed.type, id: seed.id, title: String(data.title || data.name || "").slice(0, 160),
+        genreIds: (data.genres || []).filter(g => Number.isInteger(g.id) && g.id > 0).slice(0, 8).map(g => g.id),
+        keywordIds: (Array.isArray(keywords) ? keywords : []).filter(k => Number.isInteger(k.id) && k.id > 0)
+          .slice(0, 8).map(k => k.id) };
+    } catch { return { type: seed.type, id: seed.id, title: "", genreIds: [], keywordIds: [] }; }
+  };
+  const [seedDetails, avoidDetails] = await Promise.all([
+    Promise.all(seeds.map(details)), Promise.all(avoids.map(details))]);
+  const queries = [];
+  seeds.forEach(seed => {
+    for (const kind of ["recommendation", "similar"])
+      queries.push({ path: `/${seed.type}/${seed.id}/${kind === "recommendation" ? "recommendations" : "similar"}?language=en-US&page=1`,
+        type: seed.type, source: { kind, seed: seed.key } });
+  });
+  for (const type of ["movie", "tv"]) {
+    const seed = seedDetails.find(item => item.type === type && item.genreIds.length);
+    if (seed) {
+      const genreId = seed.genreIds[0], keywordId = seed.keywordIds[0];
+      queries.push({ path: `/discover/${type}?language=en-US&sort_by=popularity.desc&include_adult=false&vote_count.gte=100&with_genres=${genreId}${keywordId ? `&with_keywords=${keywordId}` : ""}&page=1`,
+        type, source: { kind: "discovery", genreId, keywordId: keywordId || null } });
+    }
+    queries.push({ path: `/trending/${type}/week?language=en-US&page=1`, type,
+      source: { kind: "trending" } });
+  }
+  // At most 3 seed details + 2 disliked details + 6 related lists + 2 discovery + 2 trending = 15 TMDB calls.
+  const settled = await Promise.allSettled(queries.map(query => tmdbJson(fetcher, env, query.path, signal)));
+  if (!settled.some(result => result.status === "fulfilled")) {
+    const error = new Error("metadata_unavailable"); error.status = 502; throw error;
+  }
+  const candidates = new Map();
+  settled.forEach((result, index) => {
+    if (result.status !== "fulfilled") return;
+    const query = queries[index], rows = Array.isArray(result.value.results) ? result.value.results : [];
+    rows.slice(0, 20).forEach(row => {
+      if (!Number.isInteger(row.id) || row.id <= 0 || row.adult) return;
+      const identity = `${query.type}:${row.id}`;
+      let candidate = candidates.get(identity);
+      if (!candidate) { candidate = recommendationTitle(row, query.type); candidates.set(identity, candidate); }
+      candidate.sources.push(query.source);
+      if (query.source.kind === "discovery" && query.source.keywordId
+          && !candidate.keywordIds.includes(query.source.keywordId))
+        candidate.keywordIds.push(query.source.keywordId); // Proven by the discover filter.
+    });
+  });
+  return { seeds: seedDetails, avoids: avoidDetails, candidates: [...candidates.values()].slice(0, 180) };
 }
 function detail(row, type) {
   const base = title(row, type);
@@ -168,7 +237,17 @@ export async function api(request, env, options = {}) {
   if (!env.TMDB_TOKEN) return json(503, { error: "metadata_unconfigured" });
   if (limited(request, Date.now())) return json(429, { error: "rate_limited" }, 0, 10);
   let path, shape, ttl;
-  if (url.pathname === "/api/search") {
+  if (url.pathname === "/api/recommendations") {
+    if ([...url.searchParams.keys()].some(k => !["seeds", "avoid"].includes(k))
+        || url.searchParams.getAll("seeds").length !== 1 || url.searchParams.getAll("avoid").length > 1)
+      return json(400, { error: "invalid_query" });
+    var recommendationSeedsValue = recommendationSeeds(url.searchParams.get("seeds"));
+    var recommendationAvoidsValue = recommendationSeeds(url.searchParams.get("avoid"));
+    if (!recommendationSeedsValue || !recommendationAvoidsValue || recommendationAvoidsValue.length > 2
+        || recommendationAvoidsValue.some(seed => recommendationSeedsValue.some(item => item.key === seed.key)))
+      return json(400, { error: "invalid_query" });
+    path = null; shape = null; ttl = 600;
+  } else if (url.pathname === "/api/search") {
     const query = (url.searchParams.get("q") || "").trim();
     const type = url.searchParams.get("type") || "all";
     if (!/^[\p{L}\p{N} .,'!?:&+\-]{1,80}$/u.test(query) || !["all", "movie", "tv"].includes(type)
@@ -195,6 +274,17 @@ export async function api(request, env, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
+    if (recommendationSeedsValue) {
+      const cacheKey = recommendationSeedsValue.map(seed => seed.key).join(",") + "|"
+        + recommendationAvoidsValue.map(seed => seed.key).join(",");
+      const cached = recommendationCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < 10 * 60 * 1000) return json(200, cached.value, ttl);
+      const value = await recommendTmdb(fetcher, env, recommendationSeedsValue,
+        recommendationAvoidsValue, controller.signal);
+      if (recommendationCache.size >= 24) recommendationCache.delete(recommendationCache.keys().next().value);
+      recommendationCache.set(cacheKey, { at: Date.now(), value });
+      return json(200, value, ttl);
+    }
     if (search) {
       const key = `${search.type}:${search.query.toLocaleLowerCase()}`;
       const cached = searchCache.get(key);

@@ -8,12 +8,14 @@
   function createApp(doc, nav, clock, options) {
     options = options || {};
     var core = root.HorizonSearchCore;
+    var recommendations = root.HorizonWatchRecommendations;
     var player = root.HorizonSearchPlayer;
     var mock = root.HorizonSearchMock;
     var useMock = options.mock === true || ((nav.hostname === "localhost" || nav.hostname === "127.0.0.1")
       && new URLSearchParams(nav.search).get("mock") === "1");
+    var previewScenario = new URLSearchParams(nav.search).get("preview-history");
     var previewHistoryMode = useMock && (nav.hostname === "localhost" || nav.hostname === "127.0.0.1")
-      && new URLSearchParams(nav.search).get("preview-history") === "1";
+      && ["1", "none", "one-show", "south-park", "multi-ratings"].indexOf(previewScenario) >= 0;
     var local = options.localStorage;
     var session = options.sessionStorage;
     try { if (!local) local = root.localStorage; } catch (_error) { local = null; }
@@ -25,6 +27,11 @@
           try { if (backing) backing.setItem(key, value); } catch (_error) { /* Keep session copy. */ } } }; }
     local = safeStorage(previewHistoryMode ? null : local);
     session = safeStorage(session);
+    if (previewScenario === "multi-ratings" && previewHistoryMode && recommendations) {
+      recommendations.setFeedback(local, "movie", 157336, "liked");
+      recommendations.setFeedback(local, "tv", 70523, "liked");
+      recommendations.setFeedback(local, "tv", 124364, "disliked");
+    }
     if (useMock && new URLSearchParams(nav.search).get("from") === "home-local") {
       session.setItem("horizon-search-local-home", "1");
     }
@@ -41,6 +48,11 @@
       nextContinue = null, homeHeroEntry = null, homeDefaultEntry = null, homeHeroToken = 0,
       homeOpenPending = false, homeOpenToken = 0, homeReturnFocus = null, homeDetailCache = new Map(),
       launchingEpisode = false, clearPending = false;
+    var homeRowMemory = Object.create(null), homeLastContent = null;
+    var homeRowOrder = ["top", "continue", "because", "recent"];
+    var recommendationPayload = null, recommendationLoadedSignature = "", recommendationPending = null,
+      recommendationWantedSignature = "", recommendationRows = { top: [], because: [], seed: null };
+    var previewRows = previewHistoryMode ? mock.previewHistory(previewScenario) : null;
     function text(id, value) { get(id).textContent = value; }
     function createPlaybackHandoff(type, id, season, episode) {
       var token = "";
@@ -76,7 +88,12 @@
     }
     function setView(name) {
       var changed = state.view !== name;
-      if (changed && state.view === "watch") { homeOpenToken += 1; homeOpenPending = false; }
+      if (changed && state.view === "watch") {
+        homeOpenToken += 1; homeOpenPending = false;
+        homeRowMemory = Object.create(null); homeLastContent = null; homeReturnFocus = null;
+        get("watch-view").scrollTop = 0;
+        homeRowOrder.forEach(function (group) { get("watch-" + group + "-row").scrollLeft = 0; });
+      }
       state.view = name;
       ["watch", "search", "details", "episodes", "history", "settings"].forEach(function (view) { get(view + "-view").hidden = view !== name; });
       get("keyboard").hidden = name !== "search" || !keyboardOpen;
@@ -116,11 +133,12 @@
       else if (target === "episodes") focus(get("episodes-back"));
       else focus(get("details-back"));
     }
-    function revealInScroller(element, scroller, horizontal, inset) {
+    function revealInScroller(element, scroller, horizontal, inset, leadingInset) {
       if (!scroller) return;
       var item = element.getBoundingClientRect(), bounds = scroller.getBoundingClientRect();
       if (horizontal) {
-        if (item.left < bounds.left + inset) scroller.scrollLeft -= bounds.left + inset - item.left;
+        if (item.left < bounds.left + (leadingInset || inset))
+          scroller.scrollLeft -= bounds.left + (leadingInset || inset) - item.left;
         else if (item.right > bounds.right - inset) scroller.scrollLeft += item.right - bounds.right + inset;
       } else {
         if (item.top < bounds.top + inset) scroller.scrollTop -= bounds.top + inset - item.top;
@@ -134,14 +152,20 @@
       var seasonStrip = element.closest("#seasons");
       var episodeScroll = element.closest("#episode-list");
       var resultScroll = element.closest("#results, #history-list, #settings-view");
-      var homeScroll = element.closest("#watch-continue-row, #watch-recent-row");
+      var homeScroll = element.closest("#watch-continue-row, #watch-recent-row, #watch-top-row, #watch-because-row");
       if (seasonStrip) revealInScroller(element, seasonStrip, true, 14);
       else if (episodeScroll) revealInScroller(element, episodeScroll, false, 18);
-      else if (homeScroll) revealInScroller(element, homeScroll, true, 18);
+      else if (homeScroll) {
+        var railEdge = get("watch-toggle").getBoundingClientRect().right;
+        revealInScroller(element, homeScroll, true, 18,
+          Math.max(18, railEdge - homeScroll.getBoundingClientRect().left + 22));
+      }
       else if (resultScroll) revealInScroller(element, resultScroll, false, 18);
-      if (element.closest("#watch-view")) revealInScroller(element, get("watch-view"), false, 16);
-      if (element === get("watch-toggle") && state.view === "watch") {
-        get("watch-view").scrollTop = 0; showHomeHero(homeDefaultEntry);
+      if (element.closest("#watch-view")) revealInScroller(element, get("watch-view"), false,
+        Math.min(156, Math.max(80, Math.round(get("watch-view").clientHeight * 0.17))));
+      if (state.view === "watch" && element.dataset.homeGroup) {
+        var identity = homeFocusIdentity(element);
+        homeRowMemory[identity.group] = identity; homeLastContent = identity;
       }
     } }
     function button(label, click, className) {
@@ -149,12 +173,16 @@
       el.dataset.focus = "1"; if (className) el.className = className;
       el.addEventListener("click", click); return el;
     }
+    function detailAction(label, click, className, action) {
+      var el = button(label, click, className);
+      el.dataset.action = action;
+      return el;
+    }
     function saveView() {
       try { if (session) session.setItem(core.STATE_KEY, JSON.stringify({ version: 1, view: state.view,
         filter: state.filter, query: state.query, type: state.title && state.title.type,
         id: state.title && state.title.id, season: state.season, subtitle: state.subtitle,
-        source: state.detailSource,
-        homeFocus: state.view === "watch" ? homeFocusIdentity(doc.activeElement) : homeReturnFocus })); }
+        source: state.detailSource })); }
       catch (_error) { /* Return falls back to search. */ }
     }
     function api(path, signal) {
@@ -226,18 +254,39 @@
     }
     function homeFocusIdentity(element) {
       if (!element || !element.closest || !element.closest("#watch-view")) return null;
+      var row = element.closest(".watch-home-row");
       return { id: element.id || "", group: element.dataset.homeGroup || "",
-        key: element.dataset.homeKey || "" };
+        key: element.dataset.homeKey || "", index: row ? Array.from(row.querySelectorAll("button")).indexOf(element) : -1 };
+    }
+    function homeRowButtons(group) {
+      var host = get("watch-" + group + "-row");
+      return host && !host.closest("[hidden]") ? Array.from(host.querySelectorAll("button")) : [];
+    }
+    function resolveHomeSelection(saved) {
+      if (!saved || homeRowOrder.indexOf(saved.group) < 0) return null;
+      var cards = homeRowButtons(saved.group);
+      return cards.find(function (card) { return card.dataset.homeKey === saved.key; })
+        || cards[Math.max(0, Math.min(Number.isInteger(saved.index) ? saved.index : 0, cards.length - 1))] || null;
+    }
+    function firstHomeButton() {
+      for (var i = 0; i < homeRowOrder.length; i++) {
+        var first = homeRowButtons(homeRowOrder[i])[0]; if (first) return first;
+      }
+      return null;
+    }
+    function nearestHomeButton(group) {
+      var index = homeRowOrder.indexOf(group);
+      if (index < 0) return firstHomeButton();
+      for (var distance = 1; distance < homeRowOrder.length; distance++) {
+        var next = homeRowOrder[index + distance], previous = homeRowOrder[index - distance];
+        if (next && homeRowButtons(next).length) return homeRowButtons(next)[0];
+        if (previous && homeRowButtons(previous).length) return homeRowButtons(previous)[0];
+      }
+      return null;
     }
     function focusHomeTarget() {
-      var saved = homeReturnFocus, target = null;
-      if (saved && saved.group && saved.key) target = Array.from(get(saved.group === "continue"
-        ? "watch-continue-row" : "watch-recent-row").querySelectorAll("button"))
-        .find(function (item) { return item.dataset.homeKey === saved.key; });
-      if (!target && saved && saved.key) target = Array.from(get("watch-view").querySelectorAll(".home-card"))
-        .find(function (item) { return item.dataset.homeKey === saved.key; });
-      else if (saved && saved.id) target = get(saved.id);
-      focus(target && !target.closest("[hidden]") ? target : get("watch-toggle"));
+      var target = resolveHomeSelection(homeReturnFocus);
+      focus(target || get("watch-toggle"));
     }
     function homeContext(row) {
       return (row.type === "tv" ? "S" + row.season + " E" + row.episode
@@ -331,7 +380,6 @@
     }
     function paintHomepage(continueRows, finishedRows) {
       var previous = homeFocusIdentity(doc.activeElement);
-      get("watch-view").classList.toggle("is-empty", !continueRows.length && !finishedRows.length);
       homeDefaultEntry = continueRows[0] ? { row: continueRows[0], group: "continue" }
         : finishedRows[0] ? { row: finishedRows[0], group: "recent" } : null;
       function rowCard(entry, group, action) {
@@ -368,24 +416,109 @@
         var entry = { row: row, group: "recent" };
         recentRow.appendChild(rowCard(entry, "recent", function () { openHomeEntry(entry); }));
       });
-      if (!continueRows.length && finishedRows.length) {
-        var waiting = doc.createElement("p"); waiting.className = "watch-empty-row";
-        waiting.textContent = "No unfinished titles."; continueRow.appendChild(waiting);
-      }
-      if (!finishedRows.length && continueRows.length) {
-        var unfinished = doc.createElement("p"); unfinished.className = "watch-empty-row";
-        unfinished.textContent = "No finished titles yet."; recentRow.appendChild(unfinished);
-      }
-      get("watch-continue-section").hidden = !continueRow.children.length;
-      get("watch-recent-section").hidden = !recentRow.children.length;
+      get("watch-continue-section").hidden = !continueRows.length;
+      get("watch-recent-section").hidden = !finishedRows.length;
+      updateHomeSections();
       if (previous && previous.group) { homeReturnFocus = previous; focusHomeTarget(); }
       else showHomeHero(homeDefaultEntry);
     }
+    function updateHomeSections() {
+      var ids = homeRowOrder.map(function (group) { return "watch-" + group + "-section"; });
+      var first = false;
+      ids.forEach(function (id) { var section = get(id);
+        section.classList.toggle("is-first-visible", !section.hidden && !first);
+        if (!section.hidden) first = true;
+      });
+      get("watch-view").classList.toggle("is-empty", !first);
+    }
+    function paintRecommendationRows(rows) {
+      recommendationRows = rows;
+      var active = homeFocusIdentity(doc.activeElement), activeGroup = active && active.group;
+      var activeRow = activeGroup === "top" || activeGroup === "because";
+      var anchor = state.view === "watch" && !activeRow && active && active.group
+        ? doc.activeElement : null;
+      var anchorY = anchor ? anchor.getBoundingClientRect().top : 0;
+      [["top", rows.top], ["because", rows.because]].forEach(function (pair) {
+        var group = pair[0], host = get("watch-" + group + "-row");
+        host.replaceChildren();
+        pair[1].forEach(function (candidate) {
+          var card = button("", function () { openDetails(candidate); },
+            "home-card home-card-poster");
+          card.dataset.homeGroup = group; card.dataset.homeKey = candidate.type + ":" + candidate.id;
+          var title = doc.createElement("strong"); title.textContent = candidate.title;
+          card.appendChild(verticalPosterArt(candidate)); card.appendChild(title);
+          card.setAttribute("aria-label", candidate.title + ", " + (candidate.type === "tv" ? "TV series" : "movie"));
+          host.appendChild(card);
+        });
+      });
+      get("watch-top-section").hidden = !rows.top.length;
+      get("watch-because-section").hidden = !rows.because.length;
+      if (rows.seed) text("watch-because-heading", "Because You "
+        + (rows.seed.liked ? "Liked " : "Watched ") + rows.seed.title);
+      updateHomeSections();
+      if (anchor && anchor.isConnected) {
+        var view = get("watch-view"), movement = anchor.getBoundingClientRect().top - anchorY;
+        if (Math.abs(movement) > 1) {
+          var behavior = view.style.scrollBehavior;
+          view.style.scrollBehavior = "auto"; view.scrollTop += movement;
+          view.style.scrollBehavior = behavior;
+        }
+      }
+      if (activeRow && state.view === "watch") {
+        focus(resolveHomeSelection(active) || nearestHomeButton(activeGroup) || get("watch-toggle"));
+      }
+    }
+    function recommendationSignature(rows, feedback) {
+      return recommendations.seedQuery(rows, feedback) + "|" + feedback.revision + "|"
+        + rows.map(function (row) { return row.type + ":" + row.id + ":"
+          + (row.progress && row.progress.updatedAt || 0) + ":" + (row.progress && row.progress.completed || false);
+        }).join(",");
+    }
+    function refreshRecommendations() {
+      if (!recommendations || disposed) return;
+      var rows = previewRows || core.readHistory(local), feedback = recommendations.readFeedback(local);
+      var signature = recommendationSignature(rows, feedback);
+      recommendationWantedSignature = signature;
+      if (recommendationLoadedSignature === signature) return;
+      if (recommendationPayload) paintRecommendationRows(recommendations.selectRows(rows, feedback, recommendationPayload));
+      if (recommendationPending) return;
+      if (!recommendationPayload) paintRecommendationRows(recommendationRows);
+      var params = new URLSearchParams(nav.search);
+      var task = useMock ? new Promise(function (resolve) {
+        clock.setTimeout(function () { var payload = params.get("rec-fail") === "1"
+          ? { seeds: [], candidates: [] } : mock.recommendations();
+          if (params.get("rec-one-row") === "1") payload.candidates = payload.candidates.filter(function (row) {
+            return row.sources.some(function (source) { return source.kind === "trending"; });
+          });
+          resolve({ payload: payload });
+        }, params.get("rec-delay") === "1" ? 900 : 0);
+      }) : recommendations.loadBundle(local, function (path) {
+        var request = options.request || root.fetch.bind(root), controller = new AbortController();
+        var timer = clock.setTimeout(function () { controller.abort(); }, 6500);
+        return request(path, { credentials: "same-origin", signal: controller.signal })
+          .finally(function () { clock.clearTimeout(timer); });
+      });
+      recommendationPending = task;
+      task.then(function (bundle) {
+        if (disposed || recommendationPending !== task) return;
+        recommendationPayload = bundle.payload;
+        if (recommendationWantedSignature !== signature) return;
+        recommendationLoadedSignature = signature;
+        paintRecommendationRows(recommendations.selectRows(rows, feedback, bundle.payload));
+      }, function () {
+        if (!disposed && recommendationWantedSignature === signature)
+          paintRecommendationRows({ top: [], because: [], seed: null });
+      }).finally(function () {
+        if (recommendationPending === task) recommendationPending = null;
+        if (!disposed && recommendationWantedSignature !== signature) refreshRecommendations();
+      });
+    }
     function renderHomepage() {
-      var rows = previewHistoryMode ? mock.previewHistory() : core.readHistory(local);
+      var rows = previewRows || core.readHistory(local);
       paintHomepage(core.homepageContinueCandidates(rows).filter(function (row) {
         return !core.isContinueHidden(local, row);
       }), core.homepageFinished(rows));
+      refreshRecommendations();
     }
     function showWatch(resetFocus) {
       if (resetFocus === true) homeReturnFocus = null;
@@ -666,19 +799,54 @@
     }
     function renderActions() {
       var actions = get("detail-actions");
-      var focusedClass = actions.contains(doc.activeElement) && doc.activeElement.classList.contains("detail-secondary")
-        ? "detail-secondary" : actions.contains(doc.activeElement) ? "detail-primary" : null;
+      var focusedAction = actions.contains(doc.activeElement) ? doc.activeElement.dataset.action : null;
       actions.replaceChildren();
+      function restoreActionFocus() {
+        if (focusedAction) focus(actions.querySelector('[data-action="' + focusedAction + '"]:not(:disabled)')
+          || actions.querySelector("button:not(:disabled)"));
+      }
+      function appendFeedbackActions() {
+        var feedback = root.HorizonWatchRecommendations;
+        if (!feedback || !state.title) return;
+        var type = state.title.type, id = state.title.id;
+        function syncFeedback() {
+          var selected = feedback.readFeedback(local).ratings[type + ":" + id] || "neutral";
+          actions.querySelectorAll(".detail-feedback").forEach(function (el) {
+            var active = el.dataset.feedback === selected;
+            el.classList.toggle("is-selected", active);
+            el.setAttribute("aria-pressed", active ? "true" : "false");
+          });
+        }
+        function add(stateValue, label) {
+          var el = detailAction(label, function () {
+            var current = feedback.readFeedback(local).ratings[type + ":" + id] || "neutral";
+            if (feedback.setFeedback(local, type, id, current === stateValue ? "neutral" : stateValue)) {
+              syncFeedback(); refreshRecommendations();
+            }
+          }, "detail-secondary detail-feedback", stateValue);
+          el.dataset.feedback = stateValue;
+          var icon = doc.createElement("span"); icon.className = "detail-feedback-icon";
+          icon.setAttribute("aria-hidden", "true");
+          icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v10H4a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2h3Zm0 0 5-7a2 2 0 0 1 2-1c1.1 0 1.8.9 1.6 2L15 8h5a2 2 0 0 1 2 2l-1.2 8a2 2 0 0 1-2 2H7"/></svg>';
+          var text = doc.createElement("span"); text.textContent = label;
+          el.replaceChildren(icon, text);
+          actions.appendChild(el);
+        }
+        add("liked", "Like"); add("disliked", "Dislike");
+        syncFeedback();
+      }
       if (state.title.type === "movie") {
         var movieHistory = core.readHistory(local).find(function (row) {
           return row.type === "movie" && row.id === state.title.id;
         });
         var movieProgress = movieHistory && movieHistory.progress && !movieHistory.progress.completed
           ? movieHistory.progress : null;
-        actions.appendChild(button(movieProgress ? "Resume movie" : "Play movie",
-          function () { launchMovie(false); }, "detail-primary"));
-        if (movieProgress) actions.appendChild(button("Start Over", function () { launchMovie(true); }, "detail-secondary"));
-        if (focusedClass) focus(actions.querySelector("." + focusedClass) || actions.querySelector(".detail-primary"));
+        actions.appendChild(detailAction(movieProgress ? "Resume movie" : "Play movie",
+          function () { launchMovie(false); }, "detail-primary", "primary"));
+        if (movieProgress) actions.appendChild(detailAction("Start Over", function () { launchMovie(true); },
+          "detail-secondary", "start-over"));
+        appendFeedbackActions();
+        restoreActionFocus();
         return;
       }
       if (state.title.type === "tv") {
@@ -691,7 +859,7 @@
         if (completed) resolveNextContinue(recent);
         var next = completed && nextContinue && nextContinue.status === "ready" ? nextContinue.target : null;
         var noNext = completed && nextContinue && nextContinue.status === "unavailable";
-        var primary = button(resumable ? "Resume S" + recent.season + " E" + recent.episode
+        var primary = detailAction(resumable ? "Resume S" + recent.season + " E" + recent.episode
           : next ? "Continue S" + next.season + " E" + next.episode
             : noNext ? "Episodes" : completed ? "Checking next episode…"
               : recent ? "Continue S" + recent.season + " E" + recent.episode : "Start watching",
@@ -700,7 +868,7 @@
             else if (noNext) browseEpisodes();
             else if (recent && !completed) launchEpisode(recent.season, recent.episode, false);
             else if (state.season && state.episodes.length) launchEpisode(state.season, state.episodes[0].number);
-          }, "detail-primary");
+          }, "detail-primary", "primary");
         primary.disabled = completed && !next && !noNext || !recent && !state.episodes.length;
         primary.setAttribute("aria-label", resumable ? "Resume Season " + recent.season + ", Episode " + recent.episode
           : next ? "Continue with Season " + next.season + ", Episode " + next.episode
@@ -710,17 +878,16 @@
             : "Start watching when episode metadata loads");
         if (!recent && state.episodes.length) primary.textContent = "Play S" + state.season + " E" + state.episodes[0].number;
         actions.appendChild(primary);
-        if (resumable) actions.appendChild(button("Start Over", function () {
+        if (resumable) actions.appendChild(detailAction("Start Over", function () {
           launchEpisode(recent.season, recent.episode, true);
-        }, "detail-secondary"));
-        if (!noNext) actions.appendChild(button("Episodes", browseEpisodes, "detail-secondary"));
-        if (focusedClass) focus(actions.querySelector("." + focusedClass + ":not(:disabled)")
-          || actions.querySelector("button:not(:disabled)"));
+        }, "detail-secondary", "start-over"));
+        if (!noNext) actions.appendChild(detailAction("Episodes", browseEpisodes, "detail-secondary", "episodes"));
+        appendFeedbackActions();
+        restoreActionFocus();
       }
     }
     function openDetails(row, episodeTarget) {
       detailToken += 1; seasonToken += 1;
-      if (state.view === "watch") homeReturnFocus = homeFocusIdentity(doc.activeElement);
       if (episodeTarget && row.type === "tv") pendingEpisodeFocus = { season: episodeTarget.season, episode: episodeTarget.episode };
       state.detailSource = state.view === "history" ? "history" : state.view === "watch" ? "watch" : "search";
       state.title = row; state.detail = null; state.season = null; nextContinue = null;
@@ -998,25 +1165,36 @@
         return;
       }
       if (state.view === "watch") {
-        var cont = Array.from(get("watch-continue-row").querySelectorAll("button"));
-        var recent = Array.from(get("watch-recent-row").querySelectorAll("button"));
-        var first = cont[0] || recent[0] || get("search-toggle");
+        var watchRows = homeRowOrder.map(homeRowButtons);
+        var first = firstHomeButton() || get("search-toggle");
         var rail = [get("watch-toggle"), get("search-toggle"), get("history-toggle"), get("settings-toggle")];
         if (current.closest(".watch-rail")) {
           var railIndex = rail.indexOf(current);
           if (key === "ArrowDown") focus(rail[Math.min(rail.length - 1, railIndex + 1)]);
           else if (key === "ArrowUp") focus(rail[Math.max(0, railIndex - 1)]);
-          else if (key === "ArrowRight") focus(current === get("history-toggle") ? recent[0] || first : first);
+          else if (key === "ArrowRight") focus(resolveHomeSelection(homeLastContent)
+            || homeLastContent && nearestHomeButton(homeLastContent.group) || first);
           return;
         }
-        var group = cont.indexOf(current) >= 0 ? cont : recent.indexOf(current) >= 0 ? recent : null;
+        var groupIndex = watchRows.findIndex(function (row) { return row.indexOf(current) >= 0; });
+        var group = groupIndex >= 0 ? watchRows[groupIndex] : null;
         if (group) {
-          var index = group.indexOf(current), down = group === cont ? recent : [],
-            up = group === recent ? cont : [];
+          var index = group.indexOf(current), down = [], up = [];
+          for (var next = groupIndex + 1; next < watchRows.length; next++) if (watchRows[next].length) {
+            down = watchRows[next]; break;
+          }
+          for (var previous = groupIndex - 1; previous >= 0; previous--) if (watchRows[previous].length) {
+            up = watchRows[previous]; break;
+          }
           if (key === "ArrowLeft") focus(group[index - 1] || get("watch-toggle"));
           else if (key === "ArrowRight") focus(group[index + 1]);
-          else if (key === "ArrowDown") focus(down.length ? down[Math.min(index, down.length - 1)] : get("history-toggle"));
-          else if (key === "ArrowUp") focus(up.length ? up[Math.min(index, up.length - 1)] : get("watch-toggle"));
+          else if (key === "ArrowDown") {
+            var downGroup = homeRowOrder[watchRows.indexOf(down)];
+            focus(down.length ? resolveHomeSelection(homeRowMemory[downGroup]) || down[0] : get("history-toggle"));
+          } else if (key === "ArrowUp") {
+            var upGroup = homeRowOrder[watchRows.indexOf(up)];
+            focus(up.length ? resolveHomeSelection(homeRowMemory[upGroup]) || up[0] : get("watch-toggle"));
+          }
           return;
         }
       }
@@ -1230,7 +1408,6 @@
       }
       if (saved && saved.version === 1 && ["all", "movie", "tv"].indexOf(saved.filter) >= 0) {
         state.detailSource = ["history", "watch"].indexOf(saved.source) >= 0 ? saved.source : "search";
-        if (saved.homeFocus && typeof saved.homeFocus === "object") homeReturnFocus = saved.homeFocus;
         state.filter = saved.filter; state.query = String(saved.query || "").slice(0, 80); query.value = state.query;
         doc.querySelectorAll("[data-filter]").forEach(function (b) { b.classList.toggle("is-current", b.dataset.filter === state.filter); });
         if (state.query.length >= 2) scheduleSearch(0);

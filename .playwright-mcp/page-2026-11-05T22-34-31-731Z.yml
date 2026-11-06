@@ -1,0 +1,85 @@
+- main [ref=f13e2]:
+  - navigation "Horizon Watch navigation" [ref=f13e3]:
+    - button "Watch homepage" [active] [ref=f13e4] [cursor=pointer]:
+      - generic [ref=f13e5]: Watch Home
+    - button "Search" [ref=f13e6] [cursor=pointer]
+    - button "Watch History" [ref=f13e8] [cursor=pointer]:
+      - generic [ref=f13e9]: History
+    - button "Watch Settings" [ref=f13e10] [cursor=pointer]:
+      - generic [ref=f13e11]: Settings
+  - generic [ref=f13e12]:
+    - generic:
+      - generic [aria-hidden]:
+        - text: HORIZON
+        - generic: WATCH
+    - region "Watch homepage" [ref=f13e13]:
+      - generic [ref=f13e15]:
+        - heading "South Park" [level=1] [ref=f13e16]
+        - paragraph [ref=f13e17]: 1997 · TV Series · S13 E2
+        - paragraph [ref=f13e18]: Four friends navigate life in the small town of South Park.
+      - region "Top Picks for You" [ref=f13e19]:
+        - heading "Top Picks for You" [level=2] [ref=f13e20]
+        - generic [ref=f13e21]:
+          - button "Family Guy, TV series" [ref=f13e22] [cursor=pointer]:
+            - generic [ref=f13e23]: Family Guy
+            - strong [ref=f13e25]: Family Guy
+          - button "Resident Evil, movie" [ref=f13e26] [cursor=pointer]:
+            - generic [ref=f13e27]: Resident Evil
+            - strong [ref=f13e29]: Resident Evil
+          - button "MobLand, TV series" [ref=f13e30] [cursor=pointer]:
+            - generic [ref=f13e31]: MobLand
+            - strong [ref=f13e33]: MobLand
+          - button "Verity, movie" [ref=f13e34] [cursor=pointer]:
+            - generic [ref=f13e35]: Verity
+            - strong [ref=f13e37]: Verity
+          - button "American Dad!, TV series" [ref=f13e38] [cursor=pointer]:
+            - generic [ref=f13e39]: American Dad!
+            - strong [ref=f13e41]: American Dad!
+          - button "Primetime, movie" [ref=f13e42] [cursor=pointer]:
+            - generic [ref=f13e43]: Primetime
+            - strong [ref=f13e45]: Primetime
+          - button "Godzilla Minus Zero, movie" [ref=f13e46] [cursor=pointer]:
+            - generic [ref=f13e47]: Godzilla Minus Zero
+            - strong [ref=f13e49]: Godzilla Minus Zero
+          - button "Nocturne, TV series" [ref=f13e50] [cursor=pointer]:
+            - generic [ref=f13e51]: Nocturne
+            - strong [ref=f13e53]: Nocturne
+      - region "Continue Watching" [ref=f13e54]:
+        - heading "Continue Watching" [level=2] [ref=f13e55]
+        - button "Continue South Park, S13 E2" [ref=f13e57] [cursor=pointer]:
+          - generic [ref=f13e59]:
+            - strong [ref=f13e60]: South Park
+            - generic [ref=f13e61]: S13 E2
+      - region "Because You Watched" [ref=f13e64]:
+        - heading "Because You Watched South Park" [level=2] [ref=f13e65]
+        - generic [ref=f13e66]:
+          - button "Big Mouth, TV series" [ref=f13e67] [cursor=pointer]:
+            - generic [ref=f13e68]: Big Mouth
+            - strong [ref=f13e70]: Big Mouth
+          - button "Robot Chicken, TV series" [ref=f13e71] [cursor=pointer]:
+            - generic [ref=f13e72]: Robot Chicken
+            - strong [ref=f13e74]: Robot Chicken
+          - button "Inside Job, TV series" [ref=f13e75] [cursor=pointer]:
+            - generic [ref=f13e76]: Inside Job
+            - strong [ref=f13e78]: Inside Job
+          - button "Portlandia, TV series" [ref=f13e79] [cursor=pointer]:
+            - generic [ref=f13e80]: Portlandia
+            - strong [ref=f13e82]: Portlandia
+          - button "A.P. Bio, TV series" [ref=f13e83] [cursor=pointer]:
+            - generic [ref=f13e84]: A.P. Bio
+            - strong [ref=f13e86]: A.P. Bio
+          - button "Kenny vs. Spenny, TV series" [ref=f13e87] [cursor=pointer]:
+            - generic [ref=f13e88]: Kenny vs. Spenny
+            - strong [ref=f13e90]: Kenny vs. Spenny
+          - button "Beavis and Butt-Head, TV series" [ref=f13e91] [cursor=pointer]:
+            - generic [ref=f13e92]: Beavis and Butt-Head
+            - strong [ref=f13e94]: Beavis and Butt-Head
+          - button "Ugly Americans, TV series" [ref=f13e95] [cursor=pointer]:
+            - generic [ref=f13e96]: Ugly Americans
+            - strong [ref=f13e98]: Ugly Americans
+          - button "Aqua Teen Hunger Force, TV series" [ref=f13e99] [cursor=pointer]:
+            - generic [ref=f13e100]: Aqua Teen Hunger Force
+            - strong [ref=f13e102]: Aqua Teen Hunger Force
+          - button "Duncanville, TV series" [ref=f13e103] [cursor=pointer]:
+            - generic [ref=f13e104]: Duncanville
+            - strong [ref=f13e106]: Duncanville

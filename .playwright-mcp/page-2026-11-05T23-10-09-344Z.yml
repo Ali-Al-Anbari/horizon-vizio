@@ -1,0 +1,126 @@
+- main [ref=f19e2]:
+  - navigation "Horizon Watch navigation" [ref=f19e3]:
+    - button "Watch homepage" [active] [ref=f19e4] [cursor=pointer]:
+      - generic [ref=f19e5]: Watch Home
+    - button "Search" [ref=f19e6] [cursor=pointer]
+    - button "Watch History" [ref=f19e8] [cursor=pointer]:
+      - generic [ref=f19e9]: History
+    - button "Watch Settings" [ref=f19e10] [cursor=pointer]:
+      - generic [ref=f19e11]: Settings
+  - region "Watch homepage" [ref=f19e13]:
+    - generic [ref=f19e14]:
+      - generic [aria-hidden] [ref=f19e15]:
+        - text: HORIZON
+        - generic [ref=f19e16]: WATCH
+      - generic [ref=f19e17]:
+        - heading "South Park" [level=1] [ref=f19e18]
+        - paragraph [ref=f19e19]: 1997 · TV Series · S13 E2
+        - paragraph [ref=f19e20]: Four friends navigate life in the small town of South Park.
+    - region "Top Picks for You" [ref=f19e21]:
+      - heading "Top Picks for You" [level=2] [ref=f19e22]
+      - generic [ref=f19e23]:
+        - button "FROM, TV series" [ref=f19e24] [cursor=pointer]:
+          - generic [ref=f19e25]: FROM
+          - strong [ref=f19e27]: FROM
+        - button "Better Call Saul, TV series" [ref=f19e28] [cursor=pointer]:
+          - generic [ref=f19e29]: Better Call Saul
+          - strong [ref=f19e31]: Better Call Saul
+        - button "Project Hail Mary, movie" [ref=f19e32] [cursor=pointer]:
+          - generic [ref=f19e33]: Project Hail Mary
+          - strong [ref=f19e35]: Project Hail Mary
+        - button "Family Guy, TV series" [ref=f19e36] [cursor=pointer]:
+          - generic [ref=f19e37]: Family Guy
+          - strong [ref=f19e39]: Family Guy
+        - button "Resident Evil, movie" [ref=f19e40] [cursor=pointer]:
+          - generic [ref=f19e41]: Resident Evil
+          - strong [ref=f19e43]: Resident Evil
+        - button "MobLand, TV series" [ref=f19e44] [cursor=pointer]:
+          - generic [ref=f19e45]: MobLand
+          - strong [ref=f19e47]: MobLand
+        - button "American Dad!, TV series" [ref=f19e48] [cursor=pointer]:
+          - generic [ref=f19e49]: American Dad!
+          - strong [ref=f19e51]: American Dad!
+        - button "Verity, movie" [ref=f19e52] [cursor=pointer]:
+          - generic [ref=f19e53]: Verity
+          - strong [ref=f19e55]: Verity
+    - region "Continue Watching" [ref=f19e56]:
+      - heading "Continue Watching" [level=2] [ref=f19e57]
+      - generic [ref=f19e58]:
+        - button "Continue South Park, S13 E2" [ref=f19e59] [cursor=pointer]:
+          - generic [ref=f19e61]:
+            - strong [ref=f19e62]: South Park
+            - generic [ref=f19e63]: S13 E2
+        - button "Continue Dark, S2 E4" [ref=f19e66] [cursor=pointer]:
+          - generic [ref=f19e68]:
+            - strong [ref=f19e69]: Dark
+            - generic [ref=f19e70]: S2 E4
+        - button "Continue Breaking Bad, S3 E7" [ref=f19e73] [cursor=pointer]:
+          - generic [ref=f19e75]:
+            - strong [ref=f19e76]: Breaking Bad
+            - generic [ref=f19e77]: S3 E7
+        - button "Continue Interstellar, Movie" [ref=f19e80] [cursor=pointer]:
+          - generic [ref=f19e82]:
+            - strong [ref=f19e83]: Interstellar
+            - generic [ref=f19e84]: Movie
+        - button "Continue Stranger Things, S4 E5" [ref=f19e87] [cursor=pointer]:
+          - generic [ref=f19e89]:
+            - strong [ref=f19e90]: Stranger Things
+            - generic [ref=f19e91]: S4 E5
+        - button "Continue The Last of Us, S1 E6" [ref=f19e94] [cursor=pointer]:
+          - generic [ref=f19e96]:
+            - strong [ref=f19e97]: The Last of Us
+            - generic [ref=f19e98]: S1 E6
+    - region "Because You Watched" [ref=f19e101]:
+      - heading "Because You Watched South Park" [level=2] [ref=f19e102]
+      - generic [ref=f19e103]:
+        - button "Big Mouth, TV series" [ref=f19e104] [cursor=pointer]:
+          - generic [ref=f19e105]: Big Mouth
+          - strong [ref=f19e107]: Big Mouth
+        - button "Robot Chicken, TV series" [ref=f19e108] [cursor=pointer]:
+          - generic [ref=f19e109]: Robot Chicken
+          - strong [ref=f19e111]: Robot Chicken
+        - button "Inside Job, TV series" [ref=f19e112] [cursor=pointer]:
+          - generic [ref=f19e113]: Inside Job
+          - strong [ref=f19e115]: Inside Job
+        - button "Portlandia, TV series" [ref=f19e116] [cursor=pointer]:
+          - generic [ref=f19e117]: Portlandia
+          - strong [ref=f19e119]: Portlandia
+        - button "A.P. Bio, TV series" [ref=f19e120] [cursor=pointer]:
+          - generic [ref=f19e121]: A.P. Bio
+          - strong [ref=f19e123]: A.P. Bio
+        - button "Kenny vs. Spenny, TV series" [ref=f19e124] [cursor=pointer]:
+          - generic [ref=f19e125]: Kenny vs. Spenny
+          - strong [ref=f19e127]: Kenny vs. Spenny
+        - button "Beavis and Butt-Head, TV series" [ref=f19e128] [cursor=pointer]:
+          - generic [ref=f19e129]: Beavis and Butt-Head
+          - strong [ref=f19e131]: Beavis and Butt-Head
+        - button "Ugly Americans, TV series" [ref=f19e132] [cursor=pointer]:
+          - generic [ref=f19e133]: Ugly Americans
+          - strong [ref=f19e135]: Ugly Americans
+        - button "Aqua Teen Hunger Force, TV series" [ref=f19e136] [cursor=pointer]:
+          - generic [ref=f19e137]: Aqua Teen Hunger Force
+          - strong [ref=f19e139]: Aqua Teen Hunger Force
+        - button "Duncanville, TV series" [ref=f19e140] [cursor=pointer]:
+          - generic [ref=f19e141]: Duncanville
+          - strong [ref=f19e143]: Duncanville
+    - region "Recently Finished" [ref=f19e144]:
+      - heading "Recently Finished" [level=2] [ref=f19e145]
+      - generic [ref=f19e146]:
+        - 'button "Finished Cyberpunk: Edgerunners, S1 E10" [ref=f19e147] [cursor=pointer]':
+          - generic [ref=f19e148]: "Cyberpunk: Edgerunners"
+          - strong [ref=f19e150]: "Cyberpunk: Edgerunners"
+        - button "Finished The Dark Knight, Movie" [ref=f19e151] [cursor=pointer]:
+          - generic [ref=f19e152]: The Dark Knight
+          - strong [ref=f19e154]: The Dark Knight
+        - button "Finished Dune, Movie" [ref=f19e155] [cursor=pointer]:
+          - generic [ref=f19e156]: Dune
+          - strong [ref=f19e158]: Dune
+        - button "Finished Oppenheimer, Movie" [ref=f19e159] [cursor=pointer]:
+          - generic [ref=f19e160]: Oppenheimer
+          - strong [ref=f19e162]: Oppenheimer
+        - button "Finished Severance, S1 E9" [ref=f19e163] [cursor=pointer]:
+          - generic [ref=f19e164]: Severance
+          - strong [ref=f19e166]: Severance
+        - button "Finished Arcane, S2 E9" [ref=f19e167] [cursor=pointer]:
+          - generic [ref=f19e168]: Arcane
+          - strong [ref=f19e170]: Arcane

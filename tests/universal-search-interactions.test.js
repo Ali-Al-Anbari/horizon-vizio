@@ -42,7 +42,7 @@ test("Watch home follows the reference layout and routes cards through the exist
   assert.match(source, /if \(episodeTarget \|\| state\.view === "episodes"\) browseEpisodes\(\)/);
   assert.match(source, /event\.target\.homeEntry\) showHomeHero\(event\.target\.homeEntry\)/);
   assert.match(source, /railOrder = \[get\("watch-toggle"\), get\("search-toggle"\), get\("history-toggle"\), get\("settings-toggle"\)\]/);
-  assert.match(source, /revealInScroller\(element, homeScroll, true, 18\)/);
+  assert.match(source, /revealInScroller\(element, homeScroll, true, 18,[\s\S]*?railEdge/);
   assert.match(css, /body\.watch-active \.watch-home \{[^}]*overflow-y: auto/s);
   assert.match(css, /body\.watch-active \.watch-hero \{[^}]*min-height:/s);
   assert.match(css, /body\.watch-active \.home-card-poster \.poster-art \{[^}]*aspect-ratio: 2 \/ 3/s);
@@ -65,7 +65,7 @@ test("details retain separate Episodes routing and verified metadata without inl
   assert.match(html, /id="detail-information"/);
   assert.match(html, /id="episodes-view"/);
   assert.doesNotMatch(html, /id="detail-episodes"|id="detail-season-toggle"|id="providers"/);
-  assert.match(source, /button\("Episodes", browseEpisodes/);
+  assert.match(source, /detailAction\("Episodes", browseEpisodes/);
   assert.doesNotMatch(source, /Mark as watched|Mark as unwatched|setEpisodeWatched/);
   assert.match(coreSource, /row\.manualWatched === true/);
 });

@@ -1,0 +1,26 @@
+- main [ref=f3e2]:
+  - navigation "Horizon Watch navigation" [ref=f3e3]:
+    - button "Watch homepage" [ref=f3e4] [cursor=pointer]:
+      - generic [ref=f3e5]: Watch Home
+    - button "Search" [ref=f3e6] [cursor=pointer]
+    - button "Watch History" [ref=f3e8] [cursor=pointer]:
+      - generic [ref=f3e9]: History
+    - button "Watch Settings" [ref=f3e10] [cursor=pointer]:
+      - generic [ref=f3e11]: Settings
+  - region "Show details" [ref=f3e95]:
+    - button "Back to results" [ref=f3e97] [cursor=pointer]: ← Results
+    - generic [ref=f3e98]:
+      - heading "FROM" [level=1] [ref=f3e99]
+      - paragraph [ref=f3e100]: TV series · 2 seasons
+      - paragraph [ref=f3e101]: No synopsis available.
+      - generic [ref=f3e102]:
+        - button "Play Season 13, Episode 1" [active] [ref=f3e103] [cursor=pointer]: Play S13 E1
+        - button "Episodes" [ref=f3e104] [cursor=pointer]
+        - button "Like" [ref=f3e105] [cursor=pointer]
+        - button "Dislike" [ref=f3e110] [cursor=pointer]
+      - status [ref=f3e115]
+    - paragraph [ref=f3e116]:
+      - text: "Credits · Metadata:"
+      - link "The Movie Database" [ref=f3e117] [cursor=pointer]:
+        - /url: https://www.themoviedb.org/
+        - text: TMDB

@@ -1,0 +1,26 @@
+- main [ref=f15e2]:
+  - navigation "Horizon Watch navigation" [ref=f15e3]:
+    - button "Watch homepage" [ref=f15e4] [cursor=pointer]:
+      - generic [ref=f15e5]: Watch Home
+    - button "Search" [ref=f15e6] [cursor=pointer]
+    - button "Watch History" [ref=f15e8] [cursor=pointer]:
+      - generic [ref=f15e9]: History
+    - button "Watch Settings" [active] [ref=f15e10] [cursor=pointer]:
+      - generic [ref=f15e11]: Settings
+  - generic [ref=f15e12]:
+    - generic [ref=f15e169]: HORIZON WATCH
+    - region "Watch Settings" [ref=f15e192]:
+      - heading "Settings" [level=1] [ref=f15e193]
+      - region "Manage Continue Watching" [ref=f15e194]:
+        - heading "Continue Watching" [level=2] [ref=f15e195]
+        - paragraph [ref=f15e197]: No unfinished titles saved.
+      - region "Manage History" [ref=f15e198]:
+        - heading "Viewing History" [level=2] [ref=f15e199]
+        - paragraph [ref=f15e201]: No saved viewing history.
+      - region "About and Credits" [ref=f15e202]:
+        - heading "About & Credits" [level=2] [ref=f15e203]
+        - link "The Movie Database" [ref=f15e204] [cursor=pointer]:
+          - /url: https://www.themoviedb.org/
+          - img "TMDB" [ref=f15e205]
+        - paragraph [ref=f15e206]: This product uses the TMDB API but is not endorsed or certified by TMDB.
+        - paragraph [ref=f15e207]: Viewing history and progress are stored on this device.

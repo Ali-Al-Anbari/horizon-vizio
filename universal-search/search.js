@@ -54,6 +54,7 @@
       homeOpenPending = false, homeOpenToken = 0, homeReturnFocus = null, homeDetailCache = new Map(),
       launchingEpisode = false, clearPending = false;
     var homeRowMemory = Object.create(null), homeLastContent = null;
+    var homeScrollFrame = 0;
     var catalogRequests = Object.create(null);
     var homeRowOrder = ["continue", "top", "because", "recent"];
     var recommendationPayload = null, recommendationLoadedSignature = "", recommendationPending = null,
@@ -95,6 +96,8 @@
     function setView(name) {
       var changed = state.view !== name;
       if (changed && state.view === "watch") {
+        if (homeScrollFrame) clock.cancelAnimationFrame(homeScrollFrame);
+        homeScrollFrame = 0;
         homeOpenToken += 1; homeOpenPending = false;
         homeRowMemory = Object.create(null); homeLastContent = null; homeReturnFocus = null;
         get("watch-rows-scroll").scrollTop = 0;
@@ -165,12 +168,48 @@
       var bottomInset = 8, available = bounds.height - topInset - bottomInset;
       if (bottom - top > available) {
         // Keep the complete card visible if a TV reports a larger text scale.
-        scroller.scrollTop += bottom - bounds.bottom + bottomInset;
+        scrollHomeRows(scroller, bottom - bounds.bottom + bottomInset);
       } else if (top < bounds.top + topInset) {
-        scroller.scrollTop -= bounds.top + topInset - top;
+        scrollHomeRows(scroller, -(bounds.top + topInset - top));
       } else if (bottom > bounds.bottom - bottomInset) {
-        scroller.scrollTop += bottom - bounds.bottom + bottomInset;
+        scrollHomeRows(scroller, bottom - bounds.bottom + bottomInset);
       }
+    }
+    function scrollHomeRows(scroller, delta) {
+      var destination = scroller.scrollTop + delta;
+      if (homeScrollFrame) clock.cancelAnimationFrame(homeScrollFrame);
+      homeScrollFrame = 0;
+      if (!clock.requestAnimationFrame || !clock.cancelAnimationFrame || !clock.matchMedia
+          || clock.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        scroller.scrollTop = destination; return;
+      }
+      var start = scroller.scrollTop, began = 0;
+      function frame(now) {
+        if (!began) began = now;
+        var progress = Math.min(1, (now - began) / 200), eased = 1 - Math.pow(1 - progress, 3);
+        scroller.scrollTop = start + (destination - start) * eased;
+        homeScrollFrame = progress < 1 ? clock.requestAnimationFrame(frame) : 0;
+      }
+      homeScrollFrame = clock.requestAnimationFrame(frame);
+    }
+    function glideHomeFocus(previous, element, rowScrolled) {
+      var home = get("watch-view"), glide = get("watch-focus-glide");
+      var active = state.view === "watch" && previous && previous.dataset.homeGroup
+        && previous.dataset.homeGroup === element.dataset.homeGroup && !rowScrolled
+        && clock.CSS && clock.CSS.supports && clock.CSS.supports("transform", "translate3d(0,0,0)")
+        && (!clock.matchMedia || !clock.matchMedia("(prefers-reduced-motion: reduce)").matches);
+      if (!active) { home.classList.remove("has-focus-glide"); return; }
+      var bounds = home.getBoundingClientRect(), from = previous.querySelector(".poster-art").getBoundingClientRect();
+      var to = element.querySelector(".poster-art").getBoundingClientRect();
+      if (!home.classList.contains("has-focus-glide")) {
+        glide.style.transition = "none";
+        glide.style.width = from.width + 6 + "px"; glide.style.height = from.height + 6 + "px";
+        glide.style.transform = "translate3d(" + (from.left - bounds.left - 3) + "px," + (from.top - bounds.top - 3) + "px,0)";
+        glide.offsetWidth;
+        glide.style.transition = "";
+      }
+      glide.style.transform = "translate3d(" + (to.left - bounds.left - 3) + "px," + (to.top - bounds.top - 3) + "px,0)";
+      home.classList.add("has-focus-glide");
     }
     function syncActiveHomeHeading(element) {
       var heading = get("watch-active-heading"), section = element && element.closest(".watch-home-section");
@@ -195,6 +234,7 @@
       var episodeScroll = element.closest("#episode-list");
       var resultScroll = element.closest("#results, #history-list, #settings-view");
       var homeScroll = element.closest("#watch-continue-row, #watch-recent-row, #watch-top-row, #watch-because-row");
+      var homeScrollBefore = homeScroll && homeScroll.scrollLeft;
       if (seasonStrip) revealInScroller(element, seasonStrip, true, 14);
       else if (episodeScroll) revealInScroller(element, episodeScroll, false, 18);
       else if (homeScroll) {
@@ -206,6 +246,7 @@
       if (!skipHomeVertical && element.closest("#watch-rows-scroll")
           && previousHomeGroup !== element.dataset.homeGroup)
         revealHomeSection(element);
+      glideHomeFocus(previous, element, homeScroll && homeScroll.scrollLeft !== homeScrollBefore);
       syncActiveHomeHeading(element);
       if (state.view === "watch" && element.dataset.homeGroup) {
         var identity = homeFocusIdentity(element);
@@ -1437,8 +1478,12 @@
     });
     get("watch-rows-scroll").addEventListener("scroll", function () {
       get("watch-view").classList.toggle("has-row-scroll", get("watch-rows-scroll").scrollTop > 1);
+      get("watch-view").classList.remove("has-focus-glide");
       if (state.view === "watch" && doc.activeElement.dataset.homeGroup)
         syncActiveHomeHeading(doc.activeElement);
+    });
+    doc.querySelectorAll(".watch-home-row").forEach(function (row) {
+      row.addEventListener("scroll", function () { get("watch-view").classList.remove("has-focus-glide"); });
     });
     clock.addEventListener("resize", function () {
       if (state.view === "watch" && doc.activeElement && doc.activeElement.dataset.homeGroup) {

@@ -11,6 +11,15 @@
         ],
         "createdAt": "2026-11-05T21:05:37.418Z",
         "reason": "Phase 1 user instruction requires the Watch homepage to remain visually unchanged; this HTML edit only loads a deferred recommendation module and the existing glow is outside scope."
+      },
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "universal-search/index.html"
+        ],
+        "createdAt": "2026-11-06T03:51:31.000Z",
+        "reason": "Watch hero uses an image background and its text is inset by .watch-hero-copy CSS; detector inspects the outer wrapper only."
       }
     ]
   }

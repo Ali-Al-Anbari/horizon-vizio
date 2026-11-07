@@ -8,6 +8,7 @@ const coreSource = readFileSync(new URL("../universal-search/core.js", import.me
 const root = {};
 runInNewContext(source, { window: root });
 const native = root.HorizonUniversalSearch.nativeEditingKey;
+const adjacentHomeRow = root.HorizonUniversalSearch.adjacentHomeRow;
 const html = readFileSync(new URL("../universal-search/index.html", import.meta.url), "utf8");
 const css = readFileSync(new URL("../universal-search/search.css", import.meta.url), "utf8");
 
@@ -23,7 +24,8 @@ test("Watch rail and Settings expose the requested controls and retain TMDB attr
   assert.match(html, /This product uses the TMDB API but is not endorsed or certified by TMDB/);
   assert.match(html, /icons\/tmdb-approved\.svg/);
   assert.doesNotMatch(html, /<footer>Metadata:/);
-  assert.match(css, /body\.watch-active \.watch-rail::before/);
+  assert.match(css, /body\.watch-active \.watch-rail::before \{ content: none; \}/);
+  assert.match(css, /body\.watch-active \.rail-action \{[^}]*border-radius: 50%/s);
   assert.match(css, /body\.watch-active \.home-card \.poster-art \{[^}]*aspect-ratio: 16 \/ 9/s);
 });
 
@@ -32,8 +34,8 @@ test("Watch home follows the reference layout and routes cards through the exist
     assert.match(html, new RegExp(`id="${id}"`));
   assert.doesNotMatch(html, /id="home-toggle"|id="watch-hero-play"|id="watch-hero-details"/);
   assert.match(html, /<h2>Recently Finished<\/h2>/);
-  assert.match(source, /core\.homepageContinueCandidates\(rows\)/);
-  assert.match(source, /core\.homepageFinished\(rows\)/);
+  assert.match(source, /core\.homepageContinueCandidates\(rows, local\)/);
+  assert.match(source, /core\.homepageFinished\(rows, local\)/);
   assert.match(source, /group === "continue" \? landscapeArt\(row\) : verticalPosterArt\(row\)/);
   assert.match(source, /if \(row\.type === "movie"\) \{ openDetails\(row\); return; \}/);
   assert.match(source, /openDetails\(row, target \|\| \{ season: row\.season, episode: row\.episode \}\)/);
@@ -43,12 +45,61 @@ test("Watch home follows the reference layout and routes cards through the exist
   assert.match(source, /event\.target\.homeEntry\) showHomeHero\(event\.target\.homeEntry\)/);
   assert.match(source, /railOrder = \[get\("watch-toggle"\), get\("search-toggle"\), get\("history-toggle"\), get\("settings-toggle"\)\]/);
   assert.match(source, /revealInScroller\(element, homeScroll, true, 18,[\s\S]*?railEdge/);
-  assert.match(css, /body\.watch-active \.watch-home \{[^}]*overflow-y: auto/s);
+  assert.match(css, /body\.watch-active \.watch-rows-scroll \{[^}]*overflow-y: auto/s);
   assert.match(css, /body\.watch-active \.watch-hero \{[^}]*min-height:/s);
   assert.match(css, /body\.watch-active \.home-card-poster \.poster-art \{[^}]*aspect-ratio: 2 \/ 3/s);
   assert.match(css, /body\.watch-active \.home-card:focus \.poster-art/);
   assert.match(css, /\.home-progress-fill\s*\{[^}]*background: #fff/s);
   assert.doesNotMatch(html, /Trending Now|Recommended For You/);
+});
+
+test("Watch hero remains outside the only vertical row scroller and recommendation focus paints it", () => {
+  assert.match(html, /id="watch-hero"[\s\S]*?id="watch-rows-scroll"/);
+  assert.match(css, /body\.watch-active \.watch-home \{[^}]*height: 100vh;[^}]*overflow: hidden/s);
+  assert.match(css, /body\.watch-active \.watch-hero \{[^}]*height: var\(--watch-hero-height\);[^}]*flex: none/s);
+  assert.match(source, /card\.homeEntry = \{ row: candidate, group: group \}/);
+  assert.match(source, /entry\.group !== "top" && entry\.group !== "because"/);
+  assert.match(source, /function revealHomeSection\(element\)/);
+});
+
+test("active Watch heading is outside the clipped scroller and above the decorative fade", () => {
+  assert.match(html, /id="watch-hero"[\s\S]*?id="watch-active-heading"[^>]*>[\s\S]*?id="watch-rows-scroll"/);
+  assert.match(css, /body\.watch-active \.watch-active-heading \{[^}]*z-index: 4/s);
+  assert.match(css, /body\.watch-active \.watch-home::after \{[^}]*z-index: 2/s);
+  assert.match(css, /body\.watch-active \.watch-home-section\.is-active-home-section > h2 \{ opacity: 0; \}/);
+  assert.match(source, /function syncActiveHomeHeading\(element\)/);
+  assert.match(source, /syncActiveHomeHeading\(element\)/);
+});
+
+test("Continue Watching precedes recommendations in DOM and remote row order", () => {
+  assert.ok(html.indexOf('id="watch-continue-section"') < html.indexOf('id="watch-top-section"'));
+  assert.ok(html.indexOf('id="watch-top-section"') < html.indexOf('id="watch-because-section"'));
+  assert.match(source, /homeRowOrder = \["continue", "top", "because", "recent"\]/);
+});
+
+test("focused rail circle expands with adjacent controls spaced apart", () => {
+  assert.match(css, /body\.watch-active \.rail-action:focus,[\s\S]*?transform: scale\(1\.1\)/);
+  assert.match(css, /\.rail-action\.rail-neighbor-before \{ transform: translateY\(-5px\)/);
+  assert.match(css, /\.rail-action\.rail-neighbor-after \{ transform: translateY\(5px\)/);
+  assert.match(css, /prefers-reduced-motion: reduce/);
+});
+
+test("horizontal poster traversal cannot trigger vertical row reveal", () => {
+  assert.match(source, /if \(!skipHomeVertical && element\.closest\("#watch-rows-scroll"\)[\s\S]*?previousHomeGroup !== element\.dataset\.homeGroup\)\s*revealHomeSection\(element\)/);
+  assert.match(source, /key === "ArrowLeft"\) focus\(group\[index - 1\] \|\| get\("watch-toggle"\), true\)/);
+  assert.match(source, /key === "ArrowRight"\) focus\(group\[index \+ 1\], true\)/);
+  assert.match(css, /body\.watch-active \.watch-rows-scroll \{[^}]*scroll-behavior: auto/s);
+  assert.match(source, /section\.querySelectorAll\("\.home-card"\)/);
+});
+
+test("last visible homepage row has no Down target, including dynamically hidden rows", () => {
+  const top = [{}], continueRow = [{}], because = [{}], recent = [{}];
+  assert.equal(adjacentHomeRow([top, continueRow, because, recent], 3, 1), null);
+  assert.equal(adjacentHomeRow([top, continueRow, because, []], 2, 1), null);
+  assert.equal(adjacentHomeRow([top, [], because, []], 0, 1), because);
+  assert.equal(adjacentHomeRow([top, [], because, []], 2, -1), top);
+  assert.match(source, /if \(down\) \{ var downGroup/);
+  assert.doesNotMatch(source, /down\.length \?[^;]*get\("history-toggle"\)/);
 });
 
 test("desktop search keeps editing keys native while TV arrows remain available for D-pad navigation", () => {

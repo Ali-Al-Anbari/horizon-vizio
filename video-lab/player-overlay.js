@@ -1050,8 +1050,10 @@
         focus(menuButtons[0]);
         return;
       }
-      transitionTo(appendHandoff(catalog.pageUrl(currentEpisode, subtitleMode === "on" ? "off" : "on",
-        manualEndEnabled, null, route.fromSearch, route.showTitle, route.tvdbId, provider)));
+      var reloadUrl = appendHandoff(catalog.pageUrl(currentEpisode, subtitleMode === "on" ? "off" : "on",
+        manualEndEnabled, null, route.fromSearch, route.showTitle, route.tvdbId, provider));
+      transitionTo(reloadUrl && route.episodeTrail
+        ? reloadUrl + "&episodeTrail=" + encodeURIComponent(route.episodeTrail) : reloadUrl);
     }
     function restoreFromCommand(reason, late, parentFocused) {
       if (disposed || state !== STATES.COMMAND_IN_PROGRESS) return;
@@ -1351,6 +1353,8 @@
         : "?return=1" + (episodes ? "&episodes=1" : "") + "&showId=" + currentEpisode.showId
           + "&season=" + currentEpisode.season + "&episode=" + currentEpisode.episode + "&sub=" + subtitleMode;
       if (!isMovie && currentEpisode.title) query += "&episodeTitle=" + encodeURIComponent(String(currentEpisode.title).slice(0, 160));
+      if (!isMovie && route.showTitle) query += "&showTitle=" + encodeURIComponent(String(route.showTitle).slice(0, 120));
+      if (!isMovie && route.episodeTrail) query += "&episodeTrail=" + encodeURIComponent(route.episodeTrail);
       if (route.handoff) query += "&handoff=" + encodeURIComponent(route.handoff);
       var confirmed = confirmedProgressRecord();
       var prior = readPlayerProgress(boltIdentity());
@@ -1361,15 +1365,35 @@
       if (saved && saved.provider === "vidbolt") query += "&position=" + encodeURIComponent(saved.position)
         + "&duration=" + encodeURIComponent(saved.duration) + "&updated=" + encodeURIComponent(saved.updatedAt)
         + "&progressProvider=vidbolt" + (saved.completed ? "&completed=1" : "");
+      if (!isMovie && route.handoff && playerProgressStorage) {
+        try { var store = JSON.parse(playerProgressStorage.getItem(PLAYER_PROGRESS_KEY) || "null");
+          var prefix = "tv:" + currentEpisode.showId + ":";
+          var batch = store && store.version === 1 && Array.isArray(store.items) ? store.items
+            .filter(function (entry) { return entry && typeof entry.identity === "string"
+              && entry.identity.indexOf(prefix) === 0 && entry.provider === "vidbolt"
+              && route.handoffAt > 0 && entry.updatedAt >= route.handoffAt; })
+            .slice(0, 16).map(function (entry) { var parts = entry.identity.slice(prefix.length).split(":");
+              return { season: Number(parts[0]), episode: Number(parts[1]), progress: {
+                position: entry.position, duration: entry.duration, updatedAt: entry.updatedAt,
+                provider: entry.provider, completed: entry.completed === true } }; }) : [];
+          if (batch && batch.length) query += "&progressBatch=" + encodeURIComponent(JSON.stringify(batch));
+        } catch (_error) {}
+      }
       return "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/" + query;
     }
     function launchEpisode(target) {
-      transitionTo(appendHandoff(catalog.pageUrl(target, subtitleMode, manualEndEnabled, null,
-        route.fromSearch, route.showTitle, route.tvdbId, provider)));
+      var trail = (route.episodeTrail ? route.episodeTrail + "," : "")
+        + currentEpisode.season + ":" + currentEpisode.episode;
+      var trailItems = trail.split(",");
+      if (trailItems.length > 16) trail = [trailItems[0]].concat(trailItems.slice(-15)).join(",");
+      var url = appendHandoff(catalog.pageUrl(target, subtitleMode, manualEndEnabled, null,
+        route.fromSearch, route.showTitle, route.tvdbId, provider));
+      transitionTo(url ? url + "&episodeTrail=" + encodeURIComponent(trail) : null);
     }
     function appendHandoff(url) {
       return url && route.handoff ? url + (url.indexOf("?") >= 0 ? "&" : "?")
-        + "handoff=" + encodeURIComponent(route.handoff) : url;
+        + "handoff=" + encodeURIComponent(route.handoff)
+        + (route.handoffAt ? "&handoffAt=" + encodeURIComponent(route.handoffAt) : "") : url;
     }
     function exitPlayer() {
       if (!route.fromSearch) { dispose(); nav.replace("embed-matrix.html"); return; }

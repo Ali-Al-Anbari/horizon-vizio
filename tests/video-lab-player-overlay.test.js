@@ -981,8 +981,34 @@ test("search-launched TV keeps validated show ID and returns safely to fixed sea
   assert.match(app.get("metadata-credit").textContent, /TMDB selection/);
   app.key("Backspace");
   assert.deepEqual(app.navigation, [
-    "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/?return=1&showId=1396&season=1&episode=2&sub=off"
+    "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/?return=1&showId=1396&season=1&episode=2&sub=off&showTitle=Breaking%20Bad"
   ]);
+});
+
+test("returning after sequential episodes carries only this launch's verified checkpoints", () => {
+  const values = new Map();
+  const progressStorage = { getItem: key => values.get(key) || null,
+    setItem: (key, value) => values.set(key, value) };
+  const handoffAt = Date.now() - 5000;
+  const progress = (identity, position, completed, updatedAt) => ({ identity, position, duration: 100,
+    updatedAt, provider: "vidbolt", completed });
+  values.set("horizon-video-lab-progress-v1", JSON.stringify({ version: 1, items: [
+    progress("tv:1396:1:1", 96, true, handoffAt + 1000),
+    progress("tv:1396:1:2", 100, true, handoffAt + 2000),
+    progress("tv:1396:1:3", 50, false, handoffAt + 3000),
+    progress("tv:1396:1:4", 96, true, handoffAt - 1000),
+    progress("tv:55:1:1", 96, true, handoffAt + 1000)
+  ] }));
+  const app = setup({ search: "?showId=1396&season=1&episode=3&from=search&provider=vidbolt"
+    + "&name=Breaking%20Bad&handoff=session_abc123&handoffAt=" + handoffAt
+    + "&episodeTrail=1%3A1%2C1%3A2", desktop: true, progressStorage });
+  app.key("Backspace");
+  const returned = new URL(app.navigation[0]);
+  const batch = JSON.parse(returned.searchParams.get("progressBatch"));
+  assert.deepEqual(batch.map(entry => [entry.season, entry.episode, entry.progress.completed]),
+    [[1, 1, true], [1, 2, true], [1, 3, false]]);
+  assert.equal(returned.searchParams.get("episodeTrail"), "1:1,1:2");
+  assert.equal(returned.searchParams.get("completed"), null, "halfway exit stays incomplete");
 });
 
 test("movie uses the same player shell with a TMDB movie URL and returns to Watch", () => {
@@ -2622,7 +2648,7 @@ test("Previous and Next each require confirmation and transition once with subti
   assert.deepEqual(previous.navigation, []);
   assert.match(previous.get("command-status").textContent, /YapGrid playback unknown/);
   previous.key("Enter"); previous.key("Enter", true);
-  assert.deepEqual(previous.navigation, ["player-overlay.html?season=13&episode=1&sub=off"]);
+  assert.deepEqual(previous.navigation, ["player-overlay.html?season=13&episode=1&sub=off&episodeTrail=13%3A2"]);
 
   const next = setup({ search: "?season=13&episode=2&sub=off" });
   next.key("ArrowUp"); next.key("ArrowRight"); next.key("ArrowDown");
@@ -2631,7 +2657,7 @@ test("Previous and Next each require confirmation and transition once with subti
   await flush();
   assert.deepEqual(next.navigation, []);
   next.key("Enter");
-  assert.deepEqual(next.navigation, ["player-overlay.html?season=13&episode=3&sub=off"]);
+  assert.deepEqual(next.navigation, ["player-overlay.html?season=13&episode=3&sub=off&episodeTrail=13%3A2"]);
   const loaded = setup({ search: "?season=13&episode=3&sub=off" });
   await flush();
   assert.match(loaded.get("player-frame").src, /\/2190\/13\/3\?sub_url=/);
@@ -2645,7 +2671,7 @@ test("VidFast episode transition keeps the selected provider and TMDB show ID", 
   await flush();
   assert.match(app.get("command-status").textContent, /VidFast playback unknown/);
   app.key("Enter");
-  assert.deepEqual(app.navigation, ["player-overlay.html?season=13&episode=3&sub=off&provider=vidfast"]);
+  assert.deepEqual(app.navigation, ["player-overlay.html?season=13&episode=3&sub=off&provider=vidfast&episodeTrail=13%3A2"]);
   const loaded = setup({ search: "?season=13&episode=3&sub=off&provider=vidfast" });
   assert.equal(loaded.get("player-frame").src,
     "https://vidfast.vc/tv/2190/13/3");
@@ -2682,13 +2708,13 @@ test("episode controls cross season boundaries and unknown metadata never naviga
   await flush();
   assert.match(next.get("command-status").textContent, /S14 E1.*press OK again/);
   next.key("Enter");
-  assert.deepEqual(next.navigation, ["player-overlay.html?season=14&episode=1&sub=off"]);
+  assert.deepEqual(next.navigation, ["player-overlay.html?season=14&episode=1&sub=off&episodeTrail=13%3A14"]);
 
   const previous = setup({ search: "?season=14&episode=1&sub=on", episodeResolver: resolver });
   previous.key("ArrowUp"); previous.key("ArrowLeft"); previous.key("ArrowDown"); previous.key("Enter");
   await flush();
   previous.key("Enter");
-  assert.deepEqual(previous.navigation, ["player-overlay.html?season=13&episode=14&sub=on"]);
+  assert.deepEqual(previous.navigation, ["player-overlay.html?season=13&episode=14&sub=on&episodeTrail=14%3A1"]);
 
   const unknown = setup({ episodeResolver: { current: () => Promise.resolve(null),
     resolve: () => Promise.resolve({ kind: "unknown", reason: "timeout" }) } });

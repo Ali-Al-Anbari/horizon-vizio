@@ -118,8 +118,8 @@ try {
       updatedAt:3000,provider:'vidbolt',completed:false}}))`);
   await navigate(homeUrl.href + '&updated=' + Date.now(), true);
   assert.equal(await evaluate("document.querySelector('#watch-continue-row button:first-child .home-progress-fill').style.width"), "20.0%");
-  await evaluate("document.querySelector('#watch-view').scrollTop = 600; document.querySelector('#watch-toggle').click()");
-  assert.equal(await evaluate("document.querySelector('#watch-view').scrollTop"), 0, "Watch Home restores the hero at the top");
+  await evaluate("document.querySelector('#watch-rows-scroll').scrollTop = 600; document.querySelector('#watch-toggle').click()");
+  assert.equal(await evaluate("document.querySelector('#watch-rows-scroll').scrollTop"), 0, "Watch Home restores rows to the top");
   if (process.env.HORIZON_CAPTURE_DIR) {
     await mkdir(process.env.HORIZON_CAPTURE_DIR, { recursive: true });
     for (const viewport of [{ width: 1920, height: 1080 }, { width: 1440, height: 900 }]) {

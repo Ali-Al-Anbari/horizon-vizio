@@ -5,6 +5,11 @@
       || finePointer && (event.key === "ArrowLeft" || event.key === "ArrowRight"
         || event.key === "ArrowUp" || event.key === "ArrowDown"));
   }
+  function adjacentHomeRow(rows, index, direction) {
+    for (var next = index + direction; next >= 0 && next < rows.length; next += direction)
+      if (rows[next].length) return rows[next];
+    return null;
+  }
   function createApp(doc, nav, clock, options) {
     options = options || {};
     var core = root.HorizonSearchCore;
@@ -49,7 +54,8 @@
       homeOpenPending = false, homeOpenToken = 0, homeReturnFocus = null, homeDetailCache = new Map(),
       launchingEpisode = false, clearPending = false;
     var homeRowMemory = Object.create(null), homeLastContent = null;
-    var homeRowOrder = ["top", "continue", "because", "recent"];
+    var catalogRequests = Object.create(null);
+    var homeRowOrder = ["continue", "top", "because", "recent"];
     var recommendationPayload = null, recommendationLoadedSignature = "", recommendationPending = null,
       recommendationWantedSignature = "", recommendationRows = { top: [], because: [], seed: null };
     var previewRows = previewHistoryMode ? mock.previewHistory(previewScenario) : null;
@@ -91,7 +97,7 @@
       if (changed && state.view === "watch") {
         homeOpenToken += 1; homeOpenPending = false;
         homeRowMemory = Object.create(null); homeLastContent = null; homeReturnFocus = null;
-        get("watch-view").scrollTop = 0;
+        get("watch-rows-scroll").scrollTop = 0;
         homeRowOrder.forEach(function (group) { get("watch-" + group + "-row").scrollLeft = 0; });
       }
       state.view = name;
@@ -101,6 +107,7 @@
       doc.body.classList.toggle("details-active", name === "details");
       doc.body.classList.toggle("episodes-active", name === "episodes");
       doc.body.classList.toggle("watch-active", name === "watch");
+      if (name !== "watch") get("watch-active-heading").hidden = true;
       syncRail();
       if (changed && historyReady && !restoringHistory && root.history && root.history.pushState) {
         try { root.history.pushState({ horizonWatchView: name, depth: ++historyDepth }, "", nav.href); }
@@ -145,8 +152,43 @@
         else if (item.bottom > bounds.bottom - inset) scroller.scrollTop += item.bottom - bounds.bottom + inset;
       }
     }
-    function focus(element) { if (element) {
+    function revealHomeSection(element) {
+      var scroller = get("watch-rows-scroll"), section = element.closest(".watch-home-section");
+      if (!scroller || !section) return;
+      var heading = section.querySelector("h2"), bounds = scroller.getBoundingClientRect();
+      var top = heading ? heading.getBoundingClientRect().top : element.getBoundingClientRect().top;
+      var bottom = Math.max.apply(null, Array.from(section.querySelectorAll(".home-card")).map(function (card) {
+        return card.getBoundingClientRect().bottom;
+      }));
+      if (!Number.isFinite(bottom)) bottom = element.getBoundingClientRect().bottom;
+      var topInset = Math.min(30, Math.max(28, Math.round(scroller.clientHeight * .065)));
+      var bottomInset = 8, available = bounds.height - topInset - bottomInset;
+      if (bottom - top > available) {
+        // Keep the complete card visible if a TV reports a larger text scale.
+        scroller.scrollTop += bottom - bounds.bottom + bottomInset;
+      } else if (top < bounds.top + topInset) {
+        scroller.scrollTop -= bounds.top + topInset - top;
+      } else if (bottom > bounds.bottom - bottomInset) {
+        scroller.scrollTop += bottom - bounds.bottom + bottomInset;
+      }
+    }
+    function syncActiveHomeHeading(element) {
+      var heading = get("watch-active-heading"), section = element && element.closest(".watch-home-section");
+      doc.querySelectorAll("#watch-rows-scroll .is-active-home-section").forEach(function (item) {
+        item.classList.remove("is-active-home-section");
+      });
+      heading.hidden = !section || state.view !== "watch";
+      if (!heading.hidden) {
+        section.classList.add("is-active-home-section");
+        var original = section.querySelector("h2"), home = get("watch-view").getBoundingClientRect();
+        heading.textContent = original.textContent;
+        heading.style.top = Math.max(original.getBoundingClientRect().top,
+          get("watch-rows-scroll").getBoundingClientRect().top) - home.top + "px";
+      }
+    }
+    function focus(element, skipHomeVertical) { if (element) {
       var previous = doc.querySelector("[data-focus].is-focused");
+      var previousHomeGroup = previous && previous.dataset.homeGroup || "";
       if (previous && previous !== element) previous.classList.remove("is-focused");
       element.focus({ preventScroll: true }); element.classList.add("is-focused");
       var seasonStrip = element.closest("#seasons");
@@ -161,8 +203,10 @@
           Math.max(18, railEdge - homeScroll.getBoundingClientRect().left + 22));
       }
       else if (resultScroll) revealInScroller(element, resultScroll, false, 18);
-      if (element.closest("#watch-view")) revealInScroller(element, get("watch-view"), false,
-        Math.min(156, Math.max(80, Math.round(get("watch-view").clientHeight * 0.17))));
+      if (!skipHomeVertical && element.closest("#watch-rows-scroll")
+          && previousHomeGroup !== element.dataset.homeGroup)
+        revealHomeSection(element);
+      syncActiveHomeHeading(element);
       if (state.view === "watch" && element.dataset.homeGroup) {
         var identity = homeFocusIdentity(element);
         homeRowMemory[identity.group] = identity; homeLastContent = identity;
@@ -339,14 +383,15 @@
         setHomeArtwork(backdropPath, posterPath);
         text("watch-hero-title", detail && detail.title || row.title);
         var meta = [];
-        if (detail && detail.date) meta.push(detail.date.slice(0, 4));
+        if (detail && detail.date || row.date) meta.push((detail && detail.date || row.date).slice(0, 4));
         meta.push(row.type === "tv" ? "TV Series" : "Movie");
-        if (detail && detail.rating) meta.push(detail.rating);
+        if (detail && detail.rating || row.rating) meta.push(detail && detail.rating || row.rating);
+        else if (Number.isFinite(row.voteAverage) && row.voteAverage > 0) meta.push(row.voteAverage.toFixed(1) + "/10");
         if (detail && detail.runtime) meta.push(detail.runtime + " min");
         else if (detail && detail.episodeRuntime && row.type === "tv") meta.push(detail.episodeRuntime + " min episodes");
-        if (row.type === "tv") meta.push("S" + row.season + " E" + row.episode);
+        if (row.type === "tv" && row.season && row.episode) meta.push("S" + row.season + " E" + row.episode);
         text("watch-hero-context", meta.join("  ·  "));
-        text("watch-hero-description", detail && detail.overview || "");
+        text("watch-hero-description", detail && detail.overview || row.overview || "");
       } else {
         ++homeArtRequest; get("watch-hero-art").replaceChildren();
         text("watch-hero-title", "Find your next watch");
@@ -357,7 +402,7 @@
     function showHomeHero(entry) {
       var token = ++homeHeroToken;
       paintHomeHero(entry, null);
-      if (entry) homeDetail(entry.row).then(function (detail) {
+      if (entry && entry.group !== "top" && entry.group !== "because") homeDetail(entry.row).then(function (detail) {
         if (!disposed && state.view === "watch" && token === homeHeroToken && detail) paintHomeHero(entry, detail);
       });
     }
@@ -445,9 +490,13 @@
           var card = button("", function () { openDetails(candidate); },
             "home-card home-card-poster");
           card.dataset.homeGroup = group; card.dataset.homeKey = candidate.type + ":" + candidate.id;
+          card.homeEntry = { row: candidate, group: group };
           var title = doc.createElement("strong"); title.textContent = candidate.title;
           card.appendChild(verticalPosterArt(candidate)); card.appendChild(title);
           card.setAttribute("aria-label", candidate.title + ", " + (candidate.type === "tv" ? "TV series" : "movie"));
+          card.addEventListener("mouseenter", function () {
+            if (state.view === "watch") showHomeHero(card.homeEntry);
+          });
           host.appendChild(card);
         });
       });
@@ -455,9 +504,10 @@
       get("watch-because-section").hidden = !rows.because.length;
       if (rows.seed) text("watch-because-heading", "Because You "
         + (rows.seed.liked ? "Liked " : "Watched ") + rows.seed.title);
+      if (doc.activeElement.closest("#watch-because-section")) syncActiveHomeHeading(doc.activeElement);
       updateHomeSections();
       if (anchor && anchor.isConnected) {
-        var view = get("watch-view"), movement = anchor.getBoundingClientRect().top - anchorY;
+        var view = get("watch-rows-scroll"), movement = anchor.getBoundingClientRect().top - anchorY;
         if (Math.abs(movement) > 1) {
           var behavior = view.style.scrollBehavior;
           view.style.scrollBehavior = "auto"; view.scrollTop += movement;
@@ -515,9 +565,25 @@
     }
     function renderHomepage() {
       var rows = previewRows || core.readHistory(local);
-      paintHomepage(core.homepageContinueCandidates(rows).filter(function (row) {
+      paintHomepage(core.homepageContinueCandidates(rows, local).filter(function (row) {
         return !core.isContinueHidden(local, row);
-      }), core.homepageFinished(rows));
+      }), core.homepageFinished(rows, local));
+      if (!previewHistoryMode) core.groupedHistory(rows).filter(function (row) {
+        return row.type === "tv" && row.progress && row.progress.completed;
+      }).slice(0, 6).forEach(function (row) {
+        var catalog = core.readEpisodeCatalog(local, row.id);
+        if (catalog && Date.now() - catalog.at < 6 * 60 * 60 * 1000
+            || catalogRequests[row.id] === true
+            || Number.isFinite(catalogRequests[row.id]) && Date.now() - catalogRequests[row.id] < 10 * 60 * 1000) return;
+        catalogRequests[row.id] = true;
+        api("/api/title/tv/" + row.id).then(function (detail) {
+          if (disposed) return;
+          if (core.writeEpisodeCatalog(local, row.id, detail && detail.seasons)) {
+            homeDetailCache.set("tv:" + row.id, Promise.resolve(detail));
+            if (state.view === "watch") renderHomepage();
+          }
+        }, function () {}).finally(function () { catalogRequests[row.id] = Date.now(); });
+      });
       refreshRecommendations();
     }
     function showWatch(resetFocus) {
@@ -909,6 +975,7 @@
       api("/api/title/" + row.type + "/" + row.id).then(function (detail) {
         if (disposed || token !== detailToken) return;
         state.detail = detail;
+        if (row.type === "tv") core.writeEpisodeCatalog(local, row.id, detail.seasons);
         state.title = Object.assign({}, row, detail, {
           backdrop: core.imageUrl(detail.backdrop, "hero") ? detail.backdrop : row.backdrop,
           poster: core.imageUrl(detail.poster, "poster") ? detail.poster : row.poster
@@ -1079,6 +1146,7 @@
       var handoff = createPlaybackHandoff("tv", state.title.id, season, episode);
       var url = player.tvUrl(state.title.id, season, episode, state.subtitle, state.title.title, state.title.tvdbId,
         startOver ? null : progress, !!startOver, handoff);
+      if (url && handoff) url += "&handoffAt=" + Date.now();
       if (!url) { text("detail-status", "Invalid episode selection."); return; }
       if (startOver) core.clearProgress(local, "tv", state.title.id, season, episode);
       launchingEpisode = true;
@@ -1179,21 +1247,17 @@
         var groupIndex = watchRows.findIndex(function (row) { return row.indexOf(current) >= 0; });
         var group = groupIndex >= 0 ? watchRows[groupIndex] : null;
         if (group) {
-          var index = group.indexOf(current), down = [], up = [];
-          for (var next = groupIndex + 1; next < watchRows.length; next++) if (watchRows[next].length) {
-            down = watchRows[next]; break;
-          }
-          for (var previous = groupIndex - 1; previous >= 0; previous--) if (watchRows[previous].length) {
-            up = watchRows[previous]; break;
-          }
-          if (key === "ArrowLeft") focus(group[index - 1] || get("watch-toggle"));
-          else if (key === "ArrowRight") focus(group[index + 1]);
+          var index = group.indexOf(current);
+          var down = adjacentHomeRow(watchRows, groupIndex, 1);
+          var up = adjacentHomeRow(watchRows, groupIndex, -1);
+          if (key === "ArrowLeft") focus(group[index - 1] || get("watch-toggle"), true);
+          else if (key === "ArrowRight") focus(group[index + 1], true);
           else if (key === "ArrowDown") {
-            var downGroup = homeRowOrder[watchRows.indexOf(down)];
-            focus(down.length ? resolveHomeSelection(homeRowMemory[downGroup]) || down[0] : get("history-toggle"));
+            if (down) { var downGroup = homeRowOrder[watchRows.indexOf(down)];
+              focus(resolveHomeSelection(homeRowMemory[downGroup]) || down[0]); }
           } else if (key === "ArrowUp") {
             var upGroup = homeRowOrder[watchRows.indexOf(up)];
-            focus(up.length ? resolveHomeSelection(homeRowMemory[upGroup]) || up[0] : get("watch-toggle"));
+            focus(up ? resolveHomeSelection(homeRowMemory[upGroup]) || up[0] : get("watch-toggle"));
           }
           return;
         }
@@ -1360,7 +1424,26 @@
     doc.addEventListener("focusin", function (event) {
       if (event.target && event.target.matches && event.target.matches("[data-focus]")) {
         event.target.classList.add("is-focused");
+        var railActions = Array.from(doc.querySelectorAll(".watch-rail .rail-action"));
+        railActions.forEach(function (action) {
+          action.classList.remove("rail-neighbor-before", "rail-neighbor-after");
+        });
+        var railIndex = railActions.indexOf(event.target);
+        if (railIndex > 0) railActions[railIndex - 1].classList.add("rail-neighbor-before");
+        if (railIndex >= 0 && railIndex < railActions.length - 1)
+          railActions[railIndex + 1].classList.add("rail-neighbor-after");
         if (state.view === "watch" && event.target.homeEntry) showHomeHero(event.target.homeEntry);
+      }
+    });
+    get("watch-rows-scroll").addEventListener("scroll", function () {
+      get("watch-view").classList.toggle("has-row-scroll", get("watch-rows-scroll").scrollTop > 1);
+      if (state.view === "watch" && doc.activeElement.dataset.homeGroup)
+        syncActiveHomeHeading(doc.activeElement);
+    });
+    clock.addEventListener("resize", function () {
+      if (state.view === "watch" && doc.activeElement && doc.activeElement.dataset.homeGroup) {
+        revealHomeSection(doc.activeElement);
+        syncActiveHomeHeading(doc.activeElement);
       }
     });
     doc.addEventListener("focusout", function (event) {
@@ -1382,19 +1465,32 @@
       var returned = core.returnEpisode(nav.search);
       var returnedMovie = core.returnMovie(nav.search);
       if (returned) {
-        var acceptedEpisodeProgress = consumePlaybackHandoff(returned, "tv") ? returned.progress : null;
+        var acceptedHandoff = consumePlaybackHandoff(returned, "tv");
+        var acceptedEpisodeProgress = acceptedHandoff ? returned.progress : null;
         core.writeSubtitlePref(local, returned.subtitle);
         pendingEpisodeFocus = { season: returned.season, episode: returned.episode };
         var old = core.readHistory(local || { getItem: function () { return null; } })
           .find(function (row) { return row.type === "tv" && row.id === returned.id; });
         var episodeRow = core.readHistory(local).find(function (row) { return row.type === "tv" && row.id === returned.id
           && row.season === returned.season && row.episode === returned.episode; });
-        if (old || acceptedEpisodeProgress) {
+        if (acceptedHandoff && (old || returned.showTitle)) returned.episodeTrail.forEach(function (entry) {
+          var prior = core.readHistory(local).find(function (row) { return row.type === "tv" && row.id === returned.id
+            && row.season === entry.season && row.episode === entry.episode; });
+          if (!prior) core.writeHistory(local, core.item("tv", returned.id, old && old.title || returned.showTitle,
+            entry.season, entry.episode, returned.subtitle, Date.now(), old || {}));
+        });
+        if (acceptedHandoff && (old || returned.showTitle)) returned.progressBatch.forEach(function (entry) {
+          var prior = core.readHistory(local).find(function (row) { return row.type === "tv" && row.id === returned.id
+            && row.season === entry.season && row.episode === entry.episode; });
+          core.writeHistory(local, core.item("tv", returned.id, old && old.title || returned.showTitle, entry.season, entry.episode,
+            returned.subtitle, entry.progress.updatedAt, Object.assign({}, old || {}, prior || {}, { progress: entry.progress })));
+        });
+        if (old || acceptedEpisodeProgress || acceptedHandoff && returned.showTitle) {
           var returnedArtwork = Object.assign({}, old || {}, episodeRow || {});
           returnedArtwork.episodeTitle = episodeRow && episodeRow.episodeTitle || returned.episodeTitle || "";
           returnedArtwork.progress = acceptedEpisodeProgress || episodeRow && episodeRow.progress || null;
           core.writeHistory(local, core.item("tv", returned.id,
-            old && old.title || "TV Show", returned.season, returned.episode,
+            old && old.title || returned.showTitle || "TV Show", returned.season, returned.episode,
             returned.subtitle, Date.now(), returnedArtwork));
         }
       }
@@ -1466,6 +1562,7 @@
     return { state: state, searchNow: searchNow, openDetails: openDetails, browseEpisodes: browseEpisodes,
       launchEpisode: launchEpisode, onKey: onKey, showContinue: showContinue };
   }
-  root.HorizonUniversalSearch = { createApp: createApp, nativeEditingKey: nativeEditingKey };
+  root.HorizonUniversalSearch = { createApp: createApp, nativeEditingKey: nativeEditingKey,
+    adjacentHomeRow: adjacentHomeRow };
   if (typeof document !== "undefined") createApp(document, location, root);
 })(typeof window !== "undefined" ? window : globalThis);

@@ -48,6 +48,7 @@
           && finiteTimestamp(Number(parameter(search, "resumeUpdated"))) ? Number(parameter(search, "resumeUpdated")) : null,
         startOver: parameter(search, "startOver") === "1",
         handoff: /^[A-Za-z0-9_-]{8,80}$/.test(parameter(search, "handoff") || "") ? parameter(search, "handoff") : null,
+        handoffAt: Number(parameter(search, "handoffAt")) || 0,
         showTitle: (parameter(search, "name") || "").slice(0, 120) };
     }
     var seasonText = parameter(search, "season");
@@ -70,6 +71,9 @@
         && finiteTimestamp(Number(parameter(search, "resumeUpdated"))) ? Number(parameter(search, "resumeUpdated")) : null,
       startOver: parameter(search, "startOver") === "1",
       handoff: /^[A-Za-z0-9_-]{8,80}$/.test(parameter(search, "handoff") || "") ? parameter(search, "handoff") : null,
+      handoffAt: Number(parameter(search, "handoffAt")) || 0,
+      episodeTrail: /^[0-9:,.]{0,180}$/.test(parameter(search, "episodeTrail") || "")
+        ? (parameter(search, "episodeTrail") || "") : "",
       showTitle: (parameter(search, "name") || "").slice(0, 120),
       tvdbId: /^[1-9][0-9]*$/.test(parameter(search, "tvdb") || "")
         ? Number(parameter(search, "tvdb")) : null };

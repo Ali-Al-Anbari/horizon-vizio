@@ -1,6 +1,6 @@
 # Horizon Watch recommendations, Phase 3
 
-The Watch homepage renders **Top Picks for You** and, when a suitable verified watch or Like has related candidates, **Because You Watched/Liked [title]**. The later carousel refinement orders rows as Top Picks, Continue Watching, Because, and Recently Finished. Recommendation cards use the existing portrait poster treatment and open Movie or TV Details. They never start playback or write history. The ranking remains in `universal-search/recommendations.js`; the homepage only paints its results.
+The Watch homepage renders **Top Picks for You** and, when a suitable verified watch or Like has related candidates, **Because You Watched/Liked [title]**. The current row order is Continue Watching, Top Picks, Because, and Recently Finished; empty rows are omitted. Recommendation cards use the existing portrait poster treatment and open Movie or TV Details. They never start playback or write history. The ranking remains in `universal-search/recommendations.js`; the homepage only paints its results.
 
 ## Live Worker validation, 2026-11-05
 

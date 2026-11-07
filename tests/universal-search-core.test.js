@@ -14,6 +14,8 @@ function storage(initial = {}) { const values = new Map(Object.entries(initial))
   return { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value) }; }
 
 test("Watch homepage uses confirmed activity, groups shows, and separates Continue from History", () => {
+  const store = storage();
+  core.writeEpisodeCatalog(store, 11, [{ number: 1, count: 2 }], 1000);
   const progress = (position, duration, updatedAt, completed = false) =>
     ({ position, duration, updatedAt, provider: "vidbolt", completed });
   const rows = [
@@ -22,18 +24,19 @@ test("Watch homepage uses confirmed activity, groups shows, and separates Contin
     core.item("movie", 20, "Done film", null, null, "off", 200, { progress: progress(1000, 1000, 900, true) }),
     core.item("movie", 21, "New film", null, null, "off", 400, { progress: progress(100, 1000, 1100) }),
     core.item("tv", 11, "Done show", 1, 2, "off", 500, { progress: progress(900, 900, 700, true) }),
+    core.item("tv", 11, "Done show", 1, 1, "off", 50, { progress: progress(900, 900, 650, true) }),
     core.item("movie", 22, "Only opened", null, null, "off", 600)
   ];
   const history = core.homepageHistory(rows);
   assert.deepEqual(JSON.parse(JSON.stringify(history.map(row => [row.id, row.episode]))), [[21, null], [10, 5], [20, null], [11, 2]]);
-  assert.deepEqual(Array.from(core.homepageContinueCandidates(rows), row => row.id), [21, 10]);
-  assert.deepEqual(Array.from(core.homepageFinished(rows), row => row.id), [20, 11]);
-  assert.equal(core.homepageContinueCandidates(rows).some(row => core.homepageFinished(rows).some(done => done.id === row.id)), false);
+  assert.deepEqual(Array.from(core.homepageContinueCandidates(rows, store), row => row.id), [21, 10]);
+  assert.deepEqual(Array.from(core.homepageFinished(rows, store), row => row.id), [20, 11]);
+  assert.equal(core.homepageContinueCandidates(rows, store).some(row => core.homepageFinished(rows, store).some(done => done.id === row.id)), false);
   assert.equal(core.homepageHistory([]).length, 0);
   const completedLatest = core.item("tv", 10, "Series", 3, 6, "off", 700,
     { progress: progress(1200, 1200, 2500, true) });
-  assert.equal(core.homepageContinueCandidates([completedLatest, ...rows]).some(row => row.id === 10), false);
-  assert.equal(core.homepageFinished([completedLatest, ...rows]).find(row => row.id === 10).episode, 6);
+  assert.equal(core.homepageContinueCandidates([completedLatest, ...rows], store).some(row => row.id === 10), true);
+  assert.equal(core.homepageFinished([completedLatest, ...rows], store).some(row => row.id === 10), false);
   const updated = core.item("tv", 10, "Series", 3, 5, "off", 700,
     { progress: progress(900, 1200, 2000) });
   assert.equal(core.homepageHistory([updated, ...rows]).find(row => row.id === 10).progress.position, 900);
@@ -70,7 +73,7 @@ test("Continue suppression, explicit completion, and exact deletion preserve ind
     "last actively watched episode remains authoritative");
   assert.equal(core.deleteHistory(store, "tv", 10, 1, 1, false), true);
   assert.equal(core.readHistory(store).length, 1);
-  assert.equal(core.homepageFinished(core.readHistory(store))[0].episode, 2);
+  assert.equal(core.homepageFinished(core.readHistory(store), store).length, 0);
   assert.equal(core.deleteHistory(store, "tv", 10, 1, 2, true), true);
   assert.equal(core.readHistory(store).length, 0);
   assert.equal(core.importHomeSnapshot(store, { version: 2, items: [first] }), 0,
@@ -83,7 +86,8 @@ test("TV player URL uses validated show ID, selected episode, subtitle, and fixe
   assert.equal(core.tvPlayerUrl(1396, 1, 0, "on", "Breaking Bad"), null);
   assert.equal(core.tvPlayerUrl(-1, 1, 1, "on", "Bad"), null);
   assert.deepEqual(JSON.parse(JSON.stringify(core.returnEpisode("?return=1&showId=1396&season=1&episode=4&sub=off"))),
-    { id: 1396, season: 1, episode: 4, subtitle: "off", episodeTitle: "", handoff: null, progress: null });
+    { id: 1396, season: 1, episode: 4, subtitle: "off", episodeTitle: "", showTitle: "",
+      progressBatch: [], episodeTrail: [], handoff: null, progress: null });
 });
 
 test("TVDB identity survives history and player URL without changing YapGrid show ID", () => {
@@ -257,13 +261,44 @@ test("two validated returns preserve independent episode positions and the newes
     core.readHistory(store).find(row => row.episode === 4).progress), /resume=900/);
 });
 
-test("return handoff binds confirmed progress to the exact episode", () => {
+test("return handoff binds confirmed progress to the show across episode transitions", () => {
   const saved = { token: "session_abc123", type: "tv", id: 2190, season: 3, episode: 5, at: 1000 };
   const returned = { handoff: "session_abc123", id: 2190, season: 3, episode: 5 };
   assert.equal(core.validHandoff(saved, returned, "tv", 2000), true);
   assert.equal(core.validHandoff(saved, { ...returned, episode: 10 }, "tv", 2000), false);
-  assert.equal(core.validHandoff(saved, { ...returned, season: 4 }, "tv", 2000), false);
+  assert.equal(core.validHandoff(saved, { ...returned, season: 4,
+    episodeTrail: [{ season: 3, episode: 5 }] }, "tv", 2000), true);
   assert.equal(core.validHandoff(saved, returned, "tv", 86402000), false);
+});
+
+test("show completion requires every catalog episode and changes when a new episode appears", () => {
+  const store = storage();
+  const complete = { position: 96, duration: 100, updatedAt: 1000, provider: "vidbolt", completed: true };
+  const rows = [1, 2].map(number => core.item("tv", 99, "Series", 1, number, "off", number,
+    { progress: { ...complete, updatedAt: 1000 + number } }));
+  core.writeEpisodeCatalog(store, 99, [{ number: 1, count: 2 }], 1000);
+  assert.equal(core.homepageFinished(rows, store).length, 1);
+  core.writeEpisodeCatalog(store, 99, [{ number: 1, count: 3 }], 2000);
+  assert.equal(core.homepageFinished(rows, store).length, 0);
+  assert.equal(core.homepageContinueCandidates(rows, store).length, 1);
+  const partial = core.item("tv", 99, "Series", 1, 3, "off", 3,
+    { progress: { ...complete, position: 50, completed: false, updatedAt: 1003 } });
+  assert.equal(core.homepageContinueCandidates([...rows, partial], store)[0].episode, 3);
+  assert.equal(core.readEpisodeCatalog(storage({ [core.EPISODE_CATALOG_KEY]: '{"version":2,"shows":{}}' }), 99), null);
+});
+
+test("bounded return batch accepts only verified progress and observed episode trail", () => {
+  const record = { position: 96, duration: 100, updatedAt: 1700000000000,
+    provider: "vidbolt", completed: true };
+  const query = new URLSearchParams({ return: "1", showId: "99", season: "1", episode: "3",
+    handoff: "session_abc123", showTitle: "Series", episodeTrail: "1:1,1:2",
+    progressBatch: JSON.stringify([{ season: 1, episode: 1, progress: record },
+      { season: 1, episode: 2, progress: { ...record, completed: false, position: 50 } },
+      { season: 1, episode: 3, progress: { ...record, provider: "yapgrid" } }]) });
+  const returned = core.returnEpisode("?" + query);
+  assert.deepEqual(JSON.parse(JSON.stringify(returned.episodeTrail)), [{ season: 1, episode: 1 }, { season: 1, episode: 2 }]);
+  assert.equal(returned.progressBatch.length, 2);
+  assert.equal(returned.progressBatch[1].progress.completed, false);
 });
 
 test("progress records and Watch return handoffs reject invalid or mismatched fields", () => {

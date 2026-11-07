@@ -8,6 +8,7 @@
   var STATE_KEY = "horizon-universal-search-view-v1";
   var HANDOFF_KEY = "horizon-watch-player-handoff-v1";
   var BROWSED_SEASONS_KEY = "horizon-watch-browsed-seasons-v1";
+  var EPISODE_CATALOG_KEY = "horizon-watch-episode-catalog-v1";
   var HIDDEN_CONTINUE_KEY = "horizon-watch-hidden-continue-v1";
   var HISTORY_BACKUP_KEY = "horizon-universal-search-history-backup-v1";
   var HISTORY_DELETIONS_KEY = "horizon-watch-history-deletions-v1";
@@ -30,7 +31,11 @@
   function validHandoff(saved, returned, type, now) {
     return !!(saved && returned && /^[A-Za-z0-9_-]{8,80}$/.test(saved.token || "")
       && saved.token === returned.handoff && saved.type === type && saved.id === returned.id
-      && (type !== "tv" || saved.season === returned.season && saved.episode === returned.episode)
+      && (type !== "tv" || positive(returned.season) && positive(returned.episode)
+        && (saved.season === returned.season && saved.episode === returned.episode
+          || Array.isArray(returned.episodeTrail) && returned.episodeTrail.some(function (entry) {
+            return entry.season === saved.season && entry.episode === saved.episode;
+          })))
       && Number.isFinite(saved.at) && now - saved.at >= 0 && now - saved.at <= 86400000);
   }
   function imagePath(path) { return typeof path === "string" && /^\/[a-zA-Z0-9._-]{1,90}$/.test(path) ? path : null; }
@@ -185,17 +190,49 @@
   function homepageHistory(rows) {
     return groupedHistory(rows.filter(function (row) { return !!row.progress; })).slice(0, 12);
   }
-  function homepageFinishedRow(row) {
-    return row.manualWatched === true || row.progress.completed && row.manualWatched !== false;
+  function readEpisodeCatalog(storage, showId) {
+    try { var data = JSON.parse(storage.getItem(EPISODE_CATALOG_KEY) || "null");
+      var entry = data && data.version === 1 && data.shows && data.shows[String(showId)];
+      return entry && Array.isArray(entry.seasons) && entry.seasons.length <= 100
+        && entry.seasons.reduce(function (total, s) { return total + (s && s.count || 0); }, 0) <= 2000
+        && entry.seasons.every(function (s) { return s && positive(s.number) && s.number <= 10000
+          && positive(s.count) && s.count <= 1000; }) ? entry : null;
+    } catch (_error) { return null; }
   }
-  function homepageContinueCandidates(rows) {
+  function writeEpisodeCatalog(storage, showId, seasons, at) {
+    if (!positive(showId) || !Array.isArray(seasons)) return false;
+    var valid = seasons.slice(0, 100).filter(function (s) { return s && positive(s.number) && s.number <= 10000
+      && positive(s.count) && s.count <= 1000; })
+      .map(function (s) { return { number: s.number, count: s.count }; });
+    if (!valid.length) return false;
+    try { var data = JSON.parse(storage.getItem(EPISODE_CATALOG_KEY) || "null");
+      var shows = data && data.version === 1 && data.shows && typeof data.shows === "object" ? data.shows : {};
+      shows[String(showId)] = { at: at || Date.now(), seasons: valid };
+      storage.setItem(EPISODE_CATALOG_KEY, JSON.stringify({ version: 1, shows: shows })); return true;
+    } catch (_error) { return false; }
+  }
+  function homepageFinishedRow(row, allRows, storage) {
+    if (row.type !== "tv") return row.manualWatched === true || !!(row.progress && row.progress.completed && row.manualWatched !== false);
+    var catalog = storage && readEpisodeCatalog(storage, row.id);
+    if (!catalog) return false;
+    var episodes = (allRows || []).filter(function (entry) { return entry.type === "tv" && entry.id === row.id; });
+    return catalog.seasons.length > 0 && catalog.seasons.every(function (season) {
+      for (var number = 1; number <= season.count; number += 1) {
+        var episode = episodes.find(function (entry) { return entry.season === season.number && entry.episode === number; });
+        if (!episode || !(episode.manualWatched === true || episode.progress && episode.progress.completed
+          && episode.manualWatched !== false)) return false;
+      }
+      return true;
+    });
+  }
+  function homepageContinueCandidates(rows, storage) {
     return groupedHistory(rows.filter(function (row) { return !!row.progress; })).filter(function (row) {
-      return !homepageFinishedRow(row);
+      return !homepageFinishedRow(row, rows, storage);
     }).slice(0, 12);
   }
-  function homepageFinished(rows) {
+  function homepageFinished(rows, storage) {
     return groupedHistory(rows.filter(function (row) { return !!row.progress || row.manualWatched === true; })).filter(function (row) {
-      return homepageFinishedRow(row);
+      return homepageFinishedRow(row, rows, storage);
     }).slice(0, 12);
   }
   function continueRows(rows) { return groupedHistory(rows).filter(function (row) {
@@ -355,8 +392,29 @@
     var id = Number(params.get("showId")), season = Number(params.get("season"));
     var episode = Number(params.get("episode"));
     if (!positive(id) || !positive(season) || !positive(episode)) return null;
+    var batch = [];
+    var trail = [];
+    var rawTrail = params.get("episodeTrail") || "";
+    if (/^[0-9:,.]{0,180}$/.test(rawTrail)) trail = rawTrail.split(",").slice(-16).map(function (part) {
+      var match = /^(\d+):(\d+)$/.exec(part);
+      return match && positive(Number(match[1])) && positive(Number(match[2]))
+        ? { season: Number(match[1]), episode: Number(match[2]) } : null;
+    }).filter(Boolean);
+    try { var raw = params.get("progressBatch");
+      if (raw && raw.length < 6000) {
+        var parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length <= 32) batch = parsed.map(function (entry) {
+          return entry && positive(entry.season) && positive(entry.episode) ? {
+            season: entry.season, episode: entry.episode, progress: progressRecord(entry.progress)
+          } : null;
+        }).filter(function (entry) { return entry && entry.progress; });
+      }
+    } catch (_error) {}
     return { id: id, season: season, episode: episode, subtitle: params.get("sub") === "on" ? "on" : "off",
       episodeTitle: safeText(params.get("episodeTitle"), 160),
+      showTitle: safeText(params.get("showTitle"), 120),
+      progressBatch: batch,
+      episodeTrail: trail,
       handoff: /^[A-Za-z0-9_-]{8,80}$/.test(params.get("handoff") || "") ? params.get("handoff") : null,
       progress: progressRecord({ position: Number(params.get("position")), duration: Number(params.get("duration")),
         updatedAt: Number(params.get("updated")), provider: params.get("progressProvider"),
@@ -373,10 +431,11 @@
   }
   root.HorizonSearchCore = { PLAYER_ORIGIN: PLAYER_ORIGIN, LAUNCHER_ORIGIN: LAUNCHER_ORIGIN,
     HISTORY_KEY: HISTORY_KEY, PREFS_KEY: PREFS_KEY, SUBTITLE_KEY: SUBTITLE_KEY, STATE_KEY: STATE_KEY,
-    HANDOFF_KEY: HANDOFF_KEY, BROWSED_SEASONS_KEY: BROWSED_SEASONS_KEY,
+    HANDOFF_KEY: HANDOFF_KEY, BROWSED_SEASONS_KEY: BROWSED_SEASONS_KEY, EPISODE_CATALOG_KEY: EPISODE_CATALOG_KEY,
     HIDDEN_CONTINUE_KEY: HIDDEN_CONTINUE_KEY, HISTORY_BACKUP_KEY: HISTORY_BACKUP_KEY,
     HISTORY_DELETIONS_KEY: HISTORY_DELETIONS_KEY,
     readBrowsedSeason: readBrowsedSeason, writeBrowsedSeason: writeBrowsedSeason,
+    readEpisodeCatalog: readEpisodeCatalog, writeEpisodeCatalog: writeEpisodeCatalog,
     progressRecord: progressRecord, validHandoff: validHandoff, item: item,
     readHistory: readHistory, writeHistory: writeHistory, clearHistory: clearHistory,
     clearProgress: clearProgress, groupedHistory: groupedHistory,

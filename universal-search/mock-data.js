@@ -84,6 +84,7 @@
   ], avoids: [], candidates: recommendationCandidates() }; }
   function previewHistory(scenario) { return (scenario === "none" ? []
     : scenario === "one-show" ? previewTitles.filter(function (value) { return value[0] === "tv" && value[1] === 70523; })
+    : scenario === "two-show" ? previewTitles.filter(function (value) { return value[0] === "tv" && (value[1] === 2190 || value[1] === 70523); })
     : scenario === "south-park" ? previewTitles.filter(function (value) { return value[0] === "tv" && value[1] === 2190; })
       : previewTitles).map(function (value, index) {
     var at = Date.now() - index * 60000;

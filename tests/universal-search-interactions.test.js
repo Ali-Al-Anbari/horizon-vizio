@@ -9,6 +9,7 @@ const root = {};
 runInNewContext(source, { window: root });
 const native = root.HorizonUniversalSearch.nativeEditingKey;
 const adjacentHomeRow = root.HorizonUniversalSearch.adjacentHomeRow;
+const circularIndex = root.HorizonUniversalSearch.circularIndex;
 const html = readFileSync(new URL("../universal-search/index.html", import.meta.url), "utf8");
 const css = readFileSync(new URL("../universal-search/search.css", import.meta.url), "utf8");
 
@@ -86,10 +87,18 @@ test("focused rail circle expands with adjacent controls spaced apart", () => {
 
 test("horizontal poster traversal cannot trigger vertical row reveal", () => {
   assert.match(source, /if \(!skipHomeVertical && element\.closest\("#watch-rows-scroll"\)[\s\S]*?previousHomeGroup !== element\.dataset\.homeGroup\)\s*revealHomeSection\(element\)/);
-  assert.match(source, /key === "ArrowLeft"\) focus\(group\[index - 1\] \|\| get\("watch-toggle"\), true\)/);
-  assert.match(source, /key === "ArrowRight"\) focus\(group\[index \+ 1\], true\)/);
+  assert.match(source, /key === "ArrowLeft"\) focus\(group\[circularIndex\(index, group\.length, -1\)\], true\)/);
+  assert.match(source, /key === "ArrowRight"\) focus\(group\[circularIndex\(index, group\.length, 1\)\], true\)/);
   assert.match(css, /body\.watch-active \.watch-rows-scroll \{[^}]*scroll-behavior: auto/s);
   assert.match(source, /element\.getBoundingClientRect\(\)\.bottom/);
+});
+
+test("circular home index handles empty, single, and two-title rows", () => {
+  assert.equal(circularIndex(0, 0, 1), -1);
+  assert.equal(circularIndex(0, 1, 1), 0);
+  assert.equal(circularIndex(0, 1, -1), 0);
+  assert.equal(circularIndex(0, 2, -1), 1);
+  assert.equal(circularIndex(1, 2, 1), 0);
 });
 
 test("last visible homepage row has no Down target, including dynamically hidden rows", () => {

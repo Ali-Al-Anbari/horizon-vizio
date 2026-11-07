@@ -1,0 +1,108 @@
+- main [ref=f1e2]:
+  - navigation "Horizon Watch navigation" [ref=f1e3]:
+    - button "Watch homepage" [active] [ref=f1e4] [cursor=pointer]:
+      - generic [ref=f1e5]: Watch Home
+    - button "Search" [ref=f1e6] [cursor=pointer]
+    - button "Watch History" [ref=f1e8] [cursor=pointer]:
+      - generic [ref=f1e9]: History
+    - button "Watch Settings" [ref=f1e10] [cursor=pointer]:
+      - generic [ref=f1e11]: Settings
+  - region "Watch homepage" [ref=f1e13]:
+    - generic [ref=f1e14]:
+      - generic [aria-hidden] [ref=f1e15]:
+        - text: HORIZON
+        - generic [ref=f1e16]: WATCH
+      - generic [ref=f1e17]:
+        - heading "South Park" [level=1] [ref=f1e18]
+        - paragraph [ref=f1e19]: 1997 · TV Series · S13 E2
+        - paragraph [ref=f1e20]: Four friends navigate life in the small town of South Park.
+    - generic [ref=f1e21]:
+      - region "Continue Watching" [ref=f1e22]:
+        - heading "Continue Watching" [level=2] [ref=f1e23]
+        - generic [ref=f1e24]:
+          - button "Continue South Park, S13 E2" [ref=f1e25] [cursor=pointer]:
+            - generic [ref=f1e27]:
+              - strong [ref=f1e28]: South Park
+              - generic [ref=f1e29]: S13 E2
+          - button "Continue Dark, S2 E4" [ref=f1e32] [cursor=pointer]:
+            - generic [ref=f1e34]:
+              - strong [ref=f1e35]: Dark
+              - generic [ref=f1e36]: S2 E4
+          - button "Continue Breaking Bad, S3 E7" [ref=f1e39] [cursor=pointer]:
+            - generic [ref=f1e41]:
+              - strong [ref=f1e42]: Breaking Bad
+              - generic [ref=f1e43]: S3 E7
+          - button "Continue Interstellar, Movie" [ref=f1e46] [cursor=pointer]:
+            - generic [ref=f1e48]:
+              - strong [ref=f1e49]: Interstellar
+              - generic [ref=f1e50]: Movie
+          - button "Continue Stranger Things, S4 E5" [ref=f1e53] [cursor=pointer]:
+            - generic [ref=f1e55]:
+              - strong [ref=f1e56]: Stranger Things
+              - generic [ref=f1e57]: S4 E5
+          - button "Continue The Last of Us, S1 E6" [ref=f1e60] [cursor=pointer]:
+            - generic [ref=f1e62]:
+              - strong [ref=f1e63]: The Last of Us
+              - generic [ref=f1e64]: S1 E6
+          - 'button "Continue Cyberpunk: Edgerunners, S1 E10" [ref=f1e67] [cursor=pointer]':
+            - generic [ref=f1e69]:
+              - strong [ref=f1e70]: "Cyberpunk: Edgerunners"
+              - generic [ref=f1e71]: S1 E10
+          - button "Continue Severance, S1 E9" [ref=f1e74] [cursor=pointer]:
+            - generic [ref=f1e76]:
+              - strong [ref=f1e77]: Severance
+              - generic [ref=f1e78]: S1 E9
+      - region "Top Picks for You" [ref=f1e81]:
+        - heading "Top Picks for You" [level=2] [ref=f1e82]
+        - generic [ref=f1e83]:
+          - button "Planet of the Apes, movie" [ref=f1e84] [cursor=pointer]:
+            - generic [ref=f1e85]: Planet of the Apes
+            - strong [ref=f1e87]: Planet of the Apes
+          - button "Fool Me Once, TV series" [ref=f1e88] [cursor=pointer]:
+            - generic [ref=f1e89]: Fool Me Once
+            - strong [ref=f1e91]: Fool Me Once
+          - button "Project Hail Mary, movie" [ref=f1e92] [cursor=pointer]:
+            - generic [ref=f1e93]: Project Hail Mary
+            - strong [ref=f1e95]: Project Hail Mary
+          - button "Twin Peaks, TV series" [ref=f1e96] [cursor=pointer]:
+            - generic [ref=f1e97]: Twin Peaks
+            - strong [ref=f1e99]: Twin Peaks
+          - 'button "Avengers: Endgame, movie" [ref=f1e100] [cursor=pointer]':
+            - generic [ref=f1e101]: "Avengers: Endgame"
+            - strong [ref=f1e103]: "Avengers: Endgame"
+          - button "Family Guy, TV series" [ref=f1e104] [cursor=pointer]:
+            - generic [ref=f1e105]: Family Guy
+            - strong [ref=f1e107]: Family Guy
+          - button "Better Call Saul, TV series" [ref=f1e108] [cursor=pointer]:
+            - generic [ref=f1e109]: Better Call Saul
+            - strong [ref=f1e111]: Better Call Saul
+          - button "The Institute, TV series" [ref=f1e112] [cursor=pointer]:
+            - generic [ref=f1e113]: The Institute
+            - strong [ref=f1e115]: The Institute
+      - region "Because You Watched" [ref=f1e116]:
+        - heading "Because You Liked Dark" [level=2] [ref=f1e117]
+        - generic [ref=f1e118]:
+          - button "Unsolved Mysteries, TV series" [ref=f1e119] [cursor=pointer]:
+            - generic [ref=f1e120]: Unsolved Mysteries
+            - strong [ref=f1e122]: Unsolved Mysteries
+          - button "Wallander, TV series" [ref=f1e123] [cursor=pointer]:
+            - generic [ref=f1e124]: Wallander
+            - strong [ref=f1e126]: Wallander
+          - button "Emergence, TV series" [ref=f1e127] [cursor=pointer]:
+            - generic [ref=f1e128]: Emergence
+            - strong [ref=f1e130]: Emergence
+          - button "Bodies, TV series" [ref=f1e131] [cursor=pointer]:
+            - generic [ref=f1e132]: Bodies
+            - strong [ref=f1e134]: Bodies
+      - region "Recently Finished" [ref=f1e135]:
+        - heading "Recently Finished" [level=2] [ref=f1e136]
+        - generic [ref=f1e137]:
+          - button "Finished The Dark Knight, Movie" [ref=f1e138] [cursor=pointer]:
+            - generic [ref=f1e139]: The Dark Knight
+            - strong [ref=f1e141]: The Dark Knight
+          - button "Finished Dune, Movie" [ref=f1e142] [cursor=pointer]:
+            - generic [ref=f1e143]: Dune
+            - strong [ref=f1e145]: Dune
+          - button "Finished Oppenheimer, Movie" [ref=f1e146] [cursor=pointer]:
+            - generic [ref=f1e147]: Oppenheimer
+            - strong [ref=f1e149]: Oppenheimer

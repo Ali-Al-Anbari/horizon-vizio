@@ -1,0 +1,24 @@
+- main [ref=f3e2]:
+  - navigation "Horizon Watch navigation" [ref=f3e3]:
+    - button "Watch homepage" [ref=f3e4] [cursor=pointer]:
+      - generic [ref=f3e5]: Watch Home
+    - button "Search" [ref=f3e6] [cursor=pointer]
+    - button "Watch History" [ref=f3e8] [cursor=pointer]:
+      - generic [ref=f3e9]: History
+    - button "Watch Settings" [ref=f3e10] [cursor=pointer]:
+      - generic [ref=f3e11]: Settings
+  - generic [ref=f3e12]:
+    - generic [ref=f3e154]: HORIZON WATCH
+    - generic [ref=f3e156]:
+      - generic [ref=f3e157]:
+        - button "← Details" [active] [ref=f3e158] [cursor=pointer]
+        - heading "Breaking Bad · Episodes" [level=1] [ref=f3e159]
+        - generic "Seasons" [ref=f3e160]:
+          - button "Season 13" [ref=f3e161] [cursor=pointer]
+          - button "Season 14" [ref=f3e162] [cursor=pointer]
+      - status [ref=f3e163]
+      - generic "Episodes" [ref=f3e164]:
+        - 'button "Season 13, episode 1: Episode 1" [ref=f3e165] [cursor=pointer]':
+          - generic [ref=f3e166]: Episode 1
+          - strong [ref=f3e167]: E1 · Episode 1
+          - generic [ref=f3e168]: 2010-03-17

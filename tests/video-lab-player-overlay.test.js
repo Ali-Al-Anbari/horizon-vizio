@@ -9,12 +9,16 @@ const leaseScript = readFileSync(new URL("../video-lab/focus-lease.js", import.m
 const catalogScript = readFileSync(new URL("../video-lab/episode-catalog.js", import.meta.url), "utf8");
 const providerScript = readFileSync(new URL("../video-lab/playback-providers.js", import.meta.url), "utf8");
 const diagnosticsScript = readFileSync(new URL("../video-lab/player-diagnostics.js", import.meta.url), "utf8");
+const independentScript = readFileSync(new URL("../video-lab/independent-subtitles.js", import.meta.url), "utf8");
 const listHtml = readFileSync(new URL("../video-lab/episode-list-placeholder.html", import.meta.url), "utf8");
 const listScript = readFileSync(new URL("../video-lab/episode-list-placeholder.js", import.meta.url), "utf8");
 const playerScript = readFileSync(new URL("../video-lab/player-overlay.js", import.meta.url), "utf8");
 const ids = ["player-frame", "player-loading", "remote-capture", "overlay", "seek-preview", "playback-timeline", "timeline-current", "timeline-duration", "timeline-fill", "timeline-playhead", "provider-indicator", "rewind", "rewind-label", "play-pause", "play-pause-label", "forward", "forward-label", "subtitles",
   "episodes", "previous-episode", "next-episode", "manual-end", "show-title", "metadata-credit", "metadata-provider-credit", "episode-caption", "up-next", "up-next-title", "up-next-identity", "up-next-separator", "up-next-name-viewport", "up-next-name", "up-next-play",
   "subtitle-menu", "subtitle-mode", "menu-title", "menu-description", "menu-cancel", "menu-change",
+  "horizon-caption-text", "independent-subtitle-menu", "independent-subtitle-status",
+  "independent-subtitle-off", "independent-subtitle-english", "independent-subtitle-offset",
+  "independent-subtitle-setup",
   "command-status", "screen-reader-status", "provider-choice", "unload-provider", "recover-provider", "watch-fullscreen", "watch-exit", "provider-telemetry", "diagnostics-open", "diagnostics-close", "diagnostics-panel", "diag-user-agent", "diag-media-source", "diag-native-hls", "diag-html5", "diag-permissions", "diag-frame-events", "diag-events", "diag-message-checks", "diag-sources", "diag-elapsed", "diag-assessment", "diag-vidbolt-session", "compat-controls", "compat-quality", "compat-play", "compat-autoplay", "compat-reset", "compat-status", "diag-variant", "vidfast-compat-controls", "vidfast-autoplay", "vidfast-reset", "vidfast-compat-status", "diag-vidfast-mode", "vidlink-compat-controls", "vidlink-default-off", "vidlink-default-on", "vidlink-jw-on", "vidlink-focus-default", "vidlink-focus-status", "vidlink-compat-status", "diag-vidlink-mode", "vidbolt-compat-controls", "vidbolt-autoplay-toggle", "vidbolt-auto-recover", "vidbolt-stop", "vidbolt-native-focus", "diag-vidbolt-mode", "vidbolt-compat-status", "experimental-controls", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip", "player-shell"];
 const baseUrl = "https://yapgrid.com/embed/tv/2190/13/2";
 const previewOrigin = "https://horizon-video-lab-preview.ali-al-anbari.workers.dev";
@@ -30,7 +34,8 @@ function fixtureResolver() {
 }
 
 function setup({ search = "?sub=on", adapter = null, animationFrame = true, episodeResolver = fixtureResolver(),
-  desktop = false, fullscreenOutcome = "allow", progressStorage = null } = {}) {
+  desktop = false, fullscreenOutcome = "allow", progressStorage = null, subtitleFetch = null, sessionFetch = null,
+  subtitleSessionStorage = null, referrer = "" } = {}) {
   const nodes = new Map();
   const documentEvents = {};
   const windowEvents = {};
@@ -57,7 +62,7 @@ function setup({ search = "?sub=on", adapter = null, animationFrame = true, epis
     let source = "";
     const style = {};
     const element = {
-      id, hidden: id === "subtitle-menu" || id === "up-next" || id === "manual-end" || id === "playback-timeline" || id === "diagnostics-panel" || id === "compat-controls" || id === "vidfast-compat-controls" || id === "vidlink-compat-controls" || id === "vidbolt-compat-controls" || id === "experimental-controls", textContent: "", tabIndex: -1, sourceChanges: 0,
+      id, hidden: id === "subtitle-menu" || id === "independent-subtitle-menu" || id === "horizon-caption-text" || id === "up-next" || id === "manual-end" || id === "playback-timeline" || id === "diagnostics-panel" || id === "compat-controls" || id === "vidfast-compat-controls" || id === "vidlink-compat-controls" || id === "vidbolt-compat-controls" || id === "experimental-controls", textContent: "", tabIndex: -1, sourceChanges: 0,
       attributes,
       style,
       classList: {
@@ -95,6 +100,8 @@ function setup({ search = "?sub=on", adapter = null, animationFrame = true, epis
   }
   for (const id of ids) nodes.set(id, node(id));
   const window = {
+    document: { referrer },
+    sessionStorage: subtitleSessionStorage,
     navigator: { userAgent: desktop ? "Mock Mac Desktop" : "Mock Vizio Test" },
     matchMedia() { return { matches: desktop }; },
     MediaSource: { isTypeSupported() { return true; } },
@@ -108,6 +115,7 @@ function setup({ search = "?sub=on", adapter = null, animationFrame = true, epis
     },
     clearTimeout(id) { timers.delete(id); },
   };
+  if (sessionFetch) window.fetch = sessionFetch;
   if (animationFrame) {
     window.requestAnimationFrame = handler => window.setTimeout(handler, 16);
     window.cancelAnimationFrame = id => window.clearTimeout(id);
@@ -117,9 +125,11 @@ function setup({ search = "?sub=on", adapter = null, animationFrame = true, epis
   runInNewContext(catalogScript, { window });
   runInNewContext(providerScript, { window });
   runInNewContext(diagnosticsScript, { window });
-  runInNewContext(playerScript, { window });
+  runInNewContext(independentScript, { window, URLSearchParams });
+  runInNewContext(playerScript, { window, URL });
   const player = window.HorizonPlayerOverlay.createPlayer(document, location, window,
-    { commandAdapter: adapter, episodeResolver, progressStorage });
+    { commandAdapter: adapter, episodeResolver, progressStorage,
+      subtitleFetch: subtitleFetch || (async () => ({ ok: false, json: async () => ({ code: "subdl_unconfigured" }) })) });
   // The script auto-initializes in a browser. In this harness, its exported
   // creator is called explicitly because the VM context has no global document.
   return {
@@ -389,8 +399,8 @@ test("single secondary icon row reaches every VidBolt action without skipping", 
     visited.push(app.document.activeElement.id);
   }
   assert.deepEqual(visited, ["previous-episode", "episodes", "next-episode",
-    "provider-choice", "recover-provider", "diagnostics-open", "watch-exit"]);
-  assert.equal(app.get("subtitles").hidden, true);
+    "provider-choice", "recover-provider", "subtitles", "diagnostics-open", "watch-exit"]);
+  assert.equal(app.get("subtitles").hidden, false);
   assert.equal(app.get("player-shell").classList.contains("controls-open"), true);
   app.key("Backspace");
   assert.equal(app.get("player-shell").classList.contains("controls-open"), false);
@@ -1076,7 +1086,7 @@ test("Watch opens VidBolt, pointer reveals controls, and Exit returns to Watch",
   assert.equal(app.state(), "CONTROLS_VISIBLE");
   app.key("ArrowDown");
   assert.equal(app.document.activeElement.id, "recover-provider");
-  app.key("ArrowRight"); app.key("ArrowRight");
+  app.key("ArrowRight"); app.key("ArrowRight"); app.key("ArrowRight");
   assert.equal(app.document.activeElement.id, "watch-exit");
   app.key("Enter");
   assert.equal(app.get("player-frame").src, "about:blank");
@@ -1112,7 +1122,7 @@ test("desktop Watch fullscreen lives in the control row, keeps the iframe, and c
   const app = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt", desktop: true });
   const frame = app.get("player-frame"), changes = frame.sourceChanges;
   assert.match(html, /id="recover-provider"[\s\S]*id="watch-fullscreen"[\s\S]*id="watch-exit"/);
-  app.key("ArrowDown"); app.key("ArrowRight"); app.key("ArrowRight");
+  app.key("ArrowDown"); app.key("ArrowRight"); app.key("ArrowRight"); app.key("ArrowRight");
   assert.equal(app.document.activeElement.id, "watch-fullscreen", "D-pad reaches Fullscreen from Recover");
   app.key("Enter");
   assert.equal(app.document.fullscreenElement, app.get("player-shell"));
@@ -1140,7 +1150,7 @@ test("desktop Watch reports unavailable or rejected fullscreen without replacing
   const unsupported = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt",
     desktop: true, fullscreenOutcome: "unsupported" });
   assert.equal(unsupported.get("watch-fullscreen").disabled, true);
-  unsupported.key("ArrowDown"); unsupported.key("ArrowRight"); unsupported.key("ArrowRight");
+  unsupported.key("ArrowDown"); unsupported.key("ArrowRight"); unsupported.key("ArrowRight"); unsupported.key("ArrowRight");
   assert.equal(unsupported.document.activeElement.id, "watch-exit", "disabled Fullscreen is skipped");
   const rejected = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt",
     desktop: true, fullscreenOutcome: "reject" });
@@ -1286,9 +1296,184 @@ test("minimal control grouping keeps subtitles and Exit outside the main action 
     assert.match(utility, new RegExp('id="' + id + '"'));
   assert.doesNotMatch(secondary, /id="(?:subtitles|watch-exit|diagnostics-open)"/);
   const bolt = setup({ search: "?sub=off&provider=vidbolt" });
-  assert.equal(bolt.get("subtitles").hidden, true, "no unverified VidBolt subtitle action");
+  assert.equal(bolt.get("subtitles").hidden, false, "Horizon captions are available for VidBolt");
   const yap = setup({ search: "?sub=off" });
   assert.equal(yap.get("subtitles").hidden, false, "YapGrid subtitle setting remains reachable");
+});
+
+test("VidBolt subtitle menu is D-pad accessible, defaults Off, adjusts timing, and keeps focus", async () => {
+  const fixture = readFileSync(new URL("./fixtures/south-park-s15e7-demo.srt", import.meta.url), "utf8");
+  const app = setup({ search: "?showId=2190&season=15&episode=7&provider=vidbolt",
+    subtitleFetch: async () => ({ ok: true, json: async () => ({ text: fixture, release: "Local test fixture" }) }) });
+  assert.equal(app.get("subtitle-mode").textContent, "OFF");
+  app.key("ArrowUp");
+  app.get("subtitles").focus();
+  app.key("Enter");
+  assert.equal(app.state(), "SUBMENU_OPEN");
+  assert.equal(app.document.activeElement.id, "independent-subtitle-off");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(app.get("independent-subtitle-status").textContent, /English available/);
+  app.key("ArrowDown");
+  assert.equal(app.document.activeElement.id, "independent-subtitle-english");
+  app.key("Enter");
+  assert.equal(app.get("subtitle-mode").textContent, "EN");
+  assert.equal(app.document.activeElement.id, "independent-subtitle-english");
+  app.key("ArrowDown"); app.key("ArrowRight");
+  assert.match(app.get("independent-subtitle-offset").textContent, /\+0\.5s/);
+  assert.equal(app.document.activeElement.id, "independent-subtitle-offset");
+  // OK on timing control resets to 0.0s
+  app.key("Enter");
+  assert.match(app.get("independent-subtitle-offset").textContent, /0\.0s/);
+  assert.equal(app.document.activeElement.id, "independent-subtitle-offset");
+  // Left on timing control advances delay by -0.5s
+  app.key("ArrowLeft");
+  assert.match(app.get("independent-subtitle-offset").textContent, /-0\.5s/);
+  assert.equal(app.document.activeElement.id, "independent-subtitle-offset");
+  // Range strictly clamps at -10.0s
+  for (let i = 0; i < 25; i++) app.key("ArrowLeft");
+  assert.match(app.get("independent-subtitle-offset").textContent, /-10\.0s/);
+  assert.equal(app.document.activeElement.id, "independent-subtitle-offset");
+  // OK resets from -10.0s back to 0.0s
+  app.key("Enter");
+  assert.match(app.get("independent-subtitle-offset").textContent, /0\.0s/);
+  assert.equal(app.document.activeElement.id, "independent-subtitle-offset");
+  // Seeking was never triggered inside the submenu
+  assert.equal(app.get("seek-preview").hidden, true);
+  app.key("Backspace");
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  assert.equal(app.document.activeElement.id, "subtitles");
+  assert.equal(app.navigation.length, 0);
+});
+
+test("VidBolt movie can open Horizon subtitles without changing playback", async () => {
+  const app = setup({ search: "?type=movie&id=550&provider=vidbolt" });
+  const frame = app.get("player-frame"), changes = frame.sourceChanges;
+  app.key("ArrowUp"); app.get("subtitles").focus(); app.key("Enter");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.state(), "SUBMENU_OPEN");
+  assert.match(app.get("independent-subtitle-status").textContent, /not configured/);
+  assert.equal(app.get("subtitle-mode").textContent, "OFF");
+  assert.equal(frame.sourceChanges, changes);
+  app.key("Backspace");
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+});
+
+test("subtitle menu distinguishes absence from authentication and service failures", async () => {
+  for (const [code, expected] of [
+    ["subtitle_unavailable", /No English subtitles available/],
+    ["not_authorized", /Video Lab needs its own pairing/],
+    ["subdl_auth_failed", /rejected the server credential/],
+    ["subdl_unavailable", /SubDL search failed/],
+    ["download_unavailable", /Subtitle download failed/],
+    ["unsupported_subtitle", /Subtitle file could not be read/],
+  ]) {
+    const app = setup({ search: "?type=movie&id=155&provider=vidbolt",
+      subtitleFetch: async () => ({ ok: false, json: async () => ({ code }) }) });
+    app.key("ArrowUp"); app.get("subtitles").focus(); app.key("Enter");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(app.get("independent-subtitle-status").textContent, expected);
+    assert.equal(app.get("subtitle-mode").textContent, "OFF");
+  }
+});
+
+test("unpaired subtitle menu opens existing Video Lab setup and preserves episode return", async () => {
+  const values = new Map();
+  const storage = { getItem: key => values.get(key) || null,
+    setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
+  const search = "?showId=2190&season=15&episode=7&provider=vidbolt&from=search";
+  const app = setup({ search, subtitleSessionStorage: storage,
+    subtitleFetch: async () => ({ ok: false, json: async () => ({ code: "not_authorized" }) }) });
+  app.key("ArrowUp"); app.get("subtitles").focus(); app.key("Enter");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.get("independent-subtitle-setup").hidden, false);
+  app.key("ArrowDown"); app.key("ArrowDown"); app.key("ArrowDown");
+  assert.equal(app.document.activeElement.id, "independent-subtitle-setup");
+  app.key("Enter");
+  assert.equal(app.navigation.at(-1), "/player-setup.html");
+  assert.equal(values.get("horizon_video_lab_pair_return_v1"), "/player-overlay.html" + search);
+});
+
+test("existing setup returns to the selected episode after pairing", async () => {
+  const source = readFileSync(new URL("../video-lab/player-setup.js", import.meta.url), "utf8");
+  const values = new Map([["horizon_video_lab_pair_return_v1",
+    "/player-overlay.html?showId=2190&season=15&episode=7&provider=vidbolt"]]);
+  const events = {};
+  const nodes = Object.fromEntries(["start", "code", "status", "continue"].map(id => [id, {
+    hidden: true, textContent: "", href: "player-overlay.html",
+    addEventListener(name, callback) { events[id + ":" + name] = callback; }, focus() {},
+  }]));
+  const context = {
+    document: { getElementById: id => nodes[id] },
+    sessionStorage: { getItem: key => values.get(key) || null,
+      removeItem: key => values.delete(key) },
+    location: { origin: previewOrigin }, URL,
+    fetch: async () => ({ ok: true, json: async () => ({ state: "paired" }) }),
+    window: { addEventListener() {} },
+  };
+  runInNewContext(source, context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(nodes.continue.href, "/player-overlay.html?showId=2190&season=15&episode=7&provider=vidbolt");
+  assert.equal(nodes.continue.hidden, false);
+  events["continue:click"]();
+  assert.equal(values.has("horizon_video_lab_pair_return_v1"), false);
+});
+
+test("valid Video Lab pairing rotates asynchronously after subtitle lookup", async () => {
+  const requests = [];
+  const app = setup({ search: "?showId=2190&season=15&episode=7&provider=vidbolt",
+    subtitleFetch: async () => ({ ok: false, json: async () => ({ code: "subtitle_unavailable" }) }),
+    sessionFetch: async (url, options) => {
+      requests.push([url, options]);
+      return { ok: true, json: async () => ({ state: "paired", rotationDue: true }) };
+    } });
+  app.key("ArrowUp"); app.get("subtitles").focus(); app.key("Enter");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(requests.map(([url]) => url), ["/api/pair/session", "/api/pair/rotate"]);
+  assert.equal(requests[0][1].credentials, "same-origin");
+  assert.equal(requests[1][1].headers["X-Horizon-Action"], "pair");
+  assert.equal(app.state(), "SUBMENU_OPEN");
+});
+
+test("explicit VidBolt subtitle choice transfers to the next episode, then a fresh session is Off", async () => {
+  const values = new Map();
+  const subtitleSessionStorage = { getItem: key => values.get(key) || null,
+    setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
+  const fixture = readFileSync(new URL("./fixtures/south-park-s15e7-demo.srt", import.meta.url), "utf8");
+  const subtitleFetch = async () => ({ ok: true, json: async () => ({ text: fixture }) });
+  const first = setup({ search: "?showId=2190&season=15&episode=7&provider=vidbolt",
+    subtitleFetch, subtitleSessionStorage });
+  first.key("ArrowUp"); first.get("subtitles").focus(); first.key("Enter");
+  await new Promise(resolve => setImmediate(resolve));
+  first.key("ArrowDown"); first.key("Enter"); first.key("Backspace");
+  first.get("episodes").focus(); first.key("Enter");
+  assert.ok(values.has("horizon_subtitle_transfer_v1"));
+  const next = setup({ search: "?showId=2190&season=15&episode=8&provider=vidbolt",
+    subtitleFetch, subtitleSessionStorage, referrer: previewOrigin + "/episode-list-placeholder.html" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(next.get("subtitle-mode").textContent, "EN");
+  assert.equal(values.size, 0, "transfer is consumed once");
+  const fresh = setup({ search: "?showId=2190&season=15&episode=8&provider=vidbolt",
+    subtitleFetch, subtitleSessionStorage });
+  assert.equal(fresh.get("subtitle-mode").textContent, "OFF");
+});
+
+test("VidBolt captions reject short ad timelines and untrusted source messages", async () => {
+  const fixture = readFileSync(new URL("./fixtures/south-park-s15e7-demo.srt", import.meta.url), "utf8");
+  const app = setup({ search: "?showId=2190&season=15&episode=7&provider=vidbolt",
+    subtitleFetch: async () => ({ ok: true, json: async () => ({ text: fixture }) }) });
+  app.key("ArrowUp"); app.get("subtitles").focus(); app.key("Enter");
+  await new Promise(resolve => setImmediate(resolve));
+  app.key("ArrowDown"); app.key("Enter"); app.key("Backspace");
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 5, duration: 22 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 5.5, duration: 22 }, "https://vidbolt.xyz");
+  assert.equal(app.get("horizon-caption-text").hidden, true);
+  app.message({ type: "timeupdate", time: 5.6, duration: 1800 }, "https://evil.example");
+  assert.equal(app.get("horizon-caption-text").hidden, true);
+  app.message({ type: "timeupdate", time: 5.6, duration: 1800 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 6, duration: 1800 }, "https://vidbolt.xyz");
+  assert.equal(app.get("horizon-caption-text").hidden, false);
+  assert.match(app.get("horizon-caption-text").textContent, /Local subtitle/);
 });
 
 test("provider switching keeps the same primary buttons and focus entry", () => {

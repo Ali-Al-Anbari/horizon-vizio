@@ -22,6 +22,18 @@ function pairedCookie(request) {
   return value && /^[0-9a-f]{64}$/.test(value) ? value : null;
 }
 
+async function pairedSessionAuthorized(request, env) {
+  if (!env.LAUNCH_QUEUE) return false;
+  const cookie = pairedCookie(request);
+  if (!cookie) return false;
+  try {
+    return !!(await env.LAUNCH_QUEUE.get(env.LAUNCH_QUEUE.idFromName("primary-tv"))
+      .pairAuthenticate(await sha256(cookie)))?.deviceId;
+  } catch (_error) { return false; }
+}
+
+export { pairedSessionAuthorized };
+
 async function sha256(text) {
   const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
   return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");

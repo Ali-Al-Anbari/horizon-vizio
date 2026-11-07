@@ -1,0 +1,75 @@
+- main [ref=f1e2]:
+  - iframe [ref=f1e3]:
+    - generic [ref=f2e2]:
+      - generic:
+        - generic [ref=f2e4]:
+          - generic [ref=f2e5]:
+            - paragraph [ref=f2e6]: South Park
+            - paragraph [ref=f2e7]: S15 E7
+          - generic [ref=f2e8]:
+            - button "Quality and server" [ref=f2e9] [cursor=pointer]:
+              - generic [ref=f2e13]: Quality & Server
+              - generic [ref=f2e14]: Auto
+            - button "Audio and subtitles" [ref=f2e15] [cursor=pointer]:
+              - generic [ref=f2e20]: Audio & Subtitles
+            - generic [ref=f2e21]:
+              - button "Next episode" [ref=f2e22] [cursor=pointer]:
+                - generic [ref=f2e25]: Next Episode
+              - generic [aria-hidden]:
+                - generic:
+                  - paragraph: Next Episode
+                  - paragraph: S15 E8 · Ass Burgers
+        - generic [ref=f2e26]:
+          - button "Back 10 seconds" [ref=f2e27] [cursor=pointer]
+          - button "Forward 10 seconds" [ref=f2e31] [cursor=pointer]
+        - generic [ref=f2e35]:
+          - slider "Seek" [ref=f2e37] [cursor=pointer]
+          - generic [ref=f2e39]:
+            - generic [ref=f2e40]:
+              - button "Mute" [ref=f2e41] [cursor=pointer]
+              - slider "Volume": "1"
+            - generic [ref=f2e46]: 0:00 / 0:00
+            - button "Episodes" [ref=f2e47] [cursor=pointer]
+            - button "Picture in picture" [ref=f2e51] [cursor=pointer]
+            - button "Settings" [ref=f2e55] [cursor=pointer]
+            - button "Fullscreen" [ref=f2e59] [cursor=pointer]
+      - status
+  - button "Horizon video remote control"
+  - region "Horizon playback controls" [ref=f1e4]:
+    - generic [ref=f1e5]:
+      - generic [ref=f1e6]:
+        - paragraph [ref=f1e7]: HORIZON VIDEO
+        - heading "South Park" [level=1] [ref=f1e8]
+        - paragraph [ref=f1e9]: Season 15 · Episode 7
+        - paragraph [ref=f1e10]:
+          - text: "Episode metadata:"
+          - link "TVmaze" [ref=f1e11] [cursor=pointer]:
+            - /url: https://www.tvmaze.com/shows/112/south-park
+          - text: · VidBolt playback availability is unverified
+        - paragraph [ref=f1e12]: VidBolt▶
+      - generic [ref=f1e13]:
+        - generic "Playback actions" [ref=f1e14]:
+          - button "Rewind 10s" [ref=f1e15] [cursor=pointer]:
+            - generic [ref=f1e18]: −10s
+          - button "VidBolt Play / Pause; state unknown" [active] [ref=f1e19] [cursor=pointer]:
+            - generic [ref=f1e22]: Play / Pause
+          - button "Forward 10s" [ref=f1e23] [cursor=pointer]:
+            - generic [ref=f1e26]: +10s
+        - generic "More player actions" [ref=f1e27]:
+          - generic "Episode and player actions" [ref=f1e28]:
+            - button "Previous episode" [ref=f1e29] [cursor=pointer]:
+              - generic [ref=f1e30]: Previous
+            - button "Episode list" [ref=f1e31] [cursor=pointer]:
+              - generic [ref=f1e32]: Episode List
+            - button "Next episode" [ref=f1e33] [cursor=pointer]:
+              - generic [ref=f1e34]: Next
+            - 'button "Playback provider: VidBolt. Press OK to switch to YapGrid" [ref=f1e35] [cursor=pointer]':
+              - generic [ref=f1e36]: "Provider: VidBolt"
+            - button "Recover Player" [ref=f1e37] [cursor=pointer]
+          - generic "Additional player actions" [ref=f1e39]:
+            - button "Subtitles" [ref=f1e40] [cursor=pointer]:
+              - generic [ref=f1e41]: "Subtitles: OFF"
+            - button "Diagnostics" [ref=f1e42] [cursor=pointer]
+            - button "Fullscreen" [ref=f1e44] [cursor=pointer]
+            - button "Exit to Watch" [ref=f1e46] [cursor=pointer]
+  - status [ref=f1e48]: Horizon controls visible. Back exits to Watch; Fullscreen stays in the control row.

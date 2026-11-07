@@ -4,7 +4,7 @@
   "workers_dev": true,
   "keep_vars": true,
   "vars": { "PAIRING_ONLY": true },
-  "secrets": { "required": ["TEAM_DOMAIN", "ACCESS_AUD", "OWNER_EMAIL", "PLAYER_BRIDGE_TOKEN"] },
+  "secrets": { "required": ["TEAM_DOMAIN", "ACCESS_AUD", "OWNER_EMAIL", "PLAYER_BRIDGE_TOKEN", "SUBDL_API_KEY"] },
   "main": "./video-lab-preview-worker.js",
   "assets": {
     "directory": "./video-lab",

@@ -52,6 +52,8 @@
       get("vidlink-focus-default"), get("vidbolt-autoplay-toggle"), get("vidbolt-auto-recover"),
       get("vidbolt-stop"), get("vidbolt-native-focus")];
     var menuButtons = [get("menu-cancel"), get("menu-change")];
+    var independentButtons = [get("independent-subtitle-off"), get("independent-subtitle-english"),
+      get("independent-subtitle-offset"), get("independent-subtitle-setup")];
     var upNextButtons = [get("up-next-play")];
     var catalog = root.HorizonEpisodes;
     var providers = root.HorizonPlaybackProviders;
@@ -216,6 +218,54 @@
     var adapter = options && options.commandAdapter;
     if (!adapter && root.HorizonPlayerBridge) adapter = root.HorizonPlayerBridge.create(clock);
     var subtitleMode = route.subtitle;
+    var independentMenuIndex = 0;
+    var independentTimelineEnded = false;
+    var independentSubtitles = root.HorizonIndependentSubtitles.create({
+      caption: get("horizon-caption-text"), fetch: options && options.subtitleFetch || clock.fetch.bind(clock),
+      pairFetch: options && options.sessionFetch || (typeof clock.fetch === "function" ? clock.fetch.bind(clock) : null),
+      status: function (value) {
+        var status = get("independent-subtitle-status");
+        status.textContent = value.loading ? "Checking English subtitles…"
+          : value.available ? "English available" + (value.release ? " · " + value.release : "")
+          : value.error === "subdl_unconfigured" ? "SubDL is not configured on this server."
+          : value.error === "not_authorized" ? "Video Lab needs its own pairing. Select Connect Video Lab."
+          : value.error === "subdl_auth_failed" ? "SubDL rejected the server credential."
+          : value.error === "subdl_rate_limited" ? "SubDL request limit reached. Try again later."
+          : value.error === "subdl_unavailable" || value.error === "subdl_invalid_response"
+            || value.error === "subdl_identity_mismatch" ? "SubDL search failed. Try again later."
+          : value.error === "download_unavailable" ? "Subtitle download failed. Try again later."
+          : value.error === "unsupported_subtitle" ? "Subtitle file could not be read."
+          : value.error === "subtitle_unavailable" ? "No English subtitles available."
+          : value.error ? "Subtitle service could not be reached."
+          : "Select English to check availability.";
+        get("independent-subtitle-english").setAttribute("aria-disabled", value.available ? "false" : "true");
+        get("independent-subtitle-setup").hidden = value.error !== "not_authorized";
+        get("independent-subtitle-setup").tabIndex = value.error === "not_authorized" ? 0 : -1;
+        get("independent-subtitle-english").setAttribute("aria-pressed", value.enabled ? "true" : "false");
+        get("independent-subtitle-off").setAttribute("aria-pressed", value.enabled ? "false" : "true");
+        get("independent-subtitle-offset").textContent = "Timing: "
+          + (value.offset > 0 ? "+" : "") + value.offset.toFixed(1) + "s · Left / Right to adjust";
+        get("subtitle-mode").textContent = provider === providers.VIDBOLT
+          ? value.enabled ? "EN" : "OFF" : subtitleMode.toUpperCase();
+      },
+    });
+    independentSubtitles.setTarget(isMovie ? { type: "movie", id: currentEpisode.movieId }
+      : { type: "tv", id: currentEpisode.showId, season: currentEpisode.season, episode: currentEpisode.episode }, false);
+    try {
+      var transferred = clock.sessionStorage && clock.sessionStorage.getItem("horizon_subtitle_transfer_v1");
+      if (clock.sessionStorage) clock.sessionStorage.removeItem("horizon_subtitle_transfer_v1");
+      if (transferred) {
+        var savedChoice = JSON.parse(transferred);
+        var sameOriginReturn = false;
+        try { sameOriginReturn = !!clock.document
+          && new URL(clock.document.referrer).origin === nav.origin; } catch (_referrerError) {}
+        var watchEpisodeReturn = savedChoice.fromWatchEpisodeList === true && !isMovie
+          && savedChoice.showId === currentEpisode.showId;
+        if (savedChoice.expires > Date.now() && (sameOriginReturn || watchEpisodeReturn))
+          independentSubtitles.restore(savedChoice);
+      }
+    } catch (_error) {}
+    if (independentSubtitles.state().enabled) independentSubtitles.load();
     var selected = 1;
     var menuSelected = 0;
     var menuConfirm = false;
@@ -288,8 +338,10 @@
       ["rewind", "play-pause", "forward"].forEach(function (id) {
         get(id).hidden = usesExperimentalRow();
       });
-      get("subtitle-mode").textContent = provider === providers.VIDBOLT ? "NATIVE" : subtitleMode.toUpperCase();
-      get("subtitles").hidden = isMovie || provider === providers.VIDBOLT;
+      get("subtitle-mode").textContent = provider === providers.VIDBOLT
+        ? independentSubtitles.state().enabled ? "EN" : "OFF" : subtitleMode.toUpperCase();
+      get("subtitles").hidden = isMovie && provider !== providers.VIDBOLT;
+      get("subtitles").title = provider === providers.VIDBOLT ? "Horizon subtitles" : "YapGrid subtitles";
       renderBoltPlayPause();
       renderSeekLabels();
     }
@@ -1012,6 +1064,15 @@
     }
     function closeMenu() {
       if (state !== STATES.SUBMENU_OPEN) return;
+      if (provider === providers.VIDBOLT) {
+        get("independent-subtitle-menu").hidden = true;
+        playerShell.classList.remove("subtitle-settings-open");
+        independentButtons.forEach(function (button) { button.tabIndex = -1; });
+        state = STATES.CONTROLS_VISIBLE;
+        focusControl(4);
+        resetIdle();
+        return;
+      }
       get("subtitle-menu").hidden = true;
       menuButtons.forEach(function (button) { button.tabIndex = -1; });
       menuConfirm = false;
@@ -1021,6 +1082,19 @@
     }
     function openMenu() {
       if (state !== STATES.CONTROLS_VISIBLE) return;
+      if (provider === providers.VIDBOLT) {
+        clearIdle();
+        state = STATES.SUBMENU_OPEN;
+        playerShell.classList.add("subtitle-settings-open");
+        independentMenuIndex = independentSubtitles.state().enabled ? 1 : 0;
+        get("independent-subtitle-menu").hidden = false;
+        independentButtons.forEach(function (button) { button.tabIndex = button.hidden ? -1 : 0; });
+        focus(independentButtons[independentMenuIndex]);
+        independentSubtitles.load().then(function (value) {
+          if (value.error !== "not_authorized") independentSubtitles.refreshPairing();
+        });
+        return;
+      }
       if (provider !== providers.PRIMARY) {
         get("command-status").textContent = "Horizon has no tested " + providerLabel()
           + " subtitle selection. Check whether the provider's native controls are accessible on this TV.";
@@ -1054,6 +1128,37 @@
         manualEndEnabled, null, route.fromSearch, route.showTitle, route.tvdbId, provider));
       transitionTo(reloadUrl && route.episodeTrail
         ? reloadUrl + "&episodeTrail=" + encodeURIComponent(route.episodeTrail) : reloadUrl);
+    }
+    function independentMenuKey(key) {
+      if (key === "Back") { closeMenu(); return; }
+      if (key === "ArrowUp" || key === "ArrowDown") {
+        independentMenuIndex = Math.max(0, Math.min(get("independent-subtitle-setup").hidden ? 2 : 3,
+          independentMenuIndex + (key === "ArrowDown" ? 1 : -1)));
+        focus(independentButtons[independentMenuIndex]);
+      } else if (key === "ArrowLeft" || key === "ArrowRight") {
+        var isTiming = independentMenuIndex === 2 || doc.activeElement === independentButtons[2];
+        if (isTiming) {
+          independentMenuIndex = 2;
+          independentSubtitles.adjust(key === "ArrowRight" ? 1 : -1);
+          focus(independentButtons[2]);
+        }
+      } else if (key === "OK") {
+        var isTiming = independentMenuIndex === 2 || doc.activeElement === independentButtons[2];
+        if (independentMenuIndex === 0 && !isTiming) independentSubtitles.setEnabled(false);
+        else if (independentMenuIndex === 1 && !isTiming) {
+          if (independentSubtitles.state().available) independentSubtitles.setEnabled(true);
+          else independentSubtitles.load();
+        } else if (isTiming) {
+          independentMenuIndex = 2;
+          independentSubtitles.adjust(0);
+        } else {
+          try { clock.sessionStorage && clock.sessionStorage.setItem("horizon_video_lab_pair_return_v1",
+            "/player-overlay.html" + nav.search); } catch (_error) {}
+          nav.replace("/player-setup.html");
+          return;
+        }
+        focus(independentButtons[independentMenuIndex]);
+      }
     }
     function restoreFromCommand(reason, late, parentFocused) {
       if (disposed || state !== STATES.COMMAND_IN_PROGRESS) return;
@@ -1338,6 +1443,20 @@
     }
     function transitionTo(url) {
       if (disposed || transitionStarted || !url) return;
+      if (provider === providers.VIDBOLT && clock.sessionStorage) {
+        try {
+          var destination = new URL(url, nav.origin);
+          var sameOrigin = destination.origin === nav.origin;
+          var watchEpisodeList = !isMovie && destination.searchParams.get("episodes") === "1"
+            && destination.hostname === "horizon-universal-search-preview.ali-al-anbari.workers.dev";
+          if (sameOrigin || watchEpisodeList) {
+            var choice = independentSubtitles.state();
+            clock.sessionStorage.setItem("horizon_subtitle_transfer_v1", JSON.stringify({
+              enabled: choice.enabled, offset: choice.offset, expires: Date.now() + 120000,
+              fromWatchEpisodeList: watchEpisodeList, showId: currentEpisode.showId }));
+          }
+        } catch (_error) {}
+      }
       transitionStarted = true;
       dispose();
       nav.replace(url);
@@ -1719,6 +1838,7 @@
       }
       if (id === "watch-exit" && route.fromSearch) { exitPlayer(); return; }
       if (id === "watch-fullscreen" && desktopWatch) { toggleDesktopFullscreen(); return; }
+      if (id === "subtitles" && provider === providers.VIDBOLT) { openMenu(); return; }
       if (isMovie && !COMMANDS[id]) return;
       if (activeBatch) {
         get("command-status").textContent = "Seek in progress; wait for completion or timeout.";
@@ -1805,7 +1925,10 @@
         return;
       }
       if (state === STATES.SUBMENU_OPEN) {
-        if (key === "Back") { if (!event.repeat) closeMenu(); }
+        if (provider === providers.VIDBOLT) {
+          if (!event.repeat || key.indexOf("Arrow") === 0) independentMenuKey(key);
+        }
+        else if (key === "Back") { if (!event.repeat) closeMenu(); }
         else if (key.indexOf("Arrow") === 0) {
           menuSelected = key === "ArrowLeft" || key === "ArrowUp" ? 0 : 1;
           focus(menuButtons[menuSelected]);
@@ -1857,6 +1980,7 @@
     function dispose() {
       if (disposed) return;
       disposed = true;
+      playerShell.classList.remove("subtitle-settings-open");
       if (nativeFocusTimer !== null) { clock.clearTimeout(nativeFocusTimer); nativeFocusTimer = null; }
       get("player-shell").classList.remove("native-focus-trial");
       frame.tabIndex = -1;
@@ -2039,6 +2163,7 @@
       resetIdle();
     }
     function unloadFrame() {
+      independentSubtitles.clear();
       if (provider === providers.VIDBOLT) {
         var unloadedProgress = confirmedProgressRecord();
         if (unloadedProgress) storePlayerProgress(unloadedProgress.position, unloadedProgress.duration,
@@ -2085,6 +2210,8 @@
       get("command-status").textContent = "YapGrid player reloaded for the same title. Previous position is unavailable; playback starts again.";
     }
     function loadProviderFrame(resumeAt, recovering) {
+      independentSubtitles.clear();
+      independentTimelineEnded = false;
       if (movieLoadTimer !== null) { clock.clearTimeout(movieLoadTimer); movieLoadTimer = null; }
       clearBoltWatchdog();
       if (frame.src === "about:blank" && frame.parentNode && typeof frame.cloneNode === "function") {
@@ -2206,6 +2333,18 @@
           var wasPlaying = boltSession && boltSession.paused === false;
           var firstPlay = boltSession && boltSession.playAt === null;
           recordBoltEvent(message);
+          if (message.type === "vidbolt:timeupdate") {
+            // A short pre-roll is not an episode timeline. Longer ads cannot be
+            // distinguished because VidBolt does not report content identity.
+            var trustedTimeline = boltSession && boltSession.healthy && !boltSession.suspected
+              && !independentTimelineEnded
+              && boltSession.seekTarget === null && !boltSession.seekUnconfirmed
+              && boltSession.duration >= (isMovie ? 1200 : 600);
+            independentSubtitles.update(message.currentTime, !!trustedTimeline);
+          } else if (message.type === "vidbolt:ended") {
+            independentTimelineEnded = true;
+            independentSubtitles.clear();
+          }
           if (message.type === "vidbolt:play" && (firstPlay || !wasPlaying)) {
             if (state === STATES.PLAYBACK_HIDDEN) showControls();
             else if (state === STATES.CONTROLS_VISIBLE) resetIdle();
@@ -2502,7 +2641,7 @@
     bindFrameEvents(frame);
     clock.addEventListener("message", onProviderMessage);
     if (isMovie) {
-      ["previous-episode", "episodes", "next-episode", "subtitles"].forEach(function (id) { get(id).hidden = true; });
+      ["previous-episode", "episodes", "next-episode"].forEach(function (id) { get(id).hidden = true; });
       get("show-title").textContent = route.showTitle || "Movie";
       get("episode-caption").textContent = "Movie · playback position unavailable";
       get("metadata-credit").textContent = "Movie selected by TMDB ID · " + providerLabel() + " playback availability is unverified";
@@ -2539,7 +2678,8 @@
     }
     renderProviderChoice();
     loadProviderFrame();
-    get("subtitle-mode").textContent = provider === providers.VIDBOLT ? "NATIVE" : subtitleMode.toUpperCase();
+    get("subtitle-mode").textContent = provider === providers.VIDBOLT
+      ? independentSubtitles.state().enabled ? "EN" : "OFF" : subtitleMode.toUpperCase();
     controls.forEach(function (button, index) {
       if (!button) return;
       button.addEventListener("focus", function () {
@@ -2578,6 +2718,16 @@
         if (state !== STATES.SUBMENU_OPEN) return;
         menuSelected = index;
         chooseMenu();
+      });
+    });
+    independentButtons.forEach(function (button, index) {
+      button.addEventListener("focus", function () {
+        if (state === STATES.SUBMENU_OPEN && provider === providers.VIDBOLT) independentMenuIndex = index;
+      });
+      button.addEventListener("click", function () {
+        if (state !== STATES.SUBMENU_OPEN || provider !== providers.VIDBOLT) return;
+        independentMenuIndex = index;
+        independentMenuKey("OK");
       });
     });
     upNextButtons.forEach(function (button, index) {

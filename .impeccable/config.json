@@ -20,6 +20,24 @@
         ],
         "createdAt": "2026-11-06T03:51:31.000Z",
         "reason": "Watch hero uses an image background and its text is inset by .watch-hero-copy CSS; detector inspects the outer wrapper only."
+      },
+      {
+        "rule": "overused-font",
+        "value": "arial",
+        "files": [
+          "video-lab/player-overlay.css"
+        ],
+        "createdAt": "2026-11-07T04:21:55.912Z",
+        "reason": "Agent: incumbent SmartCast player uses the system Arial stack; the user required preserving the existing player visual design during subtitle integration"
+      },
+      {
+        "rule": "overused-font",
+        "value": "arial",
+        "files": [
+          "video-lab/player-overlay.html"
+        ],
+        "createdAt": "2026-11-07T04:22:03.700Z",
+        "reason": "Agent: this existing Video Lab player intentionally inherits the compact system Arial stack; this subtitle task preserves its approved visual design"
       }
     ]
   }

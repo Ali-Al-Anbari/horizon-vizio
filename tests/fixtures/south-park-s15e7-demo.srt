@@ -1,0 +1,11 @@
+1
+00:00:05,000 --> 00:00:08,000
+[Local subtitle timing demonstration]
+
+2
+00:00:12,000 --> 00:00:15,500
+This text is synthetic and is not an episode transcript.
+
+3
+00:00:21,000 --> 00:00:25,000
+Adjust timing by half a second if needed.

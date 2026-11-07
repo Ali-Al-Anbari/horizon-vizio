@@ -6,6 +6,17 @@
   var link = document.getElementById("continue");
   var timer = null;
   var active = false;
+  try {
+    var returnPath = sessionStorage.getItem("horizon_video_lab_pair_return_v1");
+    var destination = returnPath && new URL(returnPath, location.origin);
+    if (returnPath && returnPath.length <= 1000 && destination.origin === location.origin
+        && destination.pathname === "/player-overlay.html") {
+      link.href = destination.pathname + destination.search;
+      link.addEventListener("click", function () {
+        sessionStorage.removeItem("horizon_video_lab_pair_return_v1");
+      });
+    }
+  } catch (_error) { /* The default player link remains available. */ }
   function api(path, post) {
     return fetch(path, { method: post ? "POST" : "GET", credentials: "same-origin", cache: "no-store",
       headers: post ? { "X-Horizon-Action": "pair" } : {} }).then(function (response) {

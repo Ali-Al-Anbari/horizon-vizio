@@ -13,12 +13,14 @@
     <script src="episode-catalog.js" defer></script>
     <script src="playback-providers.js" defer></script>
     <script src="player-diagnostics.js" defer></script>
+    <script src="independent-subtitles.js" defer></script>
     <script src="player-overlay.js" defer></script>
   </head>
   <body>
     <main id="player-shell" class="player-shell">
       <iframe id="player-frame" title="YapGrid video player" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen
         referrerpolicy="no-referrer" tabindex="-1"></iframe>
+      <div class="horizon-caption" aria-live="off"><span id="horizon-caption-text" hidden></span></div>
       <p id="player-loading" class="player-loading" role="status" hidden></p>
       <button id="remote-capture" type="button" tabindex="0" aria-label="Horizon video remote control"></button>
       <section id="overlay" class="overlay" aria-label="Horizon playback controls" aria-hidden="true">
@@ -75,6 +77,14 @@
               <button id="menu-cancel" type="button" tabindex="-1">Keep playing</button>
               <button id="menu-change" type="button" tabindex="-1">Switch mode · reload required</button>
             </div>
+          </section>
+          <section id="independent-subtitle-menu" class="independent-subtitle-menu" aria-label="Horizon subtitle settings" hidden>
+            <h2>Horizon subtitles</h2>
+            <p id="independent-subtitle-status">Checking English subtitles…</p>
+            <button id="independent-subtitle-off" type="button" tabindex="-1">Off</button>
+            <button id="independent-subtitle-english" type="button" tabindex="-1">English</button>
+            <button id="independent-subtitle-offset" type="button" tabindex="-1">Timing: 0.0s · Left / Right to adjust</button>
+            <button id="independent-subtitle-setup" type="button" tabindex="-1" hidden>Connect Video Lab</button>
           </section>
           <p id="command-status" class="command-status" role="status" aria-live="polite"></p>
           </div>

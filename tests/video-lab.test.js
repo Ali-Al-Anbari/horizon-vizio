@@ -79,7 +79,7 @@ test("preview package contains only the isolated Video Lab assets", () => {
   assert.deepEqual(config.durable_objects.bindings.map(binding => binding.name),
     ["LAUNCH_QUEUE", "PLAYER_BRIDGE"]);
   assert.deepEqual(config.secrets.required,
-    ["TEAM_DOMAIN", "ACCESS_AUD", "OWNER_EMAIL", "PLAYER_BRIDGE_TOKEN"]);
+    ["TEAM_DOMAIN", "ACCESS_AUD", "OWNER_EMAIL", "PLAYER_BRIDGE_TOKEN", "SUBDL_API_KEY"]);
   assert.equal(config.browser, undefined);
   assert.match(html, /media-src 'self' https:\/\/interactive-examples\.mdn\.mozilla\.net https:\/\/media\.w3\.org https:\/\/devstreaming-cdn\.apple\.com/);
   assert.match(html, /connect-src 'self'/);

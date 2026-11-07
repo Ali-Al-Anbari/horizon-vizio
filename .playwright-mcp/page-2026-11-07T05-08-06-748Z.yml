@@ -1,0 +1,57 @@
+- main [ref=f3e2]:
+  - iframe [ref=f3e3]:
+    - generic [ref=f4e2]:
+      - generic:
+        - generic [ref=f4e4]:
+          - generic [ref=f4e5]:
+            - paragraph [ref=f4e6]: The Dark Knight
+            - paragraph [ref=f4e7]: "2008"
+          - generic [ref=f4e8]:
+            - button "Quality and server" [ref=f4e9] [cursor=pointer]:
+              - generic [ref=f4e13]: Quality & Server
+              - generic [ref=f4e14]: Auto
+            - button "Audio and subtitles" [ref=f4e15] [cursor=pointer]:
+              - generic [ref=f4e20]: Audio & Subtitles
+        - generic [ref=f4e21]:
+          - button "Back 10 seconds" [ref=f4e22] [cursor=pointer]
+          - button "Forward 10 seconds" [ref=f4e26] [cursor=pointer]
+        - generic [ref=f4e30]:
+          - slider "Seek" [ref=f4e32] [cursor=pointer]
+          - generic [ref=f4e34]:
+            - generic [ref=f4e35]:
+              - button "Mute" [ref=f4e36] [cursor=pointer]
+              - slider "Volume": "1"
+            - generic [ref=f4e41]: 0:00 / 0:00
+            - button "Picture in picture" [ref=f4e42] [cursor=pointer]
+            - button "Settings" [ref=f4e46] [cursor=pointer]
+            - button "Fullscreen" [ref=f4e50] [cursor=pointer]
+      - status
+  - button "Horizon video remote control"
+  - region "Horizon playback controls" [ref=f3e4]:
+    - generic [ref=f3e5]:
+      - generic [ref=f3e6]:
+        - paragraph [ref=f3e7]: HORIZON VIDEO
+        - heading "Movie" [level=1] [ref=f3e8]
+        - paragraph [ref=f3e9]: Movie · playback position unavailable
+        - paragraph [ref=f3e10]: Movie selected by TMDB ID · VidBolt playback availability is unverified
+        - paragraph [ref=f3e11]: VidBolt▶
+      - generic [ref=f3e12]:
+        - generic "Playback actions" [ref=f3e13]:
+          - button "Rewind 10s" [ref=f3e14] [cursor=pointer]:
+            - generic [ref=f3e17]: −10s
+          - button "VidBolt Play / Pause; state unknown" [active] [ref=f3e18] [cursor=pointer]:
+            - generic [ref=f3e21]: Play / Pause
+          - button "Forward 10s" [ref=f3e22] [cursor=pointer]:
+            - generic [ref=f3e25]: +10s
+        - generic "More player actions" [ref=f3e26]:
+          - generic "Episode and player actions" [ref=f3e27]:
+            - 'button "Playback provider: VidBolt. Press OK to switch to YapGrid" [ref=f3e28] [cursor=pointer]':
+              - generic [ref=f3e29]: "Provider: VidBolt"
+            - button "Recover Player" [ref=f3e30] [cursor=pointer]
+          - generic "Additional player actions" [ref=f3e32]:
+            - button "Subtitles" [ref=f3e33] [cursor=pointer]:
+              - generic [ref=f3e34]: "Subtitles: OFF"
+            - button "Diagnostics" [ref=f3e35] [cursor=pointer]
+            - button "Fullscreen" [ref=f3e37] [cursor=pointer]
+            - button "Exit to Watch" [ref=f3e39] [cursor=pointer]
+  - status [ref=f3e41]: Horizon controls visible. Back exits to Watch; Fullscreen stays in the control row.

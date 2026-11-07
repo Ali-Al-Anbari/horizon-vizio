@@ -18,6 +18,55 @@
     var mock = root.HorizonSearchMock;
     var useMock = options.mock === true || ((nav.hostname === "localhost" || nav.hostname === "127.0.0.1")
       && new URLSearchParams(nav.search).get("mock") === "1");
+    var requestedMotion = new URLSearchParams(nav.search).get("watch-motion");
+    var motionMode = ["profile", "glide-off", "art-off", "scroll-off", "all-off"].indexOf(requestedMotion) >= 0
+      ? requestedMotion : "normal";
+    var motionProbe = motionMode === "normal" ? null
+      : { input: [], frames: [], images: [], longTasks: [], overlaps: [], artRequests: 0 };
+    var probeLastInput = 0, probeFrameAt = 0, probeFramesActive = false;
+    function probePush(list, value) { if (list.length >= 120) list.shift(); list.push(value); }
+    function probeInput(key) {
+      if (!motionProbe || !clock.performance || !clock.requestAnimationFrame) return;
+      var start = clock.performance.now();
+      probeLastInput = start;
+      clock.requestAnimationFrame(function (now) {
+        probePush(motionProbe.input, { key: key, ms: Math.round((now - start) * 10) / 10 });
+      });
+      if (probeFramesActive) return;
+      probeFramesActive = true; probeFrameAt = 0;
+      function sample(now) {
+        if (probeFrameAt) probePush(motionProbe.frames, Math.round((now - probeFrameAt) * 10) / 10);
+        probePush(motionProbe.overlaps, Number(!!homeScrollFrame)
+          + Number(get("watch-view").classList.contains("has-focus-glide"))
+          + Number(get("watch-hero-art").childElementCount > 1));
+        probeFrameAt = now;
+        if (now - probeLastInput < 650) clock.requestAnimationFrame(sample);
+        else probeFramesActive = false;
+      }
+      clock.requestAnimationFrame(sample);
+    }
+    var motionObserverInstalled = false;
+    function installMotionProbe() {
+      if (!motionProbe || motionObserverInstalled) return;
+      motionObserverInstalled = true;
+      doc.body.classList.toggle("watch-motion-all-off", motionMode === "all-off");
+      root.HorizonWatchMotionDiagnostics = { snapshot: function () { return {
+        mode: motionMode, input: motionProbe.input.slice(), frames: motionProbe.frames.slice(),
+        images: motionProbe.images.slice(), longTasks: motionProbe.longTasks.slice(),
+        overlaps: motionProbe.overlaps.slice(), artRequests: motionProbe.artRequests,
+        rowAnimating: !!homeScrollFrame, glideVisible: get("watch-view").classList.contains("has-focus-glide"),
+        heroLayers: get("watch-hero-art").querySelectorAll("img").length,
+      }; } };
+      try {
+        if (root.PerformanceObserver && root.PerformanceObserver.supportedEntryTypes
+            && root.PerformanceObserver.supportedEntryTypes.indexOf("longtask") >= 0) {
+          new root.PerformanceObserver(function (list) { list.getEntries().forEach(function (entry) {
+            probePush(motionProbe.longTasks, Math.round(entry.duration));
+          }); }).observe({ entryTypes: ["longtask"] });
+        }
+      } catch (_error) { /* SmartCast may not expose long tasks. */ }
+    }
+    installMotionProbe();
     var previewScenario = new URLSearchParams(nav.search).get("preview-history");
     var previewHistoryMode = useMock && (nav.hostname === "localhost" || nav.hostname === "127.0.0.1")
       && ["1", "none", "one-show", "south-park", "multi-ratings"].indexOf(previewScenario) >= 0;
@@ -54,7 +103,58 @@
       homeOpenPending = false, homeOpenToken = 0, homeReturnFocus = null, homeDetailCache = new Map(),
       launchingEpisode = false, clearPending = false;
     var homeRowMemory = Object.create(null), homeLastContent = null;
-    var homeScrollFrame = 0;
+    var homeScrollFrame = 0, motionArtPinned = false;
+    var motionOverlay = null, motionSelected = "profile", motionUpCount = 0, motionUpAt = 0;
+    var motionModes = ["profile", "glide-off", "art-off", "scroll-off", "all-off"];
+    function motionLabel(mode) { return mode.replace("-", " ").toUpperCase(); }
+    function renderMotionOverlay() {
+      if (!motionOverlay) return;
+      motionOverlay.querySelector(".motion-active").textContent = "Active: " + motionLabel(motionMode);
+      motionOverlay.querySelector(".motion-selected").textContent = "Select: " + motionLabel(motionSelected);
+    }
+    function setMotionMode(next) {
+      if (motionModes.indexOf(next) < 0) return;
+      var wasArtFrozen = motionMode === "art-off" || motionMode === "all-off";
+      motionMode = next;
+      if (!motionProbe) {
+        motionProbe = { input: [], frames: [], images: [], longTasks: [], overlaps: [], artRequests: 0 };
+        installMotionProbe();
+      }
+      doc.body.classList.toggle("watch-motion-all-off", next === "all-off");
+      if (next === "glide-off" || next === "all-off") get("watch-view").classList.remove("has-focus-glide");
+      var artFrozen = next === "art-off" || next === "all-off";
+      if (artFrozen && !wasArtFrozen) motionArtPinned = !!get("watch-hero-art").querySelector("img");
+      if (!artFrozen && wasArtFrozen) {
+        var currentEntry = doc.activeElement.homeEntry || homeHeroEntry;
+        motionArtPinned = false;
+        homeHeroEntry = null;
+        if (currentEntry) showHomeHero(currentEntry);
+      }
+      renderMotionOverlay();
+    }
+    function openMotionOverlay() {
+      if (!motionOverlay) {
+        motionOverlay = doc.createElement("section");
+        motionOverlay.className = "watch-motion-overlay";
+        motionOverlay.setAttribute("role", "status");
+        motionOverlay.setAttribute("aria-live", "polite");
+        motionOverlay.innerHTML = "<strong>Motion diagnostics</strong><span class='motion-active'></span>"
+          + "<span class='motion-selected'></span><small>Up / Down choose · OK apply · Back close</small>";
+        get("watch-view").appendChild(motionOverlay);
+      }
+      if (motionMode === "normal") setMotionMode("profile");
+      motionSelected = motionMode;
+      motionOverlay.hidden = false;
+      renderMotionOverlay();
+    }
+    function motionOverlayKey(key) {
+      if (key === "Back") { motionOverlay.hidden = true; return; }
+      if (key === "ArrowUp" || key === "ArrowDown") {
+        var index = motionModes.indexOf(motionSelected) + (key === "ArrowDown" ? 1 : -1);
+        motionSelected = motionModes[Math.max(0, Math.min(motionModes.length - 1, index))];
+        renderMotionOverlay();
+      } else if (key === "OK") setMotionMode(motionSelected);
+    }
     var catalogRequests = Object.create(null);
     var homeRowOrder = ["continue", "top", "because", "recent"];
     var recommendationPayload = null, recommendationLoadedSignature = "", recommendationPending = null,
@@ -96,6 +196,9 @@
     function setView(name) {
       var changed = state.view !== name;
       if (changed && state.view === "watch") {
+        if (motionOverlay) motionOverlay.hidden = true;
+        motionUpCount = 0;
+        motionArtPinned = false;
         if (homeScrollFrame) clock.cancelAnimationFrame(homeScrollFrame);
         homeScrollFrame = 0;
         homeOpenToken += 1; homeOpenPending = false;
@@ -160,10 +263,7 @@
       if (!scroller || !section) return;
       var heading = section.querySelector("h2"), bounds = scroller.getBoundingClientRect();
       var top = heading ? heading.getBoundingClientRect().top : element.getBoundingClientRect().top;
-      var bottom = Math.max.apply(null, Array.from(section.querySelectorAll(".home-card")).map(function (card) {
-        return card.getBoundingClientRect().bottom;
-      }));
-      if (!Number.isFinite(bottom)) bottom = element.getBoundingClientRect().bottom;
+      var bottom = element.getBoundingClientRect().bottom;
       var topInset = Math.min(30, Math.max(28, Math.round(scroller.clientHeight * .065)));
       var bottomInset = 8, available = bounds.height - topInset - bottomInset;
       if (bottom - top > available) {
@@ -179,7 +279,8 @@
       var destination = scroller.scrollTop + delta;
       if (homeScrollFrame) clock.cancelAnimationFrame(homeScrollFrame);
       homeScrollFrame = 0;
-      if (!clock.requestAnimationFrame || !clock.cancelAnimationFrame || !clock.matchMedia
+      if (motionMode === "scroll-off" || motionMode === "all-off"
+          || !clock.requestAnimationFrame || !clock.cancelAnimationFrame || !clock.matchMedia
           || clock.matchMedia("(prefers-reduced-motion: reduce)").matches) {
         scroller.scrollTop = destination; return;
       }
@@ -194,7 +295,8 @@
     }
     function glideHomeFocus(previous, element, rowScrolled) {
       var home = get("watch-view"), glide = get("watch-focus-glide");
-      var active = state.view === "watch" && previous && previous.dataset.homeGroup
+      var active = motionMode !== "glide-off" && motionMode !== "all-off"
+        && state.view === "watch" && previous && previous.dataset.homeGroup
         && previous.dataset.homeGroup === element.dataset.homeGroup && !rowScrolled
         && clock.CSS && clock.CSS.supports && clock.CSS.supports("transform", "translate3d(0,0,0)")
         && (!clock.matchMedia || !clock.matchMedia("(prefers-reduced-motion: reduce)").matches);
@@ -211,15 +313,18 @@
       glide.style.transform = "translate3d(" + (to.left - bounds.left - 3) + "px," + (to.top - bounds.top - 3) + "px,0)";
       home.classList.add("has-focus-glide");
     }
-    function syncActiveHomeHeading(element) {
+    function syncActiveHomeHeading(element, force) {
       var heading = get("watch-active-heading"), section = element && element.closest(".watch-home-section");
-      doc.querySelectorAll("#watch-rows-scroll .is-active-home-section").forEach(function (item) {
-        item.classList.remove("is-active-home-section");
-      });
+      var original = section && section.querySelector("h2");
+      var previousSection = doc.querySelector("#watch-rows-scroll .is-active-home-section");
+      if (!force && section && section === previousSection && !heading.hidden
+          && heading.textContent === original.textContent) return;
+      if (previousSection && previousSection !== section)
+        previousSection.classList.remove("is-active-home-section");
       heading.hidden = !section || state.view !== "watch";
       if (!heading.hidden) {
         section.classList.add("is-active-home-section");
-        var original = section.querySelector("h2"), home = get("watch-view").getBoundingClientRect();
+        var home = get("watch-view").getBoundingClientRect();
         heading.textContent = original.textContent;
         heading.style.top = Math.max(original.getBoundingClientRect().top,
           get("watch-rows-scroll").getBoundingClientRect().top) - home.top + "px";
@@ -385,6 +490,7 @@
     }
     var homeArtRequest = 0;
     function setHomeArtwork(backdropPath, posterPath) {
+      if (motionProbe) motionProbe.artRequests += 1;
       var art = get("watch-hero-art"), request = ++homeArtRequest;
       var paths = backdropPath ? [[backdropPath, "hero", false]] : [];
       if (posterPath) paths.push([posterPath, "poster", true]);
@@ -394,9 +500,12 @@
         var path = paths[index], src = core.imageUrl(path[0], path[1]);
         var current = art.querySelector("img.is-visible");
         if (current && current.src === src) return;
-        var image = doc.createElement("img"); image.alt = ""; image.className = "home-art-layer";
+        var image = doc.createElement("img"), imageStarted = motionProbe && clock.performance && clock.performance.now();
+        image.alt = ""; image.className = "home-art-layer";
         image.addEventListener("error", function () { tryPath(index + 1); });
         image.addEventListener("load", function () {
+          if (motionProbe && imageStarted) probePush(motionProbe.images,
+            Math.round(clock.performance.now() - imageStarted));
           if (request !== homeArtRequest || state.view !== "watch") return;
           Array.from(art.querySelectorAll("img:not(.is-visible)")).forEach(function (old) { old.remove(); });
           current = art.querySelector("img.is-visible");
@@ -421,7 +530,10 @@
       if (entry) {
         var row = entry.row, backdropPath = detail && detail.backdrop || row.backdrop,
           posterPath = detail && detail.poster || row.poster;
-        setHomeArtwork(backdropPath, posterPath);
+        if (motionMode !== "art-off" && motionMode !== "all-off" || !motionArtPinned) {
+          motionArtPinned = true;
+          setHomeArtwork(backdropPath, posterPath);
+        }
         text("watch-hero-title", detail && detail.title || row.title);
         var meta = [];
         if (detail && detail.date || row.date) meta.push((detail && detail.date || row.date).slice(0, 4));
@@ -434,6 +546,7 @@
         text("watch-hero-context", meta.join("  ·  "));
         text("watch-hero-description", detail && detail.overview || row.overview || "");
       } else {
+        motionArtPinned = false;
         ++homeArtRequest; get("watch-hero-art").replaceChildren();
         text("watch-hero-title", "Find your next watch");
         text("watch-hero-context", "Your viewing history will appear here.");
@@ -441,6 +554,7 @@
       }
     }
     function showHomeHero(entry) {
+      if (entry && entry === homeHeroEntry) return;
       var token = ++homeHeroToken;
       paintHomeHero(entry, null);
       if (entry && entry.group !== "top" && entry.group !== "because") homeDetail(entry.row).then(function (detail) {
@@ -1412,6 +1526,24 @@
     function onKey(event) {
       if (disposed || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
       var key = keyName(event);
+      if (motionOverlay && !motionOverlay.hidden && state.view === "watch") {
+        event.preventDefault();
+        if (!event.repeat) motionOverlayKey(key);
+        return;
+      }
+      if (state.view === "watch" && doc.activeElement === get("watch-toggle")
+          && key === "ArrowUp" && !event.repeat) {
+        var now = Date.now();
+        motionUpCount = now - motionUpAt <= 4000 ? motionUpCount + 1 : 1;
+        motionUpAt = now;
+        if (motionUpCount === 5) {
+          motionUpCount = 0;
+          event.preventDefault();
+          openMotionOverlay();
+          return;
+        }
+      } else if (key !== "ArrowUp" || doc.activeElement !== get("watch-toggle")) motionUpCount = 0;
+      if (state.view === "watch" && key.indexOf("Arrow") === 0) probeInput(key);
       var editing = doc.activeElement === query || !!(doc.activeElement && doc.activeElement.isContentEditable);
       if (nativeEditingKey(event, editing, finePointer)) return;
       if (finePointer && event.key === "Backspace" && !editing) return;
@@ -1480,7 +1612,7 @@
       get("watch-view").classList.toggle("has-row-scroll", get("watch-rows-scroll").scrollTop > 1);
       get("watch-view").classList.remove("has-focus-glide");
       if (state.view === "watch" && doc.activeElement.dataset.homeGroup)
-        syncActiveHomeHeading(doc.activeElement);
+        syncActiveHomeHeading(doc.activeElement, true);
     });
     doc.querySelectorAll(".watch-home-row").forEach(function (row) {
       row.addEventListener("scroll", function () { get("watch-view").classList.remove("has-focus-glide"); });

@@ -67,7 +67,7 @@ test("active Watch heading is outside the clipped scroller and above the decorat
   assert.match(css, /body\.watch-active \.watch-active-heading \{[^}]*z-index: 4/s);
   assert.match(css, /body\.watch-active \.watch-home::after \{[^}]*z-index: 2/s);
   assert.match(css, /body\.watch-active \.watch-home-section\.is-active-home-section > h2 \{ opacity: 0; \}/);
-  assert.match(source, /function syncActiveHomeHeading\(element\)/);
+  assert.match(source, /function syncActiveHomeHeading\(element, force\)/);
   assert.match(source, /syncActiveHomeHeading\(element\)/);
 });
 
@@ -89,7 +89,7 @@ test("horizontal poster traversal cannot trigger vertical row reveal", () => {
   assert.match(source, /key === "ArrowLeft"\) focus\(group\[index - 1\] \|\| get\("watch-toggle"\), true\)/);
   assert.match(source, /key === "ArrowRight"\) focus\(group\[index \+ 1\], true\)/);
   assert.match(css, /body\.watch-active \.watch-rows-scroll \{[^}]*scroll-behavior: auto/s);
-  assert.match(source, /section\.querySelectorAll\("\.home-card"\)/);
+  assert.match(source, /element\.getBoundingClientRect\(\)\.bottom/);
 });
 
 test("last visible homepage row has no Down target, including dynamically hidden rows", () => {

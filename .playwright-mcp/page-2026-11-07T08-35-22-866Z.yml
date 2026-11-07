@@ -1,0 +1,39 @@
+- main [ref=f5e2]:
+  - navigation "Horizon Watch navigation" [ref=f5e3]:
+    - button "Watch homepage" [active] [ref=f5e4] [cursor=pointer]:
+      - generic [ref=f5e5]: Watch Home
+    - button "Search" [ref=f5e6] [cursor=pointer]
+    - button "Watch History" [ref=f5e8] [cursor=pointer]:
+      - generic [ref=f5e9]: History
+    - button "Watch Settings" [ref=f5e10] [cursor=pointer]:
+      - generic [ref=f5e11]: Settings
+  - region "Watch homepage" [ref=f5e13]:
+    - generic [ref=f5e14]:
+      - generic [aria-hidden] [ref=f5e15]:
+        - text: HORIZON
+        - generic [ref=f5e16]: WATCH
+      - generic [ref=f5e17]:
+        - heading "Find your next watch" [level=1] [ref=f5e18]
+        - paragraph [ref=f5e19]: Your viewing history will appear here.
+        - paragraph [ref=f5e20]: Use Search to find a movie or show.
+    - region "Top Picks for You" [ref=f5e22]:
+      - heading "Top Picks for You" [level=2] [ref=f5e23]
+      - generic [ref=f5e24]:
+        - button "MobLand, TV series" [ref=f5e25] [cursor=pointer]:
+          - generic [ref=f5e26]: MobLand
+          - strong [ref=f5e28]: MobLand
+        - button "Resident Evil, movie" [ref=f5e29] [cursor=pointer]:
+          - generic [ref=f5e30]: Resident Evil
+          - strong [ref=f5e32]: Resident Evil
+        - button "Verity, movie" [ref=f5e33] [cursor=pointer]:
+          - generic [ref=f5e34]: Verity
+          - strong [ref=f5e36]: Verity
+        - button "Primetime, movie" [ref=f5e37] [cursor=pointer]:
+          - generic [ref=f5e38]: Primetime
+          - strong [ref=f5e40]: Primetime
+        - button "Godzilla Minus Zero, movie" [ref=f5e41] [cursor=pointer]:
+          - generic [ref=f5e42]: Godzilla Minus Zero
+          - strong [ref=f5e44]: Godzilla Minus Zero
+        - button "Nocturne, TV series" [ref=f5e45] [cursor=pointer]:
+          - generic [ref=f5e46]: Nocturne
+          - strong [ref=f5e48]: Nocturne

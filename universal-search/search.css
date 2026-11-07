@@ -792,6 +792,17 @@ body.watch-active .watch-active-heading { position: absolute; z-index: 4; top: c
 body.watch-active .watch-active-heading[hidden] { display: none; }
 body.watch-active .watch-home-section.is-active-home-section > h2 { opacity: 0; }
 @media (prefers-reduced-motion: reduce) { body.watch-active .watch-focus-glide { display: none; } }
+body.watch-active.watch-motion-all-off .watch-home *,
+body.watch-active.watch-motion-all-off .watch-rail * { transition-duration: 0s !important;
+  animation-duration: 0s !important; scroll-behavior: auto !important; }
+body.watch-active .watch-motion-overlay { position: absolute; z-index: 12; top: 24px; right: 24px;
+  width: min(340px, calc(100vw - 48px)); padding: 16px 18px; border: 1px solid rgba(255,255,255,.28);
+  border-radius: 12px; background: rgba(9,11,18,.94); color: #fff; font-size: 17px;
+  line-height: 1.35; pointer-events: none; }
+body.watch-active .watch-motion-overlay[hidden] { display: none; }
+body.watch-active .watch-motion-overlay strong, body.watch-active .watch-motion-overlay span,
+body.watch-active .watch-motion-overlay small { display: block; margin-bottom: 5px; }
+body.watch-active .watch-motion-overlay small { margin: 10px 0 0; color: #cbd4dc; font-size: 14px; }
 body.watch-active .watch-rows-scroll { flex: 1; min-height: 0; width: 100%; overflow-x: hidden; overflow-y: auto;
   scroll-behavior: auto; scrollbar-width: none; overscroll-behavior: contain; }
 body.watch-active .watch-rows-scroll::-webkit-scrollbar { display: none; }

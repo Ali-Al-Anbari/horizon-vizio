@@ -28,6 +28,7 @@ Thumbs.db
 *.swo
 
 # Logs, state, generated output
+.playwright-mcp/
 *.log
 *.out
 *.pid

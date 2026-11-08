@@ -339,6 +339,7 @@
   function imageUrl(path, size) {
     return imagePath(path)
       ? "https://image.tmdb.org/t/p/" + (size === "hero" ? "w1280" : size === "backdrop" ? "w780"
+        : size === "poster-small" ? "w342"
         : size === "provider" ? "w92" : "w500") + path : "";
   }
   function providerIdentity(name) {

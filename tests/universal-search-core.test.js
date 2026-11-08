@@ -372,6 +372,8 @@ test("provider preference and launch names are allowlisted; external search is e
   assert.equal(core.providerApp("Netflix"), null);
   assert.match(core.websiteSearch("A & B"), /A%20%26%20B/);
   assert.equal(core.imageUrl("https://evil.example/a", "poster"), "");
+  assert.match(core.imageUrl("/test.jpg", "poster"), /\/w500\/test\.jpg$/);
+  assert.match(core.imageUrl("/test.jpg", "poster-small"), /\/w342\/test\.jpg$/);
 });
 
 test("subtitle preference defaults off, remembers either explicit choice, and rejects corrupt storage", () => {

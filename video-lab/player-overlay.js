@@ -200,6 +200,13 @@
         playerProgressStorage.setItem(PLAYER_PROGRESS_KEY, JSON.stringify({ version: 1, items: items.slice(0, 100) }));
       } catch (_error) {}
     }
+    // VidBolt does not identify the media behind its timeline. A very short
+    // timeline may be a pre-roll, so it cannot confirm episode completion.
+    // Keep its partial checkpoint and let a later content timeline take over.
+    function credibleBoltCompletionTimeline() {
+      return boltSession && Number.isFinite(boltSession.duration)
+        && boltSession.duration >= 60;
+    }
     if (route.startOver) clearPlayerProgress(isMovie ? "movie:" + currentEpisode.movieId
       : "tv:" + currentEpisode.showId + ":" + currentEpisode.season + ":" + currentEpisode.episode);
     if (!route.startOver) {
@@ -551,9 +558,11 @@
         if (movieLoadTimer !== null) { clock.clearTimeout(movieLoadTimer); movieLoadTimer = null; }
         get("player-loading").classList.remove("is-warning");
         get("player-loading").hidden = true;
-        var endedProgress = confirmedProgressRecord();
-        if (endedProgress) storePlayerProgress(endedProgress.position, endedProgress.duration, true, true);
-        else markStoredProgressComplete();
+        if (credibleBoltCompletionTimeline()) {
+          var endedProgress = confirmedProgressRecord();
+          if (endedProgress) storePlayerProgress(endedProgress.position, endedProgress.duration, true, true);
+          else markStoredProgressComplete();
+        }
       } else if (message.type === "vidbolt:durationchange") {
         s.duration = message.duration;
       } else if (message.type === "vidbolt:mobile-panel") {
@@ -600,7 +609,7 @@
           s.progressReference = message.currentTime;
           boltLastConfirmed = { identity: s.identity, position: message.currentTime };
           storePlayerProgress(message.currentTime, s.duration, false, false);
-          if (s.duration > 0 && message.currentTime / s.duration >= 0.95)
+          if (credibleBoltCompletionTimeline() && message.currentTime / s.duration >= 0.95)
             storePlayerProgress(message.currentTime, s.duration, true, true);
           if (s.volumeSentAt === null) initializeBoltVolume(); // Both ready and play may be missed.
           if (boltRecoveryGeneration === s.generation && boltRecoveryResult === "awaiting position advance") {

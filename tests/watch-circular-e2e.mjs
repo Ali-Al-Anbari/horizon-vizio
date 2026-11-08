@@ -91,18 +91,28 @@ try {
     assert.ok(Math.abs(layout.gap - 42) < 1, `heading gap at ${viewport.width}`);
     await pause();
     assert.equal(await evaluate("document.querySelector('#watch-hero-title').textContent"), await title());
+    for (let i = 0; i < 5; i++) await key("ArrowRight");
+    const remembered = await evaluate("document.activeElement.dataset.homeKey");
+    assert.equal(remembered, "tv:100088", "logical identity survives window recentering");
+    assert.equal(await evaluate("document.activeElement.isConnected"), true,
+      "focused logical card remains attached after recentering");
     await key("ArrowUp");
     assert.equal(await evaluate("document.activeElement.id"), "watch-toggle");
     await key("ArrowRight");
-    assert.equal(await title(), "South Park");
+    assert.equal(await evaluate("document.activeElement.dataset.homeKey"), remembered,
+      "rail return restores the same logical title, not a recycled window position");
     await key("ArrowDown"); await pause();
     assert.equal(await evaluate("document.activeElement.dataset.homeGroup"), "top");
     await key("ArrowUp"); await pause();
-    assert.equal(await title(), "South Park");
+    assert.equal(await evaluate("document.activeElement.dataset.homeKey"), remembered,
+      "row memory restores the detached-window title");
     await key("ArrowLeft");
-    assert.equal(await title(), "Severance");
+    assert.equal(await title(), "Stranger Things");
+    await key("ArrowLeft");
+    assert.equal(await title(), "Interstellar");
     await key("Enter");
-    await until("document.querySelector('#episodes-view').hidden === false");
+    await until("document.querySelector('#details-view').hidden === false"
+      + " && document.querySelector('#detail-title').textContent === 'Interstellar'");
   }
   for (const scenario of ["one-show", "two-show", "none"]) {
     const url = new URL(base);

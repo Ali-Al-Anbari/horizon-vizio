@@ -4,6 +4,10 @@ Horizon is an experimental, lightweight custom home screen for Vizio SmartCast/V
 
 Horizon runs as a web page in Vizio's Conjure runtime through SmartCast app ID **17**, namespace **4**. It has been tested on one retail television; it does not replace Vizio Home permanently, and it cannot start itself. Automatic launch requires a separate computer that stays powered, connected to the same LAN, and able to reach the TV.
 
+## Current architecture
+
+The setup narrative below describes the original local-controller launcher. Current Horizon also has three separate Cloudflare deployments: Home (`horizon-vizio`), Watch (`horizon-universal-search-preview`), and Video Lab (`horizon-video-lab-preview`). Home's intended combined Worker release is documented in [the Home release guide](docs/HOME_CLOUDFLARE_RELEASE.md); the assets-only Home Wrangler file is not its release configuration. Watch uses instant circular poster navigation, verified progress, and TMDB recommendations. Video Lab uses VidBolt with a separate pairing-protected SubDL subtitle endpoint; English subtitles remain Off until explicitly selected. Home and Video Lab sessions belong to different origins and are not interchangeable. See [reliability and release notes](docs/HORIZON_RELIABILITY_RELEASE.md) for current boundaries and manual checks. Local source does not establish which Worker versions are active on the TV.
+
 ## Features
 
 - 10-foot launcher layout with lightweight D-pad focus movement, visible focus, OK, and Back handling.
@@ -42,7 +46,7 @@ docs/           setup, integration, Conjure test, and automatic-launch details
 Requirements: Python 3, a Vizio TV reachable over your local network, and an existing SmartCast pairing token. The controller has no third-party Python dependencies.
 
 1. Copy `.env.example` to `.env` and set the TV IP, the Mac/Pi LAN IP reachable from the TV, the private token-file path, and optionally a hosted Horizon URL. Values can also be supplied per command with `--tv`, `--auth-file`, `--host-ip`, and `--url`.
-2. This repository does not implement pairing. Use a SmartCast pairing client to start the documented pairing flow, approve pairing on the TV, and enter the displayed PIN in that client. Store its resulting JSON containing `auth_token` outside this repository; for example, `~/.config/vizio-smartcast/auth.json`. Restrict it to the current account (`chmod 600` on macOS/Linux). Never paste the token into `.env`, source files, or the web page.
+2. This legacy local-controller setup does not perform TV pairing. Use a SmartCast pairing client to start the documented pairing flow, approve pairing on the TV, and enter the displayed PIN in that client. Store its resulting JSON containing `auth_token` outside this repository; for example, `~/.config/vizio-smartcast/auth.json`. Restrict it to the current account (`chmod 600` on macOS/Linux). Never paste the token into `.env`, source files, or the web page. Cloudflare Home and Video Lab have their own paired-session flows.
 3. Load the optional shell configuration and check connectivity:
 
    ```sh

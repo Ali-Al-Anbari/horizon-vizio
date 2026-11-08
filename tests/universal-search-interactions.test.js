@@ -37,7 +37,8 @@ test("Watch home follows the reference layout and routes cards through the exist
   assert.match(html, /<h2>Recently Finished<\/h2>/);
   assert.match(source, /core\.homepageContinueCandidates\(rows, local\)/);
   assert.match(source, /core\.homepageFinished\(rows, local\)/);
-  assert.match(source, /group === "continue" \? landscapeArt\(row\) : verticalPosterArt\(row\)/);
+  assert.match(source, /group === "continue" \? landscapeArt\(row, true\) : verticalPosterArt\(row, true\)/);
+  assert.match(source, /loadHomeWindowArt\(selected\)/);
   assert.match(source, /if \(row\.type === "movie"\) \{ openDetails\(row\); return; \}/);
   assert.match(source, /openDetails\(row, target \|\| \{ season: row\.season, episode: row\.episode \}\)/);
   assert.match(source, /lookupNextEpisode\(row, detail\)/);

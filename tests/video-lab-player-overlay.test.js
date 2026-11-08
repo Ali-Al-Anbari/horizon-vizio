@@ -2093,6 +2093,40 @@ test("VidBolt completion requires ended or natural confirmed progress; a seek pr
   assert.equal(saved.read().items[0].completed, true, "provider ended signal marks the history record complete");
 });
 
+test("a 22-second VidBolt timeline cannot complete an episode or erase its saved partial point", () => {
+  const saved = progressStorage([{ identity: "tv:1396:1:4", position: 420, duration: 1800,
+    updatedAt: 1700000000000, provider: "vidbolt", completed: false }]);
+  const app = setup({ search: "?showId=1396&season=1&episode=4&provider=vidbolt", progressStorage: saved });
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 10, duration: 22 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 21, duration: 22 }, "https://vidbolt.xyz");
+  app.message({ type: "ended" }, "https://vidbolt.xyz");
+  assert.equal(saved.read().items[0].completed, false);
+  assert.equal(saved.read().items[0].position, 420);
+  assert.equal(saved.read().items[0].duration, 1800);
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 421, duration: 1800 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 422, duration: 1800 }, "https://vidbolt.xyz");
+  app.message({ type: "ended" }, "https://vidbolt.xyz");
+  assert.equal(saved.read().items[0].completed, true, "the later credible content end still completes");
+});
+
+test("an ambiguous short first timeline stays partial until a credible timeline completes", () => {
+  const saved = progressStorage();
+  const app = setup({ search: "?showId=1396&season=1&episode=4&provider=vidbolt", progressStorage: saved });
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 10, duration: 22 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 21, duration: 22 }, "https://vidbolt.xyz");
+  app.message({ type: "ended" }, "https://vidbolt.xyz");
+  assert.equal(saved.read().items[0].completed, false);
+  app.message({ type: "play" }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 10, duration: 1800 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 11, duration: 1800 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 1710, duration: 1800 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 1711, duration: 1800 }, "https://vidbolt.xyz");
+  assert.equal(saved.read().items[0].completed, true, "credible 95% progress still completes");
+});
+
 test("VidBolt initializes internal volume once after ready, or after play if ready was missed", () => {
   for (const order of [["ready", "play"], ["play", "ready"]]) {
     const app = boltApp();

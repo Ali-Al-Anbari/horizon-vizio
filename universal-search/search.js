@@ -22,6 +22,7 @@
     var useMock = options.mock === true || ((nav.hostname === "localhost" || nav.hostname === "127.0.0.1")
       && new URLSearchParams(nav.search).get("mock") === "1");
     var previewScenario = new URLSearchParams(nav.search).get("preview-history");
+    var artWindowExperiment = new URLSearchParams(nav.search).get("art-window") === "1";
     var previewHistoryMode = useMock && (nav.hostname === "localhost" || nav.hostname === "127.0.0.1")
       && ["1", "none", "one-show", "two-show", "south-park", "multi-ratings"].indexOf(previewScenario) >= 0;
     var local = options.localStorage;
@@ -44,6 +45,8 @@
       session.setItem("horizon-search-local-home", "1");
     }
     var get = function (id) { return doc.getElementById(id); };
+    var watchPerformance = root.HorizonWatchPerformance
+      ? root.HorizonWatchPerformance.create(doc, clock) : null;
     var query = get("query"), results = get("results");
     var state = { view: "watch", previousView: "watch", detailSource: "watch", filter: "all", query: "", title: null, detail: null,
       season: null, episodes: [], subtitle: core.readSubtitlePref(local), continueMode: false };
@@ -100,6 +103,7 @@
     function setView(name) {
       var changed = state.view !== name;
       if (changed && state.view === "watch") {
+        if (watchPerformance) watchPerformance.close();
         if (homeHeroTimer) clock.clearTimeout(homeHeroTimer);
         homeHeroTimer = 0; ++homeHeroToken;
         ++homeArtRequest; homeArtTargetSrc = "";
@@ -280,19 +284,21 @@
         } return response.json(); })
         .finally(function () { clock.clearTimeout(timer); });
     }
-    function poster(path, kind) {
-      var url = core.imageUrl(path, kind);
+    function poster(path, kind, defer) {
+      var url = core.imageUrl(path, defer && kind === "poster" && artWindowExperiment ? "poster-small" : kind);
       if (!url) return null;
-      var img = doc.createElement("img"); img.src = url; img.loading = "lazy"; img.alt = "";
+      var img = doc.createElement("img");
+      if (defer && artWindowExperiment) img.dataset.pendingSrc = url; else img.src = url;
+      img.loading = "lazy"; img.alt = "";
       return img;
     }
-    function landscapeArt(row) {
+    function landscapeArt(row, defer) {
       var art = doc.createElement("span"); art.className = "poster-art";
       function fallback() { Array.from(art.querySelectorAll("img, .art-fallback")).forEach(function (node) { node.remove(); });
         var label = doc.createElement("span"); label.className = "art-fallback"; label.textContent = row.title;
         art.insertBefore(label, art.firstChild);
       }
-      var image = poster(row.backdrop || row.poster, row.backdrop ? "backdrop" : "poster");
+      var image = poster(row.backdrop || row.poster, row.backdrop ? "backdrop" : "poster", defer);
       if (!image) { fallback(); return art; }
       if (!row.backdrop) art.classList.add("has-poster");
       var triedPoster = !row.backdrop;
@@ -303,14 +309,14 @@
       });
       art.appendChild(image); return art;
     }
-    function verticalPosterArt(row) {
+    function verticalPosterArt(row, defer) {
       var art = doc.createElement("span"); art.className = "poster-art is-vertical-poster";
       function fallback() { art.replaceChildren(); art.classList.remove("is-loaded");
         var label = doc.createElement("span"); label.className = "art-fallback"; label.textContent = row.title;
         art.appendChild(label);
       }
       var posterPath = row.poster || row.backdrop;
-      var image = poster(posterPath, row.poster ? "poster" : "backdrop");
+      var image = poster(posterPath, row.poster ? "poster" : "backdrop", defer);
       if (!image) { fallback(); return art; }
       fallback();
       image.addEventListener("load", function () { if (image.naturalWidth) art.classList.add("is-loaded"); });
@@ -338,6 +344,15 @@
       homeCards[group] = Array.from(get("watch-" + group + "-row").querySelectorAll(".home-card"));
       delete homeWindowSizes[group];
     }
+    function loadHomeWindowArt(cards) {
+      if (!artWindowExperiment) return;
+      cards.forEach(function (card) {
+        card.querySelectorAll("img[data-pending-src]").forEach(function (image) {
+          image.src = image.dataset.pendingSrc;
+          delete image.dataset.pendingSrc;
+        });
+      });
+    }
     function revealHomeWindow(element) {
       var group = element.dataset.homeGroup, cards = homeCards[group];
       if (!cards || !cards.length) return;
@@ -351,14 +366,18 @@
       }
       if (cards.length <= count) {
         if (track.childElementCount !== cards.length) track.replaceChildren.apply(track, cards);
+        loadHomeWindowArt(cards);
         return;
       }
       var attached = Array.from(track.children), position = attached.indexOf(element);
-      if (position > 0 && position < attached.length - 1 && attached.length === count) return;
+      if (position > 0 && position < attached.length - 1 && attached.length === count) {
+        loadHomeWindowArt(attached); return;
+      }
       var index = cards.indexOf(element), selected = [];
       var start = index === 0 ? 0 : index - 1;
       for (var i = 0; i < count; i++) selected.push(cards[(start + i) % cards.length]);
       track.replaceChildren.apply(track, selected);
+      loadHomeWindowArt(selected);
       row.scrollLeft = 0;
     }
     function resolveHomeSelection(saved) {
@@ -421,8 +440,13 @@
         if (current && current.src === src) { homeArtTargetSrc = src; return; }
         var image = doc.createElement("img");
         image.alt = ""; image.className = "home-art-layer";
-        image.addEventListener("error", function () { tryPath(index + 1); });
+        var artStarted = watchPerformance && watchPerformance.heroStart();
+        image.addEventListener("error", function () {
+          if (watchPerformance) watchPerformance.heroEnd(artStarted, true);
+          tryPath(index + 1);
+        });
         image.addEventListener("load", function () {
+          if (watchPerformance) watchPerformance.heroEnd(artStarted, false);
           if (request !== homeArtRequest || state.view !== "watch") return;
           homeArtTargetSrc = src;
           Array.from(art.querySelectorAll("img:not(.is-visible)")).forEach(function (old) { old.remove(); });
@@ -508,7 +532,7 @@
         var row = entry.row, card = button("", action, "home-card");
         card.dataset.homeGroup = group; card.dataset.homeKey = row.type + ":" + row.id;
         card.homeEntry = entry;
-        var artwork = group === "continue" ? landscapeArt(row) : verticalPosterArt(row),
+        var artwork = group === "continue" ? landscapeArt(row, true) : verticalPosterArt(row, true),
           title = doc.createElement("strong"), context = doc.createElement("small");
         title.textContent = row.title; context.textContent = homeContext(row);
         card.appendChild(artwork);
@@ -539,9 +563,13 @@
         var entry = { row: row, group: "recent" };
         recentRow.appendChild(rowCard(entry, "recent", function () { openHomeEntry(entry); }));
       });
-      recordHomeCards("continue"); recordHomeCards("recent");
       get("watch-continue-section").hidden = !continueRows.length;
       get("watch-recent-section").hidden = !finishedRows.length;
+      recordHomeCards("continue"); recordHomeCards("recent");
+      if (artWindowExperiment) ["continue", "recent"].forEach(function (group) {
+        var cards = homeRowButtons(group);
+        if (cards.length) revealHomeWindow(resolveHomeSelection(previous && previous.group === group ? previous : null) || cards[0]);
+      });
       updateHomeSections();
       if (previous && previous.group) { homeReturnFocus = previous; focusHomeTarget(); }
       else showHomeHero(homeDefaultEntry);
@@ -571,17 +599,22 @@
           card.dataset.homeGroup = group; card.dataset.homeKey = candidate.type + ":" + candidate.id;
           card.homeEntry = { row: candidate, group: group };
           var title = doc.createElement("strong"); title.textContent = candidate.title;
-          card.appendChild(verticalPosterArt(candidate)); card.appendChild(title);
+          card.appendChild(verticalPosterArt(candidate, true)); card.appendChild(title);
           card.setAttribute("aria-label", candidate.title + ", " + (candidate.type === "tv" ? "TV series" : "movie"));
           card.addEventListener("mouseenter", function () {
             if (state.view === "watch") showHomeHero(card.homeEntry);
           });
           host.appendChild(card);
         });
-        recordHomeCards(group);
       });
       get("watch-top-section").hidden = !rows.top.length;
       get("watch-because-section").hidden = !rows.because.length;
+      ["top", "because"].forEach(function (group) {
+        recordHomeCards(group);
+        var cards = homeRowButtons(group);
+        if (artWindowExperiment && cards.length) revealHomeWindow(
+          resolveHomeSelection(active && active.group === group ? active : null) || cards[0]);
+      });
       if (rows.seed) text("watch-because-heading", "Because You "
         + (rows.seed.liked ? "Liked " : "Watched ") + rows.seed.title);
       if (doc.activeElement.closest("#watch-because-section")) syncActiveHomeHeading(doc.activeElement);
@@ -1451,6 +1484,10 @@
     function onKey(event) {
       if (disposed || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
       var key = keyName(event);
+      if (watchPerformance && watchPerformance.handle(key, state.view, doc.activeElement)) {
+        event.preventDefault(); return;
+      }
+      if (watchPerformance && key.indexOf("Arrow") === 0) watchPerformance.input();
       var editing = doc.activeElement === query || !!(doc.activeElement && doc.activeElement.isContentEditable);
       if (nativeEditingKey(event, editing, finePointer)) return;
       if (finePointer && event.key === "Backspace" && !editing) return;

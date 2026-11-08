@@ -773,6 +773,10 @@ body.watch-active .watch-home { --watch-hero-height: 59vh; --watch-row-fade: 64p
   position: relative; padding: 0;
   height: 100vh; overflow: hidden; display: flex; flex-direction: column;
   background: #090b12; }
+.watch-performance-panel { position: absolute; z-index: 20; top: 14px; right: 18px;
+  max-width: min(44vw, 620px); margin: 0; padding: 14px 18px; white-space: pre-wrap;
+  color: #fff; background: rgba(5, 9, 17, .88); border: 1px solid rgba(255,255,255,.25);
+  border-radius: 8px; font: 15px/1.4 monospace; pointer-events: none; }
 body.watch-active .watch-home::after { content: ""; position: absolute; z-index: 2;
   top: calc(var(--watch-hero-height) - 1px); left: 0; right: 0; height: 2px;
   background: #090b12; pointer-events: none; }

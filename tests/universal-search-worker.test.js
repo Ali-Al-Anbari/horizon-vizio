@@ -219,3 +219,119 @@ test("missing secret and upstream failures return safe, explicit errors", async 
   const timeout = await api(req("/api/search?q=movie"), env, { fetch: async () => { throw Error("network"); } });
   assert.deepEqual(await timeout.json(), { error: "metadata_timeout_or_network" });
 });
+
+test("discover endpoint validates parameters and returns shaped titles", async () => {
+  let requestedUrl = "";
+  const dReq = path => new Request("https://search.example" + path, { headers: { "cf-connecting-ip": "192.168.1.99" } });
+  const mockFetcher = async (url) => {
+    requestedUrl = url;
+    return new Response(JSON.stringify({
+      results: [
+        { id: 100, title: "Sci-Fi Movie", release_date: "2024-01-01", poster_path: "/sf.jpg", popularity: 50 }
+      ]
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  const response = await api(dReq("/api/discover?type=movie&sort_by=popularity.desc&with_genres=878&year=2024"), env, { fetch: mockFetcher });
+  assert.equal(response.status, 200);
+  assert.match(requestedUrl, /\/discover\/movie/);
+  assert.match(requestedUrl, /with_genres=878/);
+  assert.match(requestedUrl, /primary_release_year=2024/);
+  const data = await response.json();
+  assert.equal(data.results.length, 1);
+  assert.equal(data.results[0].title, "Sci-Fi Movie");
+
+  // Invalid type fails closed
+  const badType = await api(dReq("/api/discover?type=invalid"), env, { fetch: mockFetcher });
+  assert.equal(badType.status, 400);
+
+  // Invalid sort fails closed
+  const badSort = await api(dReq("/api/discover?type=movie&sort_by=invalid"), env, { fetch: mockFetcher });
+  assert.equal(badSort.status, 400);
+
+  // Movie length and rating translations
+  await api(dReq("/api/discover?type=movie&length=short&rating=PG-13&year=2020s&page=2"), env, { fetch: mockFetcher });
+  assert.match(requestedUrl, /with_runtime\.lte=89/);
+  assert.match(requestedUrl, /certification_country=US&certification=PG-13/);
+  assert.match(requestedUrl, /primary_release_date\.gte=2020-01-01/);
+  assert.match(requestedUrl, /page=2/);
+
+  await api(dReq("/api/discover?type=movie&length=medium&year=2010s"), env, { fetch: mockFetcher });
+  assert.match(requestedUrl, /with_runtime\.gte=90&with_runtime\.lte=120/);
+  assert.match(requestedUrl, /primary_release_date\.gte=2010-01-01&primary_release_date\.lte=2019-12-31/);
+
+  await api(dReq("/api/discover?type=movie&length=long&year=older"), env, { fetch: mockFetcher });
+  assert.match(requestedUrl, /with_runtime\.gte=121/);
+  assert.match(requestedUrl, /primary_release_date\.lte=1999-12-31/);
+
+  // Cross-media rating conflation fails closed
+  const conflatedMovie = await api(dReq("/api/discover?type=movie&rating=TV-14"), env, { fetch: mockFetcher });
+  assert.equal(conflatedMovie.status, 400, "Movie must reject TV rating");
+  const conflatedTv = await api(dReq("/api/discover?type=tv&rating=R"), env, { fetch: mockFetcher });
+  assert.equal(conflatedTv.status, 400, "TV must reject Movie MPAA rating");
+
+  // TV discover post-enrichment for content rating and episode runtime
+  const tvFetcher = async (url) => {
+    if (url.includes("/discover/tv")) {
+      return new Response(JSON.stringify({
+        results: [
+          { id: 1, name: "Show Match", first_air_date: "2023-01-01", poster_path: "/s1.jpg", popularity: 50 },
+          { id: 2, name: "Show Rating Mismatch", first_air_date: "2023-01-01", poster_path: "/s2.jpg", popularity: 40 },
+          { id: 3, name: "Show Length Mismatch", first_air_date: "2023-01-01", poster_path: "/s3.jpg", popularity: 30 },
+          { id: 4, name: "Show Missing Rating", first_air_date: "2023-01-01", poster_path: "/s4.jpg", popularity: 20 },
+          { id: 5, name: "Show Missing Runtime", first_air_date: "2023-01-01", poster_path: "/s5.jpg", popularity: 10 }
+        ]
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.includes("/tv/1?")) {
+      return new Response(JSON.stringify({
+        content_ratings: { results: [{ iso_3166_1: "US", rating: "TV-14" }] },
+        episode_run_time: [22]
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.includes("/tv/2?")) {
+      return new Response(JSON.stringify({
+        content_ratings: { results: [{ iso_3166_1: "US", rating: "TV-MA" }] },
+        episode_run_time: [22]
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.includes("/tv/3?")) {
+      return new Response(JSON.stringify({
+        content_ratings: { results: [{ iso_3166_1: "US", rating: "TV-14" }] },
+        episode_run_time: [55]
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.includes("/tv/4?")) {
+      return new Response(JSON.stringify({
+        content_ratings: { results: [] },
+        episode_run_time: [22]
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.includes("/tv/5?")) {
+      return new Response(JSON.stringify({
+        content_ratings: { results: [{ iso_3166_1: "US", rating: "TV-14" }] },
+        episode_run_time: []
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response("{}", { status: 404 });
+  };
+
+  const tvRes = await api(dReq("/api/discover?type=tv&rating=TV-14&length=short"), env, { fetch: tvFetcher });
+  assert.equal(tvRes.status, 200);
+  const tvData = await tvRes.json();
+  assert.equal(tvData.results.length, 1, "Only exact TV-14 & <=30m episode must match");
+  assert.equal(tvData.results[0].id, 1);
+  assert.equal(tvData.results[0].rating, "TV-14");
+  assert.equal(tvData.results[0].episodeRuntime, 22);
+
+  // Upstream 429 propagates retry-after
+  const rateLimitFetcher = async () => new Response("", { status: 429, headers: { "Retry-After": "12" } });
+  const rlRes = await api(dReq("/api/discover?type=movie"), env, { fetch: rateLimitFetcher });
+  assert.equal(rlRes.status, 429);
+  assert.equal(rlRes.headers.get("Retry-After"), "12");
+
+  // Upstream 500 fails with safe metadata_unavailable error
+  const failFetcher = async () => new Response("", { status: 500 });
+  const failRes = await api(dReq("/api/discover?type=movie"), env, { fetch: failFetcher });
+  assert.equal(failRes.status, 502);
+  assert.deepEqual(await failRes.json(), { error: "metadata_unavailable" });
+});

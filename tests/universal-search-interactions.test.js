@@ -16,8 +16,8 @@ const css = readFileSync(new URL("../universal-search/search.css", import.meta.u
 test("Watch rail and Settings expose the requested controls and retain TMDB attribution", () => {
   const rail = html.match(/<nav class="watch-rail"[\s\S]*?<\/nav>/)[0];
   assert.deepEqual(Array.from(rail.matchAll(/id="([^"]+-toggle)"/g), match => match[1]),
-    ["watch-toggle", "search-toggle", "history-toggle", "settings-toggle"]);
-  assert.match(source, /railOrder = \[get\("watch-toggle"\), get\("search-toggle"\), get\("history-toggle"\), get\("settings-toggle"\)\]/);
+    ["search-toggle", "watch-toggle", "tv-toggle", "movies-toggle", "history-toggle", "settings-toggle"]);
+  assert.match(source, /railButtons = \[get\("search-toggle"\), get\("watch-toggle"\), get\("tv-toggle"\), get\("movies-toggle"\), get\("history-toggle"\), get\("settings-toggle"\)\]/);
   assert.match(source, /railPosition \+ \(key === "ArrowDown" \? 1 : -1\)/);
   assert.match(html, /id="settings-view"/);
   assert.match(html, /id="settings-continue"/);
@@ -45,7 +45,7 @@ test("Watch home follows the reference layout and routes cards through the exist
   assert.match(source, /pendingEpisodeFocus = \{ season: episodeTarget\.season, episode: episodeTarget\.episode \}/);
   assert.match(source, /if \(episodeTarget \|\| state\.view === "episodes"\) browseEpisodes\(\)/);
   assert.match(source, /event\.target\.homeEntry\) showHomeHero\(event\.target\.homeEntry\)/);
-  assert.match(source, /railOrder = \[get\("watch-toggle"\), get\("search-toggle"\), get\("history-toggle"\), get\("settings-toggle"\)\]/);
+  assert.match(source, /railButtons = \[get\("search-toggle"\), get\("watch-toggle"\), get\("tv-toggle"\), get\("movies-toggle"\), get\("history-toggle"\), get\("settings-toggle"\)\]/);
   assert.match(source, /revealInScroller\(element, homeScroll, true, 18,[\s\S]*?railEdge/);
   assert.match(css, /body\.watch-active \.watch-rows-scroll \{[^}]*overflow-y: auto/s);
   assert.match(css, /body\.watch-active \.watch-hero \{[^}]*min-height:/s);
@@ -88,8 +88,8 @@ test("focused rail circle expands with adjacent controls spaced apart", () => {
 
 test("horizontal poster traversal cannot trigger vertical row reveal", () => {
   assert.match(source, /if \(!skipHomeVertical && element\.closest\("#watch-rows-scroll"\)[\s\S]*?previousHomeGroup !== element\.dataset\.homeGroup\)\s*revealHomeSection\(element\)/);
-  assert.match(source, /key === "ArrowLeft"\) focus\(group\[circularIndex\(index, group\.length, -1\)\], true/);
-  assert.match(source, /key === "ArrowRight"\) focus\(group\[circularIndex\(index, group\.length, 1\)\], true/);
+  assert.match(source, /key === "ArrowLeft"\)[\s\S]*?focus\(group\[circularIndex\(index, group\.length, -1\)\], true/);
+  assert.match(source, /key === "ArrowRight"\)[\s\S]*?focus\(group\[circularIndex\(index, group\.length, 1\)\], true/);
   assert.match(css, /body\.watch-active \.watch-rows-scroll \{[^}]*scroll-behavior: auto/s);
   assert.match(source, /element\.getBoundingClientRect\(\)\.bottom/);
 });

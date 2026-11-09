@@ -17,10 +17,12 @@
 <body>
   <main class="shell">
     <nav class="watch-rail" aria-label="Horizon Watch navigation">
-      <button id="watch-toggle" class="rail-action is-current" data-focus type="button" aria-label="Watch homepage"><img src="icons/house.svg" alt="" /><span>Watch Home</span></button>
-      <button id="search-toggle" class="rail-action" data-focus type="button" aria-label="Search"><img src="icons/search.svg" alt="" /><span>Search</span></button>
-      <button id="history-toggle" class="rail-action" data-focus type="button" aria-label="Watch History"><img src="icons/clock-history.svg" alt="" /><span>History</span></button>
-      <button id="settings-toggle" class="rail-action" data-focus type="button" aria-label="Watch Settings"><img src="icons/gear.svg" alt="" /><span>Settings</span></button>
+      <button id="search-toggle" class="rail-action" data-focus type="button" aria-label="Search"><img src="icons/search.svg" alt="" /><span class="rail-label">Search</span></button>
+      <button id="watch-toggle" class="rail-action is-current" data-focus type="button" aria-label="Watch Home"><img src="icons/house.svg" alt="" /><span class="rail-label">Home</span></button>
+      <button id="tv-toggle" class="rail-action" data-focus type="button" aria-label="TV Shows"><img src="icons/tv.svg" alt="" /><span class="rail-label">TV Shows</span></button>
+      <button id="movies-toggle" class="rail-action" data-focus type="button" aria-label="Movies"><img src="icons/film.svg" alt="" /><span class="rail-label">Movies</span></button>
+      <button id="history-toggle" class="rail-action" data-focus type="button" aria-label="Watch History"><img src="icons/clock-history.svg" alt="" /><span class="rail-label">History</span></button>
+      <button id="settings-toggle" class="rail-action" data-focus type="button" aria-label="Watch Settings"><img src="icons/gear.svg" alt="" /><span class="rail-label">Settings</span></button>
     </nav>
     <div class="watch-content">
     <header class="topbar">
@@ -29,7 +31,18 @@
     </header>
     <section id="watch-view" class="view watch-home" aria-label="Watch homepage">
       <div id="watch-hero" class="watch-hero">
-        <span class="watch-home-wordmark" aria-hidden="true">HORIZON<small>WATCH</small></span>
+        <div id="watch-filter-strip" class="watch-filter-strip" aria-label="Filters" hidden>
+          <button id="filter-btn-genre" class="filter-chip" data-filter-type="genre" data-focus type="button">Genre</button>
+          <button id="filter-btn-length" class="filter-chip" data-filter-type="length" data-focus type="button">Length</button>
+          <button id="filter-btn-rating" class="filter-chip" data-filter-type="rating" data-focus type="button">Age Rating</button>
+          <button id="filter-btn-year" class="filter-chip" data-filter-type="year" data-focus type="button">Year</button>
+          <button id="filter-btn-sort" class="filter-chip" data-filter-type="sort" data-focus type="button">Sort</button>
+          <button id="filter-btn-clear" class="filter-chip filter-clear-chip" data-focus type="button" hidden>Clear Filters</button>
+        </div>
+        <div id="watch-filter-menu" class="watch-filter-menu" role="dialog" aria-label="Filter options" hidden>
+          <div id="watch-filter-menu-options" class="watch-filter-menu-options"></div>
+        </div>
+        <span class="watch-home-wordmark" aria-hidden="true" hidden>HORIZON<small>WATCH</small></span>
         <div id="watch-hero-art" class="watch-hero-art" aria-hidden="true"></div>
         <div class="watch-hero-shade" aria-hidden="true"></div>
         <div class="watch-hero-copy">
@@ -45,7 +58,7 @@
         <div id="watch-continue-row" class="watch-home-row"><div class="watch-home-track"></div></div>
       </section>
       <section id="watch-top-section" class="watch-home-section" aria-label="Top Picks for You" hidden>
-        <h2>Top Picks for You</h2>
+        <h2 id="watch-top-heading">Top Picks for You</h2>
         <div id="watch-top-row" class="watch-home-row"><div class="watch-home-track"></div></div>
       </section>
       <section id="watch-because-section" class="watch-home-section" aria-label="Because You Watched" hidden>
@@ -56,6 +69,74 @@
         <h2>Recently Finished</h2>
         <div id="watch-recent-row" class="watch-home-row"><div class="watch-home-track"></div></div>
       </section>
+      <section id="watch-trending-section" class="watch-home-section" aria-label="Trending" hidden>
+        <h2 id="watch-trending-heading"></h2>
+        <div id="watch-trending-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-gems-section" class="watch-home-section" aria-label="Hidden Gems" hidden>
+        <h2 id="watch-gems-heading"></h2>
+        <div id="watch-gems-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-explore-section" class="watch-home-section" aria-label="Explore Something Different" hidden>
+        <h2 id="watch-explore-heading"></h2>
+        <div id="watch-explore-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-tv-recommended-section" class="watch-home-section" aria-label="Recommended Series" hidden>
+        <h2 id="watch-tv-recommended-heading"></h2>
+        <div id="watch-tv-recommended-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-tv-trending-section" class="watch-home-section" aria-label="Trending TV" hidden>
+        <h2 id="watch-tv-trending-heading"></h2>
+        <div id="watch-tv-trending-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-tv-genres-section" class="watch-home-section" aria-label="TV Genres" hidden>
+        <h2 id="watch-tv-genres-heading"></h2>
+        <div id="watch-tv-genres-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-tv-short-section" class="watch-home-section" aria-label="Short Episodes" hidden>
+        <h2 id="watch-tv-short-heading"></h2>
+        <div id="watch-tv-short-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-tv-gems-section" class="watch-home-section" aria-label="Hidden Gem Series" hidden>
+        <h2 id="watch-tv-gems-heading"></h2>
+        <div id="watch-tv-gems-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-tv-acclaimed-section" class="watch-home-section" aria-label="Critically Acclaimed Series" hidden>
+        <h2 id="watch-tv-acclaimed-heading"></h2>
+        <div id="watch-tv-acclaimed-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-movies-recommended-section" class="watch-home-section" aria-label="Recommended Movies" hidden>
+        <h2 id="watch-movies-recommended-heading"></h2>
+        <div id="watch-movies-recommended-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-movies-trending-section" class="watch-home-section" aria-label="Trending Movies" hidden>
+        <h2 id="watch-movies-trending-heading"></h2>
+        <div id="watch-movies-trending-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-movies-genres-section" class="watch-home-section" aria-label="Movie Genres" hidden>
+        <h2 id="watch-movies-genres-heading"></h2>
+        <div id="watch-movies-genres-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-movies-short-section" class="watch-home-section" aria-label="Under 100 Minutes" hidden>
+        <h2 id="watch-movies-short-heading"></h2>
+        <div id="watch-movies-short-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-movies-acclaimed-section" class="watch-home-section" aria-label="Critically Acclaimed Films" hidden>
+        <h2 id="watch-movies-acclaimed-heading"></h2>
+        <div id="watch-movies-acclaimed-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-movies-gems-section" class="watch-home-section" aria-label="Hidden Gem Films" hidden>
+        <h2 id="watch-movies-gems-heading"></h2>
+        <div id="watch-movies-gems-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-filtered-section" class="watch-home-section" aria-label="Matching Titles" hidden>
+        <h2 id="watch-filtered-heading">Matching Titles</h2>
+        <div id="watch-filtered-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <div id="watch-filter-empty" class="watch-filter-empty" hidden>
+        <p>No matching titles found.</p>
+        <button id="watch-filter-empty-clear" class="filter-empty-btn" data-focus type="button">Clear Filters</button>
+      </div>
       </div>
     </section>
     <section id="search-view" class="view" hidden>

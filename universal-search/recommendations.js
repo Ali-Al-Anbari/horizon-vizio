@@ -213,6 +213,14 @@
     }
     return output;
   }
+  var GENRE_NAMES = {
+    12: "Adventure", 14: "Fantasy", 16: "Animation", 18: "Drama", 27: "Horror",
+    28: "Action", 35: "Comedy", 36: "History", 37: "Western", 53: "Thriller",
+    80: "Crime", 99: "Documentary", 878: "Sci-Fi", 9648: "Mystery", 10402: "Music",
+    10749: "Romance", 10751: "Family", 10752: "War", 10759: "Action & Adventure",
+    10762: "Kids", 10763: "News", 10764: "Reality", 10765: "Sci-Fi & Fantasy",
+    10766: "Soap", 10767: "Talk", 10768: "War & Politics", 10770: "TV Movie"
+  };
   function selectRows(history, feedback, payload, options) {
     options = options || {};
     var now = Number.isFinite(options.now) ? options.now : Date.now();
@@ -221,7 +229,9 @@
     var reserved = top.map(function (row) { return row.type + ":" + row.id; });
     var seedDetails = Array.isArray(payload && payload.seeds) ? payload.seeds : [];
     var candidates = Array.isArray(payload && payload.candidates) ? payload.candidates : [];
+    var ratings = feedback && feedback.ratings || {};
     var positive = signals(history, feedback, now);
+    var because = [], seed = null;
     for (var i = 0; i < positive.length; i++) {
       var signal = positive[i], identity = signal.type + ":" + signal.id;
       var detail = seedDetails.find(function (item) { return item.type === signal.type && item.id === signal.id; });
@@ -235,15 +245,162 @@
       }).map(function (candidate) { return Object.assign({}, candidate, { sources: candidate.sources.filter(function (source) {
         return source.seed === identity && (source.kind === "recommendation" || source.kind === "similar");
       }) }); });
-      var because = rank(history, feedback, { seeds: seedDetails, avoids: payload.avoids,
+      var found = rank(history, feedback, { seeds: seedDetails, avoids: payload.avoids,
         candidates: related }, { now: now, reserved: reserved,
         seedDiversityWeight: 0,
         limit: Number.isInteger(options.becauseLimit) ? options.becauseLimit : 12 })
         .filter(function (candidate) { return candidate.score > 0; });
-      if (because.length >= 2) return { top: top, because: because,
-        seed: { type: signal.type, id: signal.id, title: title, liked: !!signal.liked } };
+      if (found.length >= 2) {
+        because = found;
+        seed = { type: signal.type, id: signal.id, title: title, liked: !!signal.liked };
+        break;
+      }
     }
-    return { top: top, because: [], seed: null };
+
+    // For You additional rows
+    var forYouReserved = {};
+    top.forEach(function (r) { forYouReserved[r.type + ":" + r.id] = true; });
+    because.forEach(function (r) { forYouReserved[r.type + ":" + r.id] = true; });
+
+    var trending = candidates.filter(function (c) {
+      return !forYouReserved[c.type + ":" + c.id] && ratings[c.type + ":" + c.id] !== "disliked"
+        && c.poster && (c.voteCount >= 20 || c.popularity >= 10);
+    }).sort(function (a, b) {
+      return (b.popularity || 0) - (a.popularity || 0) || (b.voteCount || 0) - (a.voteCount || 0);
+    }).slice(0, 12);
+    trending.forEach(function (r) { forYouReserved[r.type + ":" + r.id] = true; });
+
+    var gems = candidates.filter(function (c) {
+      return !forYouReserved[c.type + ":" + c.id] && ratings[c.type + ":" + c.id] !== "disliked"
+        && c.poster && c.voteAverage >= 7.0 && c.voteCount >= 20 && c.voteCount <= 6000;
+    }).sort(function (a, b) {
+      return (b.voteAverage || 0) - (a.voteAverage || 0) || (b.voteCount || 0) - (a.voteCount || 0);
+    }).slice(0, 12);
+    gems.forEach(function (r) { forYouReserved[r.type + ":" + r.id] = true; });
+
+    var seedGenreSet = new Set();
+    seedDetails.forEach(function (s) { (s.genreIds || []).forEach(function (g) { seedGenreSet.add(g); }); });
+    var explore = candidates.filter(function (c) {
+      if (forYouReserved[c.type + ":" + c.id] || ratings[c.type + ":" + c.id] === "disliked" || !c.poster) return false;
+      var cGenres = c.genreIds || [];
+      return cGenres.length > 0 && !cGenres.some(function (g) { return seedGenreSet.has(g); });
+    }).sort(function (a, b) {
+      return (b.popularity || 0) - (a.popularity || 0);
+    }).slice(0, 12);
+    if (!explore.length) {
+      explore = candidates.filter(function (c) {
+        return !forYouReserved[c.type + ":" + c.id] && ratings[c.type + ":" + c.id] !== "disliked" && c.poster;
+      }).slice(0, 12);
+    }
+
+    // TV Shows rows
+    var tvCandidates = candidates.filter(function (c) {
+      return c.type === "tv" && c.poster && ratings[c.type + ":" + c.id] !== "disliked";
+    });
+    var tvReserved = {};
+    var tvRanked = rank(history, feedback, { seeds: seedDetails, avoids: payload.avoids, candidates: tvCandidates },
+      { now: now, limit: Number.isInteger(options.tabRankedLimit) ? options.tabRankedLimit : 12 });
+    tvRanked.forEach(function (r) { tvReserved[r.type + ":" + r.id] = true; });
+
+    var tvTrending = tvCandidates.filter(function (c) {
+      return !tvReserved[c.type + ":" + c.id] && (c.voteCount >= 20 || c.popularity >= 10);
+    }).sort(function (a, b) { return (b.popularity || 0) - (a.popularity || 0); }).slice(0, 12);
+    tvTrending.forEach(function (r) { tvReserved[r.type + ":" + r.id] = true; });
+
+    var topTvGenre = null, topTvGenreCount = 0;
+    var tvGenreCounts = {};
+    positive.filter(function (p) { return p.type === "tv"; }).forEach(function (p) {
+      var sd = seedDetails.find(function (s) { return s.type === "tv" && s.id === p.id; });
+      if (sd) (sd.genreIds || []).forEach(function (g) { tvGenreCounts[g] = (tvGenreCounts[g] || 0) + 1; });
+    });
+    Object.keys(tvGenreCounts).forEach(function (g) {
+      if (tvGenreCounts[g] > topTvGenreCount) { topTvGenre = Number(g); topTvGenreCount = tvGenreCounts[g]; }
+    });
+    var tvGenresName = topTvGenre && GENRE_NAMES[topTvGenre] ? GENRE_NAMES[topTvGenre] + " Series" : "Featured Series";
+    var tvGenres = tvCandidates.filter(function (c) {
+      return !tvReserved[c.type + ":" + c.id] && (!topTvGenre || (c.genreIds || []).includes(topTvGenre));
+    }).slice(0, 12);
+    tvGenres.forEach(function (r) { tvReserved[r.type + ":" + r.id] = true; });
+
+    var tvShort = tvCandidates.filter(function (c) {
+      var rt = Number.isFinite(c.episodeRuntime) && c.episodeRuntime > 0 ? c.episodeRuntime
+        : (c.detail && Number.isFinite(c.detail.episodeRuntime) && c.detail.episodeRuntime > 0 ? c.detail.episodeRuntime
+        : (options && options.runtimes && Number.isFinite(options.runtimes["tv:" + c.id]) && options.runtimes["tv:" + c.id] > 0
+          ? options.runtimes["tv:" + c.id] : null));
+      return rt !== null && rt <= 30;
+    }).slice(0, 12);
+    tvShort.forEach(function (r) { tvReserved[r.type + ":" + r.id] = true; });
+
+    var tvGems = tvCandidates.filter(function (c) {
+      return !tvReserved[c.type + ":" + c.id] && c.voteAverage >= 7.0 && c.voteCount >= 20 && c.voteCount <= 3000;
+    }).sort(function (a, b) { return (b.voteAverage || 0) - (a.voteAverage || 0); }).slice(0, 12);
+    tvGems.forEach(function (r) { tvReserved[r.type + ":" + r.id] = true; });
+
+    var tvAcclaimed = tvCandidates.filter(function (c) {
+      return !tvReserved[c.type + ":" + c.id] && c.voteAverage >= 7.5;
+    }).sort(function (a, b) { return (b.voteAverage || 0) - (a.voteAverage || 0); }).slice(0, 12);
+
+    // Movie rows
+    var movieCandidates = candidates.filter(function (c) {
+      return c.type === "movie" && c.poster && ratings[c.type + ":" + c.id] !== "disliked";
+    });
+    var movieReserved = {};
+    var moviesRanked = rank(history, feedback, { seeds: seedDetails, avoids: payload.avoids, candidates: movieCandidates },
+      { now: now, limit: Number.isInteger(options.tabRankedLimit) ? options.tabRankedLimit : 12 });
+    moviesRanked.forEach(function (r) { movieReserved[r.type + ":" + r.id] = true; });
+
+    var moviesTrending = movieCandidates.filter(function (c) {
+      return !movieReserved[c.type + ":" + c.id] && (c.voteCount >= 20 || c.popularity >= 10);
+    }).sort(function (a, b) { return (b.popularity || 0) - (a.popularity || 0); }).slice(0, 12);
+    moviesTrending.forEach(function (r) { movieReserved[r.type + ":" + r.id] = true; });
+
+    var topMovieGenre = null, topMovieGenreCount = 0;
+    var movieGenreCounts = {};
+    positive.filter(function (p) { return p.type === "movie"; }).forEach(function (p) {
+      var sd = seedDetails.find(function (s) { return s.type === "movie" && s.id === p.id; });
+      if (sd) (sd.genreIds || []).forEach(function (g) { movieGenreCounts[g] = (movieGenreCounts[g] || 0) + 1; });
+    });
+    Object.keys(movieGenreCounts).forEach(function (g) {
+      if (movieGenreCounts[g] > topMovieGenreCount) { topMovieGenre = Number(g); topMovieGenreCount = movieGenreCounts[g]; }
+    });
+    var movieGenresName = topMovieGenre && GENRE_NAMES[topMovieGenre] ? GENRE_NAMES[topMovieGenre] + " Films" : "Featured Films";
+    var moviesGenres = movieCandidates.filter(function (c) {
+      return !movieReserved[c.type + ":" + c.id] && (!topMovieGenre || (c.genreIds || []).includes(topMovieGenre));
+    }).slice(0, 12);
+    moviesGenres.forEach(function (r) { movieReserved[r.type + ":" + r.id] = true; });
+
+    var moviesShort = movieCandidates.filter(function (c) {
+      var rt = Number.isFinite(c.runtime) && c.runtime > 0 ? c.runtime
+        : (c.detail && Number.isFinite(c.detail.runtime) && c.detail.runtime > 0 ? c.detail.runtime
+        : (options && options.runtimes && Number.isFinite(options.runtimes["movie:" + c.id]) && options.runtimes["movie:" + c.id] > 0
+          ? options.runtimes["movie:" + c.id] : null));
+      return rt !== null && rt < 100;
+    }).slice(0, 12);
+    moviesShort.forEach(function (r) { movieReserved[r.type + ":" + r.id] = true; });
+
+    var moviesAcclaimed = movieCandidates.filter(function (c) {
+      return !movieReserved[c.type + ":" + c.id] && c.voteAverage >= 7.5;
+    }).sort(function (a, b) { return (b.voteAverage || 0) - (a.voteAverage || 0); }).slice(0, 12);
+    moviesAcclaimed.forEach(function (r) { movieReserved[r.type + ":" + r.id] = true; });
+
+    var moviesGems = movieCandidates.filter(function (c) {
+      return !movieReserved[c.type + ":" + c.id] && c.voteAverage >= 7.0 && c.voteCount >= 20 && c.voteCount <= 4000;
+    }).sort(function (a, b) { return (b.voteAverage || 0) - (a.voteAverage || 0); }).slice(0, 12);
+
+    return {
+      top: top, because: because, seed: seed,
+      forYou: {
+        top: top, because: because, trending: trending, gems: gems, explore: explore, seed: seed
+      },
+      tv: {
+        recommended: tvRanked, trending: tvTrending, genres: tvGenres, genresHeading: tvGenresName,
+        short: tvShort, gems: tvGems, acclaimed: tvAcclaimed
+      },
+      movies: {
+        recommended: moviesRanked, trending: moviesTrending, genres: moviesGenres, genresHeading: movieGenresName,
+        short: moviesShort, acclaimed: moviesAcclaimed, gems: moviesGems
+      }
+    };
   }
   async function loadBundle(storage, fetcher, options) {
     options = options || {};
@@ -279,5 +436,5 @@
   }
   root.HorizonWatchRecommendations = { FEEDBACK_KEY: FEEDBACK_KEY, readFeedback: readFeedback,
     setFeedback: setFeedback, signals: signals, seedQuery: seedQuery, avoidQuery: avoidQuery,
-    rank: rank, selectRows: selectRows, load: load, loadBundle: loadBundle };
+    rank: rank, selectRows: selectRows, load: load, loadBundle: loadBundle, GENRE_NAMES: GENRE_NAMES };
 })(typeof window !== "undefined" ? window : globalThis);

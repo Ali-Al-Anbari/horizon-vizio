@@ -256,6 +256,90 @@ export async function api(request, env, options = {}) {
     shape = null;
     ttl = 120;
     var search = { query, type };
+  } else if (url.pathname === "/api/discover") {
+    const allowed = new Set(["type", "sort_by", "with_genres", "year", "length", "rating", "page"]);
+    if ([...url.searchParams.keys()].some(k => !allowed.has(k))) return json(400, { error: "invalid_query" });
+    const type = url.searchParams.get("type");
+    if (!TYPES.has(type)) return json(400, { error: "invalid_query" });
+    const sort = url.searchParams.get("sort_by") || "popularity.desc";
+    const allowedSorts = new Set(["popularity.desc", "vote_average.desc", "primary_release_date.desc", "first_air_date.desc"]);
+    if (!allowedSorts.has(sort)) return json(400, { error: "invalid_query" });
+    const genre = url.searchParams.get("with_genres");
+    if (genre && !/^[0-9,]{1,50}$/.test(genre)) return json(400, { error: "invalid_query" });
+    const year = url.searchParams.get("year");
+    if (year && !/^(19|20)\d{2}s?$|^older$/.test(year)) return json(400, { error: "invalid_query" });
+    const length = url.searchParams.get("length");
+    if (length && !["short", "medium", "long"].includes(length)) return json(400, { error: "invalid_query" });
+    const rating = url.searchParams.get("rating");
+    const movieRatings = new Set(["G", "PG", "PG-13", "R", "NC-17"]);
+    const tvRatings = new Set(["TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA"]);
+    if (rating && !((type === "movie" && movieRatings.has(rating)) || (type === "tv" && tvRatings.has(rating))))
+      return json(400, { error: "invalid_query" });
+    const pageStr = url.searchParams.get("page") || "1";
+    const page = positive(pageStr, 10) || 1;
+
+    let yearParams = "";
+    if (year) {
+      if (year === "2020s") yearParams = type === "movie" ? "&primary_release_date.gte=2020-01-01" : "&first_air_date.gte=2020-01-01";
+      else if (year === "2010s") yearParams = type === "movie" ? "&primary_release_date.gte=2010-01-01&primary_release_date.lte=2019-12-31" : "&first_air_date.gte=2010-01-01&first_air_date.lte=2019-12-31";
+      else if (year === "2000s") yearParams = type === "movie" ? "&primary_release_date.gte=2000-01-01&primary_release_date.lte=2009-12-31" : "&first_air_date.gte=2000-01-01&first_air_date.lte=2009-12-31";
+      else if (year === "older") yearParams = type === "movie" ? "&primary_release_date.lte=1999-12-31" : "&first_air_date.lte=1999-12-31";
+      else yearParams = type === "movie" ? `&primary_release_year=${year}` : `&first_air_date_year=${year}`;
+    }
+
+    let sortParam = `&sort_by=${sort}`;
+    if (sort === "vote_average.desc") sortParam += "&vote_count.gte=50";
+
+    if (type === "movie") {
+      let lengthParam = "";
+      if (length === "short") lengthParam = "&with_runtime.lte=89";
+      else if (length === "medium") lengthParam = "&with_runtime.gte=90&with_runtime.lte=120";
+      else if (length === "long") lengthParam = "&with_runtime.gte=121";
+
+      let ratingParam = "";
+      if (rating) ratingParam = `&certification_country=US&certification=${encodeURIComponent(rating)}`;
+
+      path = `/discover/movie?language=en-US&include_adult=false${sortParam}&page=${page}`
+        + (genre ? `&with_genres=${genre}` : "")
+        + yearParams + lengthParam + ratingParam;
+      shape = value => ({ results: (Array.isArray(value.results) ? value.results : []).filter(r => Number.isInteger(r.id) && r.id > 0 && !r.adult).map(r => Object.assign(title(r, "movie"), rating ? { rating } : {})) });
+      ttl = 600;
+    } else {
+      path = `/discover/tv?language=en-US&include_adult=false${sortParam}&page=${page}`
+        + (genre ? `&with_genres=${genre}` : "")
+        + yearParams;
+      if (rating || length) {
+        shape = async value => {
+          const list = (Array.isArray(value.results) ? value.results : []).filter(r => Number.isInteger(r.id) && r.id > 0 && !r.adult).slice(0, 15);
+          const settled = await Promise.allSettled(list.map(r => tmdbJson(fetcher, env, `/tv/${r.id}?language=en-US&append_to_response=content_ratings`, controller.signal)));
+          const matching = [];
+          settled.forEach((res, i) => {
+            if (res.status !== "fulfilled") return;
+            const det = res.value;
+            const r = list[i];
+            const usRating = det.content_ratings?.results?.find(x => x.iso_3166_1 === "US")?.rating;
+            if (rating) {
+              if (!usRating || usRating.toUpperCase() !== rating.toUpperCase()) return;
+            }
+            const epTime = Array.isArray(det.episode_run_time) ? det.episode_run_time.find(v => Number.isInteger(v) && v > 0) : null;
+            if (length) {
+              if (!Number.isFinite(epTime) || epTime <= 0) return;
+              if (length === "short" && epTime > 30) return;
+              if (length === "medium" && (epTime <= 30 || epTime > 60)) return;
+              if (length === "long" && epTime <= 60) return;
+            }
+            const t = title(r, "tv");
+            if (usRating) t.rating = usRating;
+            if (epTime) t.episodeRuntime = epTime;
+            matching.push(t);
+          });
+          return { results: matching };
+        };
+      } else {
+        shape = value => ({ results: (Array.isArray(value.results) ? value.results : []).filter(r => Number.isInteger(r.id) && r.id > 0 && !r.adult).map(r => title(r, "tv")) });
+      }
+      ttl = 600;
+    }
   } else {
     const parts = url.pathname.split("/");
     const kind = parts[2], type = parts[3], id = positive(parts[4]);
@@ -305,7 +389,7 @@ export async function api(request, env, options = {}) {
       return json(response.status === 404 ? 404 : 502,
         { error: response.status === 404 ? "not_found" : "metadata_unavailable" });
     }
-    return json(200, shape(await response.json()), ttl);
+    return json(200, await shape(await response.json()), ttl);
   } catch (error) {
     if (error.status === 429) return json(429, { error: "rate_limited" }, 0, error.retryAfter);
     if (error.status) return json(error.status === 404 ? 404 : 502,

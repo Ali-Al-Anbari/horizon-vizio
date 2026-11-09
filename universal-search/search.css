@@ -753,6 +753,12 @@ body.watch-active .rail-action { width: 52px; height: 52px; min-height: 52px; co
   border: 1px solid rgba(255,255,255,.12); border-radius: 50%; background: rgba(7,10,19,.48);
   transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease, background-color 180ms ease; }
 body.watch-active .rail-action img { width: 25px; height: 25px; opacity: .94; }
+body.watch-active .rail-action .rail-label, body.watch-active .rail-action span { display: none; }
+body.watch-active .rail-action.is-current {
+  border-color: rgba(138, 186, 255, 0.7);
+  background: rgba(18, 30, 48, 0.58);
+  box-shadow: 0 0 12px rgba(138, 186, 255, 0.35);
+}
 body.watch-active .rail-action:focus, body.watch-active .rail-action.is-focused {
   border-color: rgba(255,255,255,.88); outline: 1px solid rgba(255,255,255,.9); outline-offset: 2px;
   background: rgba(16,24,37,.7); box-shadow: 0 0 13px rgba(56,189,248,.52), 0 5px 14px rgba(0,0,0,.5);
@@ -765,8 +771,62 @@ body.watch-active .rail-action img { transition: transform 180ms ease; }
 body.watch-active .watch-content { position: relative; padding: 0; overflow: hidden; width: 100%; }
 body.watch-active .topbar { display: none; }
 body.watch-active .wordmark { display: none; }
+body.watch-active .watch-filter-strip {
+  position: absolute; z-index: 5; top: clamp(26px, 3.8vh, 46px);
+  left: var(--watch-gutter); display: flex; align-items: center;
+  gap: 10px; pointer-events: auto;
+}
+body.watch-active .watch-filter-strip[hidden] { display: none; }
+body.watch-active .filter-chip {
+  background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.18);
+  border-radius: 18px; padding: 4px 13px; color: rgba(255,255,255,.82);
+  font-size: clamp(12px, .82vw, 14px); font-weight: 500; cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+body.watch-active .filter-chip.is-active {
+  background: rgba(138,186,255,.16); border-color: #8abaff; color: #fff;
+}
+body.watch-active .filter-chip:focus, body.watch-active .filter-chip.is-focused {
+  outline: 2px solid #8abaff; outline-offset: 2px; background: rgba(255,255,255,.18);
+  color: #fff; box-shadow: 0 0 10px rgba(138,186,255,.4);
+}
+body.watch-active .filter-clear-chip {
+  color: #f87171; border-color: rgba(248,113,113,.4);
+}
+body.watch-active .filter-clear-chip:hover, body.watch-active .filter-clear-chip.is-focused {
+  background: rgba(248,113,113,.16); border-color: #f87171; outline-color: #f87171;
+}
+body.watch-active .watch-filter-menu {
+  position: absolute; z-index: 10; top: clamp(102px, 13.5vh, 130px);
+  left: var(--watch-gutter); min-width: 220px; max-height: 280px;
+  overflow-y: auto; background: rgba(13,18,29,.95); border: 1px solid rgba(138,186,255,.3);
+  border-radius: 8px; padding: 6px 0; box-shadow: 0 12px 36px rgba(0,0,0,.8);
+  backdrop-filter: blur(16px);
+}
+body.watch-active .watch-filter-menu[hidden] { display: none; }
+body.watch-active .filter-menu-option {
+  display: block; width: 100%; text-align: left; background: transparent;
+  border: 0; padding: 8px 18px; color: rgba(255,255,255,.8); font-size: 14px;
+  cursor: pointer;
+}
+body.watch-active .filter-menu-option.is-selected { color: #8abaff; font-weight: 600; }
+body.watch-active .filter-menu-option:focus, body.watch-active .filter-menu-option.is-focused {
+  background: rgba(138,186,255,.18); color: #fff; outline: none;
+}
+body.watch-active .watch-filter-empty {
+  padding: 40px var(--watch-gutter); color: rgba(255,255,255,.7); font-size: 1.05rem;
+}
+body.watch-active .watch-filter-empty[hidden] { display: none; }
+body.watch-active .filter-empty-btn {
+  margin-top: 14px; padding: 8px 20px; border: 1px solid rgba(255,255,255,.4);
+  border-radius: 6px; background: rgba(255,255,255,.1); color: #fff;
+  font-size: 0.92rem; cursor: pointer;
+}
+body.watch-active .filter-empty-btn:focus, body.watch-active .filter-empty-btn.is-focused {
+  outline: 2px solid #8abaff; outline-offset: 3px; background: rgba(255,255,255,.2);
+}
 body.watch-active .watch-home-wordmark { position: absolute; z-index: 2; top: clamp(30px, 4.5vh, 54px);
-  left: var(--watch-gutter); display: block; color: #fff; font-size: clamp(23px, 2vw, 32px);
+  left: var(--watch-gutter); display: none; color: #fff; font-size: clamp(23px, 2vw, 32px);
   font-weight: 400; letter-spacing: .33em; line-height: 1.1; text-shadow: 0 2px 20px rgba(0,0,0,.65); }
 body.watch-active .watch-home-wordmark small { display: block; text-align: center; font-size: .45em; letter-spacing: .63em; margin-top: 3px; }
 body.watch-active .watch-home { --watch-hero-height: 59vh; --watch-row-fade: 64px;

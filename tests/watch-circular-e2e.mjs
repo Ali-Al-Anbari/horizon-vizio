@@ -79,13 +79,60 @@ try {
       assert.equal(await title(), expected[index % expected.length]);
       const keys = await visible();
       assert.equal(new Set(keys).size, keys.length, "visible window has no duplicate identities");
-      assert.ok(keys.length < expected.length && keys.length >= 1,
-        "long row attaches only the bounded poster window");
+      assert.ok(keys.length <= expected.length && keys.length >= 1,
+        "row attaches bounded poster window without exceeding title count");
     }
-    for (let cycle = 0; cycle < 3; cycle++) for (let index = 1; index <= expected.length; index++) {
+    // At the first title of the cycle, Left enters the left navigation rail with Home focused
+    await key("ArrowLeft");
+    assert.equal(await evaluate("document.activeElement.id"), "watch-toggle",
+      "Left at first title of cycle enters left rail with Home focused");
+    // Right from rail returns to remembered content focus at the clean left gutter
+    await key("ArrowRight");
+    assert.equal(await title(), expected[0]);
+    const gutterLeft = viewport.width === 1024 ? 145 : 182;
+    const cardRect = () => evaluate("Math.round(document.activeElement.getBoundingClientRect().left)");
+    const rowScroll = () => evaluate("document.getElementById('watch-continue-row').scrollLeft");
+    const visiblePreceding = () => evaluate("Array.from(document.querySelectorAll('#watch-continue-row .home-card')).filter(c => { const r = c.getBoundingClientRect(); return r.right > 0 && r.right <= " + (gutterLeft + 10) + "; }).length");
+    assert.equal(await rowScroll(), 0, "scrollLeft is 0 at first title");
+    assert.equal(await cardRect(), gutterLeft, `first title at original left gutter (${gutterLeft}px)`);
+    assert.equal(await visiblePreceding(), 0, "no preceding cards visible to the left of first title");
+
+    // Move within cycle, then move backward within cycle to first title
+    await key("ArrowRight");
+    assert.equal(await title(), expected[1]);
+    await key("ArrowLeft");
+    assert.equal(await title(), expected[0]);
+    assert.equal(await rowScroll(), 0, "scrollLeft settles at 0 on return to title 0");
+    assert.equal(await cardRect(), gutterLeft, "title 0 settles at gutter on return");
+    assert.equal(await visiblePreceding(), 0, "no previous-cycle cards visible after backward return");
+
+    // Rapid reversals near boundary
+    for (let r = 0; r < 3; r++) {
+      await key("ArrowRight");
       await key("ArrowLeft");
-      assert.equal(await title(), expected[(expected.length - index % expected.length) % expected.length]);
+      assert.equal(await title(), expected[0]);
+      assert.equal(await cardRect(), gutterLeft);
+      assert.equal(await visiblePreceding(), 0);
     }
+
+    // Left from title 0 enters rail at Home
+    await key("ArrowLeft");
+    assert.equal(await evaluate("document.activeElement.id"), "watch-toggle");
+    await key("ArrowRight");
+    assert.equal(await title(), expected[0]);
+    assert.equal(await cardRect(), gutterLeft);
+    assert.equal(await visiblePreceding(), 0);
+
+    // Multi-cycle test: navigate 5 full cycles, then 2 cards into new cycle, then return backward
+    for (let c = 0; c < 5 * expected.length; c++) await key("ArrowRight");
+    await key("ArrowRight"); // Dark
+    await key("ArrowRight"); // Breaking Bad
+    await key("ArrowLeft");  // Dark
+    await key("ArrowLeft");  // South Park (boundary)
+    assert.equal(await title(), expected[0]);
+    assert.equal(await rowScroll(), 0, "scrollLeft is 0 after 5 cycles and backward return");
+    assert.equal(await cardRect(), gutterLeft, "title 0 settles at gutter after 5 cycles");
+    assert.equal(await visiblePreceding(), 0, "no previous cards visible after 5 cycles");
     assert.equal(await evaluate("document.querySelector('#watch-rows-scroll').scrollTop"), initialScroll);
     const layout = await evaluate(geometry);
     assert.ok(Math.abs(layout.gap - 42) < 1, `heading gap at ${viewport.width}`);
@@ -137,12 +184,21 @@ try {
       scenario === "one-show" ? 1 : 2);
   }
   await navigate("movie-after-wrap");
-  await key("ArrowRight"); await key("ArrowLeft");
-  assert.equal(await evaluate("document.activeElement.homeEntry.row.title"), "Severance");
-  for (let i = 0; i < 4; i++) await key("ArrowLeft");
+  await key("ArrowRight");
+  assert.equal(await evaluate("document.activeElement.homeEntry.row.title"), "South Park");
+  await key("ArrowLeft");
+  assert.equal(await evaluate("document.activeElement.id"), "watch-toggle",
+    "Left from first card enters rail at Home");
+  await key("ArrowRight");
+  assert.equal(await evaluate("document.activeElement.homeEntry.row.title"), "South Park");
+  for (let i = 0; i < 3; i++) await key("ArrowRight");
   assert.equal(await evaluate("document.activeElement.homeEntry.row.title"), "Interstellar");
   await key("Enter");
   await until("document.querySelector('#details-view').hidden === false");
   assert.equal(await evaluate("document.querySelector('#detail-title').textContent"), "Interstellar");
+  await key("Back");
+  await until("document.querySelector('#watch-view').hidden === false");
+  assert.equal(await evaluate("document.activeElement.homeEntry.row.title"), "Interstellar",
+    "Back from details restores Interstellar focus");
   console.log("Instant circular Watch E2E passed at 1920x1080 and 1024x768.");
 } finally { socket.close(); }

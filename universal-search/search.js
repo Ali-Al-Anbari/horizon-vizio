@@ -49,7 +49,8 @@
       ? root.HorizonWatchPerformance.create(doc, clock) : null;
     var query = get("query"), results = get("results");
     var state = { view: "watch", previousView: "watch", detailSource: "watch", filter: "all", query: "", title: null, detail: null,
-      season: null, episodes: [], subtitle: core.readSubtitlePref(local), continueMode: false };
+      season: null, episodes: [], subtitle: core.readSubtitlePref(local), continueMode: false,
+      watchTab: "for-you", detailSourceTab: "for-you" };
     var finePointer = !!(clock.matchMedia && clock.matchMedia("(pointer: fine)").matches)
       && !/Vizio|SmartCast/i.test(clock.navigator && clock.navigator.userAgent || "");
     var keyboardOpen = !finePointer;
@@ -59,7 +60,26 @@
       nextContinue = null, homeHeroEntry = null, homeDefaultEntry = null, homeHeroToken = 0,
       homeOpenPending = false, homeOpenToken = 0, homeReturnFocus = null, homeDetailCache = new Map(),
       launchingEpisode = false, clearPending = false;
-    var homeRowMemory = Object.create(null), homeLastContent = null;
+    var tabRowMemory = {
+      "for-you": Object.create(null),
+      "tv": Object.create(null),
+      "movies": Object.create(null)
+    };
+    var tabLastContent = {
+      "for-you": null,
+      "tv": null,
+      "movies": null
+    };
+    var tabScrollTop = {
+      "for-you": 0,
+      "tv": 0,
+      "movies": 0
+    };
+    var tvFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
+    var movieFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
+    var activeFilterMenuType = null;
+    var homeRowMemory = tabRowMemory["for-you"], homeLastContent = null;
+    var rowCycleIndex = Object.create(null);
     var homeCards = Object.create(null), homeWindowSizes = Object.create(null);
     var homeScrollFrame = 0, homeHeroTimer = 0;
     var catalogRequests = Object.create(null);
@@ -67,6 +87,17 @@
     var recommendationPayload = null, recommendationLoadedSignature = "", recommendationPending = null,
       recommendationWantedSignature = "", recommendationRows = { top: [], because: [], seed: null };
     var previewRows = previewHistoryMode ? mock.previewHistory(previewScenario) : null;
+    function currentTabRowOrder() {
+      if (state.watchTab === "tv") {
+        if (isFilterActive("tv")) return ["filtered"];
+        return ["tv-recommended", "tv-trending", "tv-genres", "tv-short", "tv-gems", "tv-acclaimed"];
+      }
+      if (state.watchTab === "movies") {
+        if (isFilterActive("movies")) return ["filtered"];
+        return ["movies-recommended", "movies-trending", "movies-genres", "movies-short", "movies-acclaimed", "movies-gems"];
+      }
+      return ["continue", "top", "because", "trending", "gems", "explore", "recent"];
+    }
     function text(id, value) { get(id).textContent = value; }
     function createPlaybackHandoff(type, id, season, episode) {
       var token = "";
@@ -92,8 +123,11 @@
       } catch (_error) { return false; }
     }
     function syncRail() {
-      get("watch-toggle").classList.toggle("is-current", state.view === "watch"
-        || (state.view === "details" || state.view === "episodes") && state.detailSource === "watch");
+      var isWatch = state.view === "watch" || ((state.view === "details" || state.view === "episodes") && state.detailSource === "watch");
+      var curTab = state.view === "watch" ? state.watchTab : (state.detailSourceTab || "for-you");
+      get("watch-toggle").classList.toggle("is-current", isWatch && curTab === "for-you");
+      get("tv-toggle").classList.toggle("is-current", isWatch && curTab === "tv");
+      get("movies-toggle").classList.toggle("is-current", isWatch && curTab === "movies");
       get("search-toggle").classList.toggle("is-current", state.view === "search" && !state.continueMode
         || (state.view === "details" || state.view === "episodes") && state.detailSource === "search");
       get("history-toggle").classList.toggle("is-current", state.view === "history"
@@ -222,11 +256,17 @@
       var previousHomeGroup = previous && previous.dataset.homeGroup || "";
       if (previous && previous !== element) previous.classList.remove("is-focused");
       if (element.dataset.homeGroup) revealHomeWindow(element, direction);
+      else if (previousHomeGroup && element.closest(".watch-rail")) {
+        var prevRowButtons = homeRowButtons(previousHomeGroup);
+        if (prevRowButtons.length && rowCycleIndex[previousHomeGroup] <= 0) {
+          revealHomeWindow(prevRowButtons[0]);
+        }
+      }
       element.focus({ preventScroll: true }); element.classList.add("is-focused");
       var seasonStrip = element.closest("#seasons");
       var episodeScroll = element.closest("#episode-list");
       var resultScroll = element.closest("#results, #history-list, #settings-view");
-      var homeScroll = element.closest("#watch-continue-row, #watch-recent-row, #watch-top-row, #watch-because-row");
+      var homeScroll = element.closest(".watch-home-row");
       if (seasonStrip) revealInScroller(element, seasonStrip, true, 14);
       else if (episodeScroll) revealInScroller(element, episodeScroll, false, 18);
       else if (homeScroll) {
@@ -242,6 +282,8 @@
       if (state.view === "watch" && element.dataset.homeGroup) {
         var identity = homeFocusIdentity(element);
         homeRowMemory[identity.group] = identity; homeLastContent = identity;
+        if (tabRowMemory[state.watchTab]) tabRowMemory[state.watchTab][identity.group] = identity;
+        tabLastContent[state.watchTab] = identity;
       }
     } }
     function button(label, click, className) {
@@ -266,6 +308,7 @@
         var parsed = new URL(path, "https://example.invalid");
         var bits = parsed.pathname.split("/");
         var value = bits[2] === "search" ? mock.search(parsed.searchParams.get("q") || "", parsed.searchParams.get("type") || "all")
+          : bits[2] === "discover" ? (mock.discover ? mock.discover(parsed.searchParams) : { results: [] })
           : bits[2] === "title" ? mock.title(bits[3], Number(bits[4]))
           : mock.season(Number(bits[4]), Number(bits[5]));
         if (!value) throw Error("not_found");
@@ -384,28 +427,6 @@
       var attached = Array.from(track.children);
       var pos = attached.indexOf(element);
 
-      // Handle wrap left from the initial entry at card 0
-      if (direction === -1 && element === cards[cards.length - 1] && row.scrollLeft <= cardStep
-          && attached[0] === cards[0]) {
-        var toPrepend = Math.min(cards.length - 1, overscan + 1);
-        var prependCards = [];
-        for (var p = toPrepend; p >= 1; p--) {
-          var pIdx = (cards.length - p) % cards.length;
-          prependCards.push(cards[pIdx]);
-        }
-        for (var pi = 0; pi < prependCards.length; pi++) {
-          track.insertBefore(prependCards[pi], track.firstElementChild);
-        }
-        row.scrollLeft += toPrepend * cardStep;
-        while (track.childElementCount > windowSize) {
-          track.removeChild(track.lastElementChild);
-        }
-        attached = Array.from(track.children);
-        pos = attached.indexOf(element);
-        loadHomeWindowArt(attached);
-        return;
-      }
-
       // If element is not currently in track (e.g. restoring focus from memory or large jump)
       if (pos < 0) {
         var cardIndex = cards.indexOf(element);
@@ -420,8 +441,19 @@
         pos = attached.indexOf(element);
       }
 
-      // On first entering Watch Home: first poster at left gutter, nothing to the left
-      if (row.scrollLeft <= 2 && element === cards[0] && attached[0] === cards[0]) {
+      // On entering or returning to the first title: first poster at left gutter, nothing to the left
+      if (element === cards[0] && direction !== 1) {
+        if (attached[0] !== cards[0] || row.scrollLeft > 2) {
+          var selected0 = [];
+          for (var s0 = 0; s0 < windowSize; s0++) {
+            selected0.push(cards[s0 % cards.length]);
+          }
+          track.replaceChildren.apply(track, selected0);
+          attached = Array.from(track.children);
+          pos = attached.indexOf(element);
+          row.scrollLeft = 0;
+          track.style.transform = "";
+        }
         loadHomeWindowArt(attached);
         return;
       }
@@ -450,7 +482,8 @@
       }
 
       // Approaching the start (moving left): recycle cards from back to front
-      if (behindCount < overscan && aheadCount > visibleSlots + overscan) {
+      // Never prepend before cards[0] in the current cycle
+      if (behindCount < overscan && aheadCount > visibleSlots + overscan && attached[0] !== cards[0] && row.scrollLeft > 2) {
         var toMoveBehind = Math.min(overscan - behindCount, aheadCount - (visibleSlots + overscan));
         for (var mb = 0; mb < toMoveBehind; mb++) {
           var backCard = track.lastElementChild;
@@ -472,30 +505,42 @@
       loadHomeWindowArt(attached);
     }
     function resolveHomeSelection(saved) {
-      if (!saved || homeRowOrder.indexOf(saved.group) < 0) return null;
+      if (!saved) return null;
+      var order = currentTabRowOrder();
+      if (order.indexOf(saved.group) < 0 && homeRowOrder.indexOf(saved.group) < 0) return null;
       var cards = homeRowButtons(saved.group);
       return cards.find(function (card) { return card.dataset.homeKey === saved.key; })
         || cards[Math.max(0, Math.min(Number.isInteger(saved.index) ? saved.index : 0, cards.length - 1))] || null;
     }
     function firstHomeButton() {
-      for (var i = 0; i < homeRowOrder.length; i++) {
-        var first = homeRowButtons(homeRowOrder[i])[0]; if (first) return first;
+      var order = currentTabRowOrder();
+      for (var i = 0; i < order.length; i++) {
+        var first = homeRowButtons(order[i])[0]; if (first) return first;
       }
       return null;
     }
     function nearestHomeButton(group) {
-      var index = homeRowOrder.indexOf(group);
+      var order = currentTabRowOrder();
+      var index = order.indexOf(group);
       if (index < 0) return firstHomeButton();
-      for (var distance = 1; distance < homeRowOrder.length; distance++) {
-        var next = homeRowOrder[index + distance], previous = homeRowOrder[index - distance];
+      for (var distance = 1; distance < order.length; distance++) {
+        var next = order[index + distance], previous = order[index - distance];
         if (next && homeRowButtons(next).length) return homeRowButtons(next)[0];
         if (previous && homeRowButtons(previous).length) return homeRowButtons(previous)[0];
       }
       return null;
     }
     function focusHomeTarget() {
-      var target = resolveHomeSelection(homeReturnFocus);
-      focus(target || get("watch-toggle"));
+      var target = resolveHomeSelection(homeReturnFocus || (tabLastContent && tabLastContent[state.watchTab]));
+      if (target) {
+        focus(target);
+      } else if (state.watchTab === "for-you") {
+        focus(get("watch-toggle"));
+      } else {
+        var first = firstHomeButton();
+        if (first) focus(first);
+        else focus(get(state.watchTab === "tv" ? "tv-toggle" : "movies-toggle"));
+      }
     }
     function homeContext(row) {
       return (row.type === "tv" ? "S" + row.season + " E" + row.episode
@@ -615,10 +660,283 @@
       }).then(function (target) { if (token === homeOpenToken) openEpisode(target); },
         function () { if (token === homeOpenToken) openEpisode(null); });
     }
+    function isFilterActive(tab) {
+      var f = tab === "tv" ? tvFilters : movieFilters;
+      return !!(f.genre || f.length || f.rating || f.year || (f.sort && f.sort !== "best"));
+    }
+    function updateFilterStripUI() {
+      var isTv = state.watchTab === "tv";
+      var f = isTv ? tvFilters : movieFilters;
+      var genreBtn = get("filter-btn-genre");
+      var lengthBtn = get("filter-btn-length");
+      var ratingBtn = get("filter-btn-rating");
+      var yearBtn = get("filter-btn-year");
+      var sortBtn = get("filter-btn-sort");
+      var clearBtn = get("filter-btn-clear");
+
+      if (genreBtn) {
+        var genreName = f.genre && recommendations && recommendations.GENRE_NAMES && recommendations.GENRE_NAMES[f.genre];
+        genreBtn.textContent = genreName ? "Genre: " + genreName : "Genre";
+        genreBtn.classList.toggle("is-active", !!f.genre);
+      }
+      if (lengthBtn) {
+        var lengthLabels = isTv
+          ? { short: "<30 min", medium: "30-60 min", long: ">60 min" }
+          : { short: "<90 min", medium: "90-120 min", long: ">120 min" };
+        lengthBtn.textContent = f.length ? "Length: " + (lengthLabels[f.length] || f.length) : "Length";
+        lengthBtn.classList.toggle("is-active", !!f.length);
+      }
+      if (ratingBtn) {
+        ratingBtn.textContent = f.rating ? "Rating: " + f.rating : "Age Rating";
+        ratingBtn.classList.toggle("is-active", !!f.rating);
+      }
+      if (yearBtn) {
+        var yearLabels = { "2020s": "2020s", "2010s": "2010s", "2000s": "2000s", "older": "Older" };
+        yearBtn.textContent = f.year ? "Year: " + (yearLabels[f.year] || f.year) : "Year";
+        yearBtn.classList.toggle("is-active", !!f.year);
+      }
+      if (sortBtn) {
+        var sortLabels = { best: "Best Match", popularity: "Popularity", rating: "Highest Rated", newest: "Newest" };
+        sortBtn.textContent = "Sort: " + (sortLabels[f.sort] || "Best Match");
+        sortBtn.classList.toggle("is-active", f.sort && f.sort !== "best");
+      }
+      if (clearBtn) {
+        clearBtn.hidden = !isFilterActive(state.watchTab);
+      }
+    }
+    function openFilterMenu(filterType) {
+      activeFilterMenuType = filterType;
+      var menu = get("watch-filter-menu");
+      var host = get("watch-filter-menu-options");
+      if (!menu || !host) return;
+      host.replaceChildren();
+      var isTv = state.watchTab === "tv";
+      var f = isTv ? tvFilters : movieFilters;
+      var options = [];
+
+      if (filterType === "genre") {
+        options.push({ label: "All Genres", value: "" });
+        var genreList = isTv
+          ? [[10759, "Action & Adventure"], [16, "Animation"], [35, "Comedy"], [80, "Crime"], [18, "Drama"], [9648, "Mystery"], [10765, "Sci-Fi & Fantasy"]]
+          : [[28, "Action"], [12, "Adventure"], [16, "Animation"], [35, "Comedy"], [80, "Crime"], [18, "Drama"], [27, "Horror"], [878, "Sci-Fi"], [53, "Thriller"]];
+        genreList.forEach(function (g) { options.push({ label: g[1], value: String(g[0]) }); });
+      } else if (filterType === "length") {
+        options.push({ label: "Any Length", value: "" });
+        if (isTv) {
+          options.push({ label: "Short (<30 min)", value: "short" });
+          options.push({ label: "Standard (30-60 min)", value: "medium" });
+          options.push({ label: "Long (>60 min)", value: "long" });
+        } else {
+          options.push({ label: "Under 90 minutes", value: "short" });
+          options.push({ label: "90 - 120 minutes", value: "medium" });
+          options.push({ label: "Over 120 minutes", value: "long" });
+        }
+      } else if (filterType === "rating") {
+        options.push({ label: "Any Rating", value: "" });
+        var ratingsList = isTv ? ["TV-Y", "TV-G", "TV-PG", "TV-14", "TV-MA"] : ["G", "PG", "PG-13", "R", "NC-17"];
+        ratingsList.forEach(function (r) { options.push({ label: r, value: r }); });
+      } else if (filterType === "year") {
+        options.push({ label: "Any Year", value: "" });
+        options.push({ label: "2020s", value: "2020s" });
+        options.push({ label: "2010s", value: "2010s" });
+        options.push({ label: "2000s", value: "2000s" });
+        options.push({ label: "1990s & Older", value: "older" });
+      } else if (filterType === "sort") {
+        options.push({ label: "Best Match", value: "best" });
+        options.push({ label: "Popularity", value: "popularity" });
+        options.push({ label: "Highest Rated", value: "rating" });
+        options.push({ label: "Newest", value: "newest" });
+      }
+
+      var currentVal = filterType === "genre" ? (f.genre ? String(f.genre) : "")
+        : filterType === "length" ? (f.length || "")
+        : filterType === "rating" ? (f.rating || "")
+        : filterType === "year" ? (f.year || "")
+        : (f.sort || "best");
+
+      options.forEach(function (opt) {
+        var optBtn = button(opt.label, function () {
+          selectFilterOption(filterType, opt.value);
+        }, "filter-menu-option");
+        optBtn.dataset.filterType = filterType;
+        optBtn.dataset.filterValue = opt.value;
+        optBtn.classList.toggle("is-selected", opt.value === currentVal);
+        host.appendChild(optBtn);
+      });
+
+      menu.hidden = false;
+      var selectedEl = host.querySelector(".is-selected") || host.querySelector(".filter-menu-option");
+      if (selectedEl) focus(selectedEl);
+    }
+    function closeFilterMenu() {
+      var prevType = activeFilterMenuType;
+      activeFilterMenuType = null;
+      var menu = get("watch-filter-menu");
+      if (menu) menu.hidden = true;
+      if (prevType) {
+        var originatingBtn = get("filter-btn-" + prevType);
+        if (originatingBtn) focus(originatingBtn);
+      }
+    }
+    function selectFilterOption(filterType, value) {
+      var isTv = state.watchTab === "tv";
+      var f = isTv ? tvFilters : movieFilters;
+      if (filterType === "genre") f.genre = value ? Number(value) : null;
+      else if (filterType === "length") f.length = value || null;
+      else if (filterType === "rating") f.rating = value || null;
+      else if (filterType === "year") f.year = value || null;
+      else if (filterType === "sort") f.sort = value || "best";
+
+      closeFilterMenu();
+      rowCycleIndex = Object.create(null);
+      updateFilterStripUI();
+      renderFilterResultsIfActive();
+      updateHomeSections();
+      var originating = get("filter-btn-" + filterType);
+      if (originating) focus(originating);
+    }
+    function clearActiveFilters() {
+      if (state.watchTab === "tv") {
+        tvFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
+      } else {
+        movieFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
+      }
+      closeFilterMenu();
+      rowCycleIndex = Object.create(null);
+      updateFilterStripUI();
+      renderFilterResultsIfActive();
+      updateHomeSections();
+      var first = firstHomeButton();
+      if (first) focus(first);
+      else focus(get("filter-btn-genre"));
+    }
+    function setWatchTab(tabName) {
+      if (["for-you", "tv", "movies"].indexOf(tabName) < 0) return;
+      if (activeFilterMenuType) closeFilterMenu();
+      var scroller = get("watch-rows-scroll");
+      if (scroller) tabScrollTop[state.watchTab] = scroller.scrollTop;
+      if (doc.activeElement && doc.activeElement.dataset && doc.activeElement.dataset.homeGroup) {
+        var curId = homeFocusIdentity(doc.activeElement);
+        tabRowMemory[state.watchTab][curId.group] = curId;
+        tabLastContent[state.watchTab] = curId;
+      }
+      state.watchTab = tabName;
+      homeRowMemory = tabRowMemory[tabName];
+      homeLastContent = tabLastContent[tabName];
+      rowCycleIndex = Object.create(null);
+
+      var filterStrip = get("watch-filter-strip");
+      if (filterStrip) filterStrip.hidden = (tabName === "for-you");
+      updateFilterStripUI();
+
+      renderHomepage();
+      syncRail();
+
+      if (scroller) scroller.scrollTop = tabScrollTop[tabName] || 0;
+      if (doc.activeElement && doc.activeElement.closest && doc.activeElement.closest(".watch-rail")) {
+        var railMap = { "for-you": "watch-toggle", "tv": "tv-toggle", "movies": "movies-toggle" };
+        focus(get(railMap[tabName]));
+      } else {
+        var target = resolveHomeSelection(tabLastContent[tabName]);
+        if (target) focus(target);
+        else focusHomeTarget();
+      }
+      saveView();
+    }
+    function populatePosterRow(group, candidateList) {
+      var host = get("watch-" + group + "-row");
+      if (!host) return;
+      var track = host.querySelector(".watch-home-track");
+      if (!track) return;
+      host.scrollLeft = 0;
+      track.style.transform = "";
+      rowCycleIndex[group] = 0;
+      track.replaceChildren();
+      (candidateList || []).forEach(function (candidate) {
+        var card = button("", function () { openDetails(candidate); },
+          "home-card home-card-poster");
+        card.dataset.homeGroup = group; card.dataset.homeKey = candidate.type + ":" + candidate.id;
+        card.homeEntry = { row: candidate, group: group };
+        var title = doc.createElement("strong"); title.textContent = candidate.title;
+        card.appendChild(verticalPosterArt(candidate, true)); card.appendChild(title);
+        card.setAttribute("aria-label", candidate.title + ", " + (candidate.type === "tv" ? "TV series" : "movie"));
+        card.addEventListener("mouseenter", function () {
+          if (state.view === "watch") showHomeHero(card.homeEntry);
+        });
+        track.appendChild(card);
+      });
+      var sec = get("watch-" + group + "-section");
+      if (sec) sec.hidden = group === "filtered" ? (candidateList || []).length === 0 : (candidateList || []).length < 2;
+      recordHomeCards(group);
+      var cards = homeRowButtons(group);
+      if (artWindowExperiment && cards.length) {
+        var active = homeFocusIdentity(doc.activeElement);
+        revealHomeWindow(resolveHomeSelection(active && active.group === group ? active : null) || cards[0]);
+      }
+    }
+    var filterFetchToken = 0;
+    function renderFilterResultsIfActive() {
+      var filteredSec = get("watch-filtered-section"), emptySec = get("watch-filter-empty");
+      if (state.watchTab === "for-you") {
+        if (filteredSec) filteredSec.hidden = true;
+        if (emptySec) emptySec.hidden = true;
+        return;
+      }
+      var isTv = state.watchTab === "tv";
+      var f = isTv ? tvFilters : movieFilters;
+      var active = isFilterActive(state.watchTab);
+      if (!active) {
+        if (filteredSec) filteredSec.hidden = true;
+        if (emptySec) emptySec.hidden = true;
+        return;
+      }
+      var token = ++filterFetchToken;
+      var queryParams = new URLSearchParams();
+      queryParams.set("type", isTv ? "tv" : "movie");
+      if (f.genre) queryParams.set("with_genres", String(f.genre));
+      if (f.year) queryParams.set("year", f.year);
+      if (f.length) queryParams.set("length", f.length);
+      if (f.rating) queryParams.set("rating", f.rating);
+      if (f.sort && f.sort !== "best") {
+        if (f.sort === "popularity") queryParams.set("sort_by", "popularity.desc");
+        else if (f.sort === "rating") queryParams.set("sort_by", "vote_average.desc");
+        else if (f.sort === "newest") queryParams.set("sort_by", isTv ? "first_air_date.desc" : "primary_release_date.desc");
+      }
+      text("watch-filtered-heading", isTv ? "Matching TV Shows" : "Matching Movies");
+      api("/api/discover?" + queryParams.toString()).then(function (data) {
+        if (disposed || token !== filterFetchToken || state.view !== "watch") return;
+        var results = (data && Array.isArray(data.results)) ? data.results : [];
+        var feedback = recommendations ? recommendations.readFeedback(local) : { ratings: {} };
+        var ratings = feedback && feedback.ratings || {};
+        var filtered = results.filter(function (c) {
+          return ratings[c.type + ":" + c.id] !== "disliked" && c.poster;
+        });
+        populatePosterRow("filtered", filtered);
+        if (filteredSec) filteredSec.hidden = filtered.length === 0;
+        if (emptySec) {
+          emptySec.hidden = filtered.length > 0;
+          var p = emptySec.querySelector("p");
+          if (p) p.textContent = "No matching titles found.";
+        }
+        updateHomeSections();
+      }, function (_err) {
+        if (disposed || token !== filterFetchToken || state.view !== "watch") return;
+        populatePosterRow("filtered", []);
+        if (filteredSec) filteredSec.hidden = true;
+        if (emptySec) {
+          emptySec.hidden = false;
+          var p = emptySec.querySelector("p");
+          if (p) p.textContent = "Unable to load matching titles. Please check your connection or clear filters.";
+        }
+        updateHomeSections();
+      });
+    }
     function paintHomepage(continueRows, finishedRows) {
       var previous = homeFocusIdentity(doc.activeElement);
-      homeDefaultEntry = continueRows[0] ? { row: continueRows[0], group: "continue" }
-        : finishedRows[0] ? { row: finishedRows[0], group: "recent" } : null;
+      if (state.watchTab === "for-you") {
+        homeDefaultEntry = continueRows[0] ? { row: continueRows[0], group: "continue" }
+          : finishedRows[0] ? { row: finishedRows[0], group: "recent" } : null;
+      }
       function rowCard(entry, group, action) {
         var row = entry.row, card = button("", action, "home-card");
         card.dataset.homeGroup = group; card.dataset.homeKey = row.type + ":" + row.id;
@@ -643,21 +961,31 @@
           + row.title + ", " + context.textContent);
         return card;
       }
-      var continueRow = get("watch-continue-row").querySelector(".watch-home-track");
-      var recentRow = get("watch-recent-row").querySelector(".watch-home-track");
+      var continueHost = get("watch-continue-row"), recentHost = get("watch-recent-row");
+      continueHost.scrollLeft = 0; recentHost.scrollLeft = 0;
+      rowCycleIndex["continue"] = 0; rowCycleIndex["recent"] = 0;
+      var continueRow = continueHost.querySelector(".watch-home-track");
+      var recentRow = recentHost.querySelector(".watch-home-track");
       continueRow.replaceChildren(); recentRow.replaceChildren();
-      continueRows.slice(0, 8).forEach(function (row) {
-        var entry = { row: row, group: "continue" };
-        continueRow.appendChild(rowCard(entry, "continue", function () { openHomeEntry(entry); }));
-      });
-      finishedRows.slice(0, 8).forEach(function (row) {
-        var entry = { row: row, group: "recent" };
-        recentRow.appendChild(rowCard(entry, "recent", function () { openHomeEntry(entry); }));
-      });
-      get("watch-continue-section").hidden = !continueRows.length;
-      get("watch-recent-section").hidden = !finishedRows.length;
-      recordHomeCards("continue"); recordHomeCards("recent");
-      if (artWindowExperiment) ["continue", "recent"].forEach(function (group) {
+      if (state.watchTab === "for-you") {
+        continueRows.slice(0, 8).forEach(function (row) {
+          var entry = { row: row, group: "continue" };
+          continueRow.appendChild(rowCard(entry, "continue", function () { openHomeEntry(entry); }));
+        });
+        finishedRows.slice(0, 8).forEach(function (row) {
+          var entry = { row: row, group: "recent" };
+          recentRow.appendChild(rowCard(entry, "recent", function () { openHomeEntry(entry); }));
+        });
+        get("watch-continue-section").hidden = !continueRows.length;
+        get("watch-recent-section").hidden = !finishedRows.length;
+        recordHomeCards("continue"); recordHomeCards("recent");
+      } else {
+        get("watch-continue-section").hidden = true;
+        get("watch-recent-section").hidden = true;
+        homeCards["continue"] = [];
+        homeCards["recent"] = [];
+      }
+      if (artWindowExperiment && state.watchTab === "for-you") ["continue", "recent"].forEach(function (group) {
         var cards = homeRowButtons(group);
         if (cards.length) revealHomeWindow(resolveHomeSelection(previous && previous.group === group ? previous : null) || cards[0]);
       });
@@ -666,9 +994,26 @@
       else showHomeHero(homeDefaultEntry);
     }
     function updateHomeSections() {
-      var ids = homeRowOrder.map(function (group) { return "watch-" + group + "-section"; });
+      var allKnownGroups = [
+        "continue", "top", "because", "recent", "trending", "gems", "explore",
+        "tv-recommended", "tv-trending", "tv-genres", "tv-short", "tv-gems", "tv-acclaimed",
+        "movies-recommended", "movies-trending", "movies-genres", "movies-short", "movies-acclaimed", "movies-gems",
+        "filtered"
+      ];
+      var activeOrder = currentTabRowOrder();
+      allKnownGroups.forEach(function (group) {
+        var sec = get("watch-" + group + "-section");
+        if (!sec) return;
+        if (activeOrder.indexOf(group) < 0) {
+          sec.hidden = true;
+        } else if (group !== "continue" && group !== "recent" && group !== "filtered") {
+          sec.hidden = (homeCards[group] || []).length < 2;
+        }
+      });
       var first = false;
-      ids.forEach(function (id) { var section = get(id);
+      activeOrder.forEach(function (group) {
+        var section = get("watch-" + group + "-section");
+        if (!section) return;
         section.classList.toggle("is-first-visible", !section.hidden && !first);
         if (!section.hidden) first = true;
       });
@@ -677,38 +1022,59 @@
     function paintRecommendationRows(rows) {
       recommendationRows = rows;
       var active = homeFocusIdentity(doc.activeElement), activeGroup = active && active.group;
-      var activeRow = activeGroup === "top" || activeGroup === "because";
+      var activeRow = activeGroup && activeGroup !== "continue" && activeGroup !== "recent";
       var anchor = state.view === "watch" && !activeRow && active && active.group
         ? doc.activeElement : null;
       var anchorY = anchor ? anchor.getBoundingClientRect().top : 0;
-      [["top", rows.top], ["because", rows.because]].forEach(function (pair) {
-        var group = pair[0], host = get("watch-" + group + "-row").querySelector(".watch-home-track");
-        host.replaceChildren();
-        pair[1].forEach(function (candidate) {
-          var card = button("", function () { openDetails(candidate); },
-            "home-card home-card-poster");
-          card.dataset.homeGroup = group; card.dataset.homeKey = candidate.type + ":" + candidate.id;
-          card.homeEntry = { row: candidate, group: group };
-          var title = doc.createElement("strong"); title.textContent = candidate.title;
-          card.appendChild(verticalPosterArt(candidate, true)); card.appendChild(title);
-          card.setAttribute("aria-label", candidate.title + ", " + (candidate.type === "tv" ? "TV series" : "movie"));
-          card.addEventListener("mouseenter", function () {
-            if (state.view === "watch") showHomeHero(card.homeEntry);
-          });
-          host.appendChild(card);
-        });
-      });
-      get("watch-top-section").hidden = !rows.top.length;
-      get("watch-because-section").hidden = !rows.because.length;
-      ["top", "because"].forEach(function (group) {
-        recordHomeCards(group);
-        var cards = homeRowButtons(group);
-        if (artWindowExperiment && cards.length) revealHomeWindow(
-          resolveHomeSelection(active && active.group === group ? active : null) || cards[0]);
-      });
-      if (rows.seed) text("watch-because-heading", "Because You "
-        + (rows.seed.liked ? "Liked " : "Watched ") + rows.seed.title);
-      if (doc.activeElement.closest("#watch-because-section")) syncActiveHomeHeading(doc.activeElement);
+
+      var forYouData = rows.forYou || { top: rows.top || [], because: rows.because || [], seed: rows.seed };
+      populatePosterRow("top", forYouData.top || rows.top || []);
+      populatePosterRow("because", forYouData.because || rows.because || []);
+      populatePosterRow("trending", forYouData.trending || []);
+      populatePosterRow("gems", forYouData.gems || []);
+      populatePosterRow("explore", forYouData.explore || []);
+
+      text("watch-trending-heading", "Trending Now");
+      text("watch-gems-heading", "Hidden Gems");
+      text("watch-explore-heading", "Explore Something Different");
+
+      var tvData = rows.tv || {};
+      populatePosterRow("tv-recommended", tvData.recommended || []);
+      populatePosterRow("tv-trending", tvData.trending || []);
+      populatePosterRow("tv-genres", tvData.genres || []);
+      populatePosterRow("tv-short", tvData.short || []);
+      populatePosterRow("tv-gems", tvData.gems || []);
+      populatePosterRow("tv-acclaimed", tvData.acclaimed || []);
+
+      text("watch-tv-recommended-heading", "Recommended Series");
+      text("watch-tv-trending-heading", "Trending TV");
+      text("watch-tv-genres-heading", tvData.genresHeading || "Your Favorite TV Genres");
+      text("watch-tv-short-heading", "Short Episodes");
+      text("watch-tv-gems-heading", "Hidden Gem Series");
+      text("watch-tv-acclaimed-heading", "Critically Acclaimed Series");
+
+      var movieData = rows.movies || {};
+      populatePosterRow("movies-recommended", movieData.recommended || []);
+      populatePosterRow("movies-trending", movieData.trending || []);
+      populatePosterRow("movies-genres", movieData.genres || []);
+      populatePosterRow("movies-short", movieData.short || []);
+      populatePosterRow("movies-acclaimed", movieData.acclaimed || []);
+      populatePosterRow("movies-gems", movieData.gems || []);
+
+      text("watch-movies-recommended-heading", "Recommended Movies");
+      text("watch-movies-trending-heading", "Trending Movies");
+      text("watch-movies-genres-heading", movieData.genresHeading || "Your Favorite Movie Genres");
+      text("watch-movies-short-heading", "Under 100 Minutes");
+      text("watch-movies-acclaimed-heading", "Critically Acclaimed Films");
+      text("watch-movies-gems-heading", "Hidden Gem Films");
+
+      var seed = rows.seed || forYouData.seed;
+      if (seed) text("watch-because-heading", "Because You "
+        + (seed.liked ? "Liked " : "Watched ") + seed.title);
+      if (doc.activeElement && doc.activeElement.closest("#watch-because-section")) syncActiveHomeHeading(doc.activeElement);
+
+      renderFilterResultsIfActive();
+
       updateHomeSections();
       if (anchor && anchor.isConnected) {
         var view = get("watch-rows-scroll"), movement = anchor.getBoundingClientRect().top - anchorY;
@@ -728,13 +1094,48 @@
           + (row.progress && row.progress.updatedAt || 0) + ":" + (row.progress && row.progress.completed || false);
         }).join(",");
     }
+    var knownRuntimes = Object.create(null);
+    var candidateEnrichmentStarted = false;
+    function enrichCandidateRuntimes(candidates) {
+      if (!candidates || !candidates.length || candidateEnrichmentStarted) return;
+      candidateEnrichmentStarted = true;
+      var needed = [];
+      candidates.forEach(function (c) {
+        var k = c.type + ":" + c.id;
+        if (c.runtime) knownRuntimes[k] = c.runtime;
+        if (c.episodeRuntime) knownRuntimes[k] = c.episodeRuntime;
+        if (!knownRuntimes[k] && needed.length < 16) needed.push(c);
+      });
+      if (!needed.length) return;
+      var updated = false;
+      var pending = needed.map(function (c) {
+        return homeDetail(c).then(function (detail) {
+          if (detail) {
+            var k = c.type + ":" + c.id;
+            var rt = detail.runtime || detail.episodeRuntime;
+            if (rt) {
+              knownRuntimes[k] = rt;
+              if (c.type === "movie" && rt < 100) updated = true;
+              if (c.type === "tv" && rt <= 30) updated = true;
+            }
+          }
+        }, function () {});
+      });
+      Promise.all(pending).then(function () {
+        if (updated && !disposed && state.view === "watch" && recommendationPayload) {
+          var rows = previewRows || core.readHistory(local);
+          var feedback = recommendations ? recommendations.readFeedback(local) : { ratings: {} };
+          paintRecommendationRows(recommendations.selectRows(rows, feedback, recommendationPayload, { runtimes: knownRuntimes }));
+        }
+      });
+    }
     function refreshRecommendations() {
       if (!recommendations || disposed) return;
       var rows = previewRows || core.readHistory(local), feedback = recommendations.readFeedback(local);
       var signature = recommendationSignature(rows, feedback);
       recommendationWantedSignature = signature;
       if (recommendationLoadedSignature === signature) return;
-      if (recommendationPayload) paintRecommendationRows(recommendations.selectRows(rows, feedback, recommendationPayload));
+      if (recommendationPayload) paintRecommendationRows(recommendations.selectRows(rows, feedback, recommendationPayload, { runtimes: knownRuntimes }));
       if (recommendationPending) return;
       if (!recommendationPayload) paintRecommendationRows(recommendationRows);
       var params = new URLSearchParams(nav.search);
@@ -758,7 +1159,8 @@
         recommendationPayload = bundle.payload;
         if (recommendationWantedSignature !== signature) return;
         recommendationLoadedSignature = signature;
-        paintRecommendationRows(recommendations.selectRows(rows, feedback, bundle.payload));
+        paintRecommendationRows(recommendations.selectRows(rows, feedback, bundle.payload, { runtimes: knownRuntimes }));
+        enrichCandidateRuntimes(bundle.payload.candidates);
       }, function () {
         if (!disposed && recommendationWantedSignature === signature)
           paintRecommendationRows({ top: [], because: [], seed: null });
@@ -845,7 +1247,11 @@
       focus(selected || results.querySelector("button") || query);
     }
     function backToResults() {
-      if (state.detailSource === "watch") { showWatch(); return; }
+      if (state.detailSource === "watch") {
+        setView("watch");
+        setWatchTab(state.detailSourceTab || "for-you");
+        return;
+      }
       if (state.detailSource === "history") {
         state.detailSource = "search"; setView("history"); renderHistory(); focus(get("history-back")); return;
       }
@@ -853,15 +1259,12 @@
     }
     function backToDetails() { setView("details"); focus(get("details-back")); saveView(); }
     function exitToHome() {
-      if (returningHome) return;
-      returningHome = true;
-      saveView();
-      var localHome = useMock && session.getItem("horizon-search-local-home") === "1";
-      var currentRows = core.readHistory(local);
-      var snapshot = { version: 3, updatedAt: Date.now(), items: core.homepageContinueCandidates(currentRows)
-        .filter(function (row) { return !core.isContinueHidden(local, row); }).slice(0, 6) };
-      var homeUrl = localHome ? "/frontend/index.html?return=search" : core.LAUNCHER_ORIGIN + "/?return=search";
-      nav.replace(homeUrl + "#watch=" + encodeURIComponent(JSON.stringify(snapshot)));
+      if (state.view === "watch") {
+        if (state.watchTab !== "for-you") setWatchTab("for-you");
+        focus(get("watch-toggle"));
+        return;
+      }
+      showWatch(true);
     }
     function searchNow(explicit) {
       if (disposed || state.continueMode) return;
@@ -1087,22 +1490,28 @@
             el.setAttribute("aria-pressed", active ? "true" : "false");
           });
         }
-        function add(stateValue, label) {
+        function add(stateValue, label, actionName) {
           var el = detailAction(label, function () {
             var current = feedback.readFeedback(local).ratings[type + ":" + id] || "neutral";
             if (feedback.setFeedback(local, type, id, current === stateValue ? "neutral" : stateValue)) {
               syncFeedback(); refreshRecommendations();
             }
-          }, "detail-secondary detail-feedback", stateValue);
+          }, "detail-secondary detail-feedback", actionName || stateValue);
           el.dataset.feedback = stateValue;
           var icon = doc.createElement("span"); icon.className = "detail-feedback-icon";
           icon.setAttribute("aria-hidden", "true");
-          icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v10H4a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2h3Zm0 0 5-7a2 2 0 0 1 2-1c1.1 0 1.8.9 1.6 2L15 8h5a2 2 0 0 1 2 2l-1.2 8a2 2 0 0 1-2 2H7"/></svg>';
+          if (stateValue === "liked") {
+            icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>';
+          } else {
+            icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>';
+          }
           var text = doc.createElement("span"); text.textContent = label;
           el.replaceChildren(icon, text);
+          el.setAttribute("aria-label", label);
           actions.appendChild(el);
         }
-        add("liked", "Like"); add("disliked", "Dislike");
+        add("liked", "Love It", "love-it");
+        add("disliked", "Not Interested", "not-interested");
         syncFeedback();
       }
       if (state.title.type === "movie") {
@@ -1160,6 +1569,7 @@
       detailToken += 1; seasonToken += 1;
       if (episodeTarget && row.type === "tv") pendingEpisodeFocus = { season: episodeTarget.season, episode: episodeTarget.episode };
       state.detailSource = state.view === "history" ? "history" : state.view === "watch" ? "watch" : "search";
+      state.detailSourceTab = state.watchTab || "for-you";
       state.title = row; state.detail = null; state.season = null; nextContinue = null;
       state.episodes = [];
       state.subtitle = core.readSubtitlePref(local);
@@ -1419,10 +1829,10 @@
     function move(key) {
       var current = doc.activeElement, rect = current && current.getBoundingClientRect();
       if (!rect) { focus(query); return; }
-      var railOrder = [get("watch-toggle"), get("search-toggle"), get("history-toggle"), get("settings-toggle")];
-      var railPosition = railOrder.indexOf(current);
+      var railButtons = [get("search-toggle"), get("watch-toggle"), get("tv-toggle"), get("movies-toggle"), get("history-toggle"), get("settings-toggle")];
+      var railPosition = railButtons.indexOf(current);
       if (railPosition >= 0 && (key === "ArrowDown" || key === "ArrowUp")) {
-        focus(railOrder[Math.max(0, Math.min(railOrder.length - 1,
+        focus(railButtons[Math.max(0, Math.min(railButtons.length - 1,
           railPosition + (key === "ArrowDown" ? 1 : -1)))]); return;
       }
       if (state.view === "settings") {
@@ -1437,31 +1847,85 @@
         return;
       }
       if (state.view === "watch") {
-        var watchRows = homeRowOrder.map(homeRowButtons);
-        var first = firstHomeButton() || get("search-toggle");
-        var rail = [get("watch-toggle"), get("search-toggle"), get("history-toggle"), get("settings-toggle")];
+        var watchRows = currentTabRowOrder().map(homeRowButtons);
+        var first = firstHomeButton() || get("watch-toggle");
         if (current.closest(".watch-rail")) {
-          var railIndex = rail.indexOf(current);
-          if (key === "ArrowDown") focus(rail[Math.min(rail.length - 1, railIndex + 1)]);
-          else if (key === "ArrowUp") focus(rail[Math.max(0, railIndex - 1)]);
-          else if (key === "ArrowRight") focus(resolveHomeSelection(homeLastContent)
-            || homeLastContent && nearestHomeButton(homeLastContent.group) || first);
+          var railIndex = railButtons.indexOf(current);
+          if (key === "ArrowDown") focus(railButtons[Math.min(railButtons.length - 1, railIndex + 1)]);
+          else if (key === "ArrowUp") focus(railButtons[Math.max(0, railIndex - 1)]);
+          else if (key === "ArrowRight") {
+            var remembered = tabLastContent[state.watchTab] || homeLastContent;
+            focus(resolveHomeSelection(remembered)
+              || (remembered && nearestHomeButton(remembered.group)) || first);
+          }
+          return;
+        }
+        if (current.classList.contains("filter-chip")) {
+          var chips = Array.from(get("watch-filter-strip").querySelectorAll(".filter-chip")).filter(function (c) {
+            return !c.hidden;
+          });
+          var chipIdx = chips.indexOf(current);
+          if (key === "ArrowLeft") {
+            if (chipIdx > 0) focus(chips[chipIdx - 1]);
+            else focus(get("watch-toggle"));
+          } else if (key === "ArrowRight" && chipIdx < chips.length - 1) {
+            focus(chips[chipIdx + 1]);
+          } else if (key === "ArrowUp") {
+            focus(get("watch-toggle"));
+          } else if (key === "ArrowDown") {
+            var emptyBtn = get("watch-filter-empty-clear");
+            if (emptyBtn && !emptyBtn.closest("[hidden]")) {
+              focus(emptyBtn);
+            } else {
+              focus(resolveHomeSelection(homeLastContent) || firstHomeButton() || get("watch-toggle"));
+            }
+          }
+          return;
+        }
+        if (current.classList.contains("filter-menu-option")) {
+          var options = Array.from(get("watch-filter-menu-options").querySelectorAll(".filter-menu-option"));
+          var optIdx = options.indexOf(current);
+          if (key === "ArrowUp" && optIdx > 0) focus(options[optIdx - 1]);
+          else if (key === "ArrowDown" && optIdx < options.length - 1) focus(options[optIdx + 1]);
+          return;
+        }
+        if (current.id === "watch-filter-empty-clear") {
+          if (key === "ArrowUp") focus(get("filter-btn-genre"));
           return;
         }
         var groupIndex = watchRows.findIndex(function (row) { return row.indexOf(current) >= 0; });
         var group = groupIndex >= 0 ? watchRows[groupIndex] : null;
         if (group) {
+          var groupName = currentTabRowOrder()[groupIndex];
           var index = group.indexOf(current);
           var down = adjacentHomeRow(watchRows, groupIndex, 1);
           var up = adjacentHomeRow(watchRows, groupIndex, -1);
-          if (key === "ArrowLeft") focus(group[circularIndex(index, group.length, -1)], true, -1);
-          else if (key === "ArrowRight") focus(group[circularIndex(index, group.length, 1)], true, 1);
-          else if (key === "ArrowDown") {
-            if (down) { var downGroup = homeRowOrder[watchRows.indexOf(down)];
+          if (rowCycleIndex[groupName] === undefined) {
+            rowCycleIndex[groupName] = Math.max(0, index);
+          }
+          if (key === "ArrowLeft") {
+            if (rowCycleIndex[groupName] <= 0) {
+              focus(get("watch-toggle"));
+            } else {
+              rowCycleIndex[groupName] -= 1;
+              focus(group[circularIndex(index, group.length, -1)], true, -1);
+            }
+          } else if (key === "ArrowRight") {
+            if (index === group.length - 1) rowCycleIndex[groupName] = 0;
+            else rowCycleIndex[groupName] += 1;
+            focus(group[circularIndex(index, group.length, 1)], true, 1);
+          } else if (key === "ArrowDown") {
+            if (down) { var downGroup = currentTabRowOrder()[watchRows.indexOf(down)];
               focus(resolveHomeSelection(homeRowMemory[downGroup]) || down[0]); }
           } else if (key === "ArrowUp") {
-            var upGroup = homeRowOrder[watchRows.indexOf(up)];
-            focus(up ? resolveHomeSelection(homeRowMemory[upGroup]) || up[0] : get("watch-toggle"));
+            var upGroup = currentTabRowOrder()[watchRows.indexOf(up)];
+            if (up) {
+              focus(resolveHomeSelection(homeRowMemory[upGroup]) || up[0]);
+            } else if (state.watchTab === "tv" || state.watchTab === "movies") {
+              focus(get("filter-btn-genre"));
+            } else {
+              focus(get("watch-toggle"));
+            }
           }
           return;
         }
@@ -1471,14 +1935,17 @@
           return !item.disabled;
         });
         var actionIndex = actions.indexOf(current), credits = get("details-view").querySelector(".detail-credits a");
+        var railToggle = state.detailSource === "watch"
+          ? (state.detailSourceTab === "tv" ? get("tv-toggle") : state.detailSourceTab === "movies" ? get("movies-toggle") : get("watch-toggle"))
+          : state.detailSource === "history" ? get("history-toggle") : get("search-toggle");
         if (current === get("details-back")) {
           if (key === "ArrowDown") focus(actions[0] || credits);
-          else if (key === "ArrowLeft") focus(get("search-toggle"));
+          else if (key === "ArrowLeft") focus(railToggle);
           return;
         }
         if (actionIndex >= 0) {
           if (key === "ArrowUp") focus(get("details-back"));
-          else if (key === "ArrowLeft") focus(actions[actionIndex - 1] || get("search-toggle"));
+          else if (key === "ArrowLeft") focus(actions[actionIndex - 1] || railToggle);
           else if (key === "ArrowRight") focus(actions[actionIndex + 1]);
           else if (key === "ArrowDown") focus(credits);
           return;
@@ -1499,11 +1966,14 @@
         var columns = plays.filter(function (item) {
           return plays.length && Math.abs(item.getBoundingClientRect().top - plays[0].getBoundingClientRect().top) < 2;
         }).length || 3;
+        var railToggle = state.detailSource === "watch"
+          ? (state.detailSourceTab === "tv" ? get("tv-toggle") : state.detailSourceTab === "movies" ? get("movies-toggle") : get("watch-toggle"))
+          : state.detailSource === "history" ? get("history-toggle") : get("search-toggle");
         if (current === get("episodes-back")) {
           if (key === "ArrowDown") focus(seasonButtons.find(function (item) {
             return item.classList.contains("is-current");
           }) || seasonButtons[0] || plays[0]);
-          else if (key === "ArrowLeft") focus(get("search-toggle"));
+          else if (key === "ArrowLeft") focus(railToggle);
           return;
         }
         if (seasonIndex >= 0) {
@@ -1529,8 +1999,11 @@
         }
       }
       if (state.view === "search") {
-        if (key === "ArrowRight" && current.id === "search-toggle") {
+        if (key === "ArrowRight" && current.closest(".watch-rail")) {
           focus(query); return;
+        }
+        if (key === "ArrowLeft" && current === query) {
+          focus(get("search-toggle")); return;
         }
         var keys = get("keyboard-keys"), firstResult = results.querySelector("button");
         var nearest = function (items) { return items.sort(function (a, b) {
@@ -1584,6 +2057,10 @@
       if (finePointer && event.key === "Backspace" && !editing) return;
       if (key === "Back") {
         event.preventDefault(); if (event.repeat) return;
+        if (activeFilterMenuType) {
+          closeFilterMenu();
+          return;
+        }
         if (state.view === "history") returnWithinWatch(leaveHistory);
         else if (state.view === "settings") returnWithinWatch(function () { showWatch(); });
         else if (state.view === "episodes") returnWithinWatch(backToDetails);
@@ -1591,18 +2068,54 @@
         else if (state.view === "search" && state.query) {
           query.value = ""; state.query = ""; scheduleSearch(0); focus(query); saveView();
         } else if (state.view === "search") showWatch();
-        else exitToHome();
+        else if (state.view === "watch") {
+          if (state.watchTab !== "for-you") {
+            setWatchTab("for-you");
+          } else if (doc.activeElement && doc.activeElement.dataset && doc.activeElement.dataset.homeGroup) {
+            focus(get("watch-toggle"));
+          } else if (doc.activeElement && doc.activeElement.closest("#watch-filter-strip")) {
+            focus(get("watch-toggle"));
+          } else {
+            focus(get("watch-toggle"));
+          }
+        }
         return;
       }
       if (key === "OK") {
         event.preventDefault(); if (event.repeat) return;
+        var actEl = doc.activeElement;
+        if (actEl && actEl.classList.contains("filter-chip")) {
+          if (actEl.id === "filter-btn-clear") clearActiveFilters();
+          else openFilterMenu(actEl.dataset.filterType);
+          return;
+        }
+        if (actEl && actEl.classList.contains("filter-menu-option")) {
+          selectFilterOption(actEl.dataset.filterType, actEl.dataset.filterValue);
+          return;
+        }
+        if (actEl && actEl.id === "watch-filter-empty-clear") {
+          clearActiveFilters();
+          focus(get("filter-btn-genre"));
+          return;
+        }
         if (doc.activeElement === query) { if (state.query.trim()) { state.continueMode = false; searchNow(true); } else openKeyboard(); }
         else if (doc.activeElement && doc.activeElement.click) doc.activeElement.click();
         return;
       }
       if (key && key.indexOf("Arrow") === 0) { event.preventDefault(); move(key); return; }
     }
-    get("watch-toggle").addEventListener("click", function () { showWatch(true); });
+    get("watch-toggle").addEventListener("click", function () {
+      if (state.view !== "watch") setView("watch");
+      setWatchTab("for-you");
+    });
+    get("tv-toggle").addEventListener("click", function () {
+      if (state.view !== "watch") setView("watch");
+      setWatchTab("tv");
+    });
+    get("movies-toggle").addEventListener("click", function () {
+      if (state.view !== "watch") setView("watch");
+      setWatchTab("movies");
+    });
     get("search-toggle").addEventListener("click", function () {
       state.continueMode = false; setView("search"); scheduleSearch(0); focus(query); saveView();
     });
@@ -1617,6 +2130,16 @@
     });
     get("details-back").addEventListener("click", function () { returnWithinWatch(backToResults); });
     get("episodes-back").addEventListener("click", function () { returnWithinWatch(backToDetails); });
+    ["genre", "length", "rating", "year", "sort"].forEach(function (t) {
+      var b = get("filter-btn-" + t);
+      if (b) b.addEventListener("click", function () { openFilterMenu(t); });
+    });
+    var clearBtn = get("filter-btn-clear");
+    if (clearBtn) clearBtn.addEventListener("click", clearActiveFilters);
+    var filterEmptyClear = get("watch-filter-empty-clear");
+    if (filterEmptyClear) filterEmptyClear.addEventListener("click", function () {
+      clearActiveFilters(); focus(get("filter-btn-genre"));
+    });
     query.addEventListener("input", function () { state.query = query.value; scheduleSearch(300); });
     doc.querySelectorAll("[data-filter]").forEach(function (filter) { filter.addEventListener("click", function () {
       state.filter = filter.dataset.filter;

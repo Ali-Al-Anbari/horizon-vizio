@@ -221,6 +221,14 @@ test("VidRift history and VidBolt URLs use documented shapes with autoplay defau
   assert.equal(url({ movieId: 550 }, "vidbolt", "autoPlayOff"), "https://vidbolt.xyz/movie/550");
   assert.equal(providers.embedUrl({ movieId: 550 }, "vidbolt", "off", "https://example.test", catalog, null, 42.5),
     "https://vidbolt.xyz/movie/550?autoPlay=true&startAt=42.5");
+  assert.equal(providers.embedUrl({ movieId: 550 }, "vidbolt", "off", "https://example.test", catalog, null, null, "en"),
+    "https://vidbolt.xyz/movie/550?autoPlay=true&audio=en");
+  assert.equal(providers.embedUrl({ showId: 1396, season: 2, episode: 3 }, "vidbolt", "off", "https://example.test", catalog, null, null, "ja"),
+    "https://vidbolt.xyz/tv/1396/2/3?autoPlay=true&audio=ja");
+  assert.equal(providers.embedUrl({ movieId: 550 }, "vidbolt", "off", "https://example.test", catalog, null, 15, "de"),
+    "https://vidbolt.xyz/movie/550?autoPlay=true&startAt=15&audio=de");
+  assert.equal(providers.embedUrl({ movieId: 550 }, "vidbolt", "off", "https://example.test", catalog, null, null, "auto"),
+    "https://vidbolt.xyz/movie/550?autoPlay=true");
   assert.equal(url({ showId: 1396, season: 2, episode: 3 }, "vidbolt", "autoPlayTrue"),
     "https://vidbolt.xyz/tv/1396/2/3?autoPlay=true");
   assert.equal(url({ movieId: 0 }, "vidrift"), null);

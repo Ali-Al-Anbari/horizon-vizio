@@ -38,7 +38,7 @@ test("Watch home follows the reference layout and routes cards through the exist
   assert.match(source, /core\.homepageContinueCandidates\(rows, local\)/);
   assert.match(source, /core\.homepageFinished\(rows, local\)/);
   assert.match(source, /group === "continue" \? landscapeArt\(row, true\) : verticalPosterArt\(row, true\)/);
-  assert.match(source, /loadHomeWindowArt\(selected\)/);
+  assert.match(source, /loadHomeWindowArt\(/);
   assert.match(source, /if \(row\.type === "movie"\) \{ openDetails\(row\); return; \}/);
   assert.match(source, /openDetails\(row, target \|\| \{ season: row\.season, episode: row\.episode \}\)/);
   assert.match(source, /lookupNextEpisode\(row, detail\)/);
@@ -88,8 +88,8 @@ test("focused rail circle expands with adjacent controls spaced apart", () => {
 
 test("horizontal poster traversal cannot trigger vertical row reveal", () => {
   assert.match(source, /if \(!skipHomeVertical && element\.closest\("#watch-rows-scroll"\)[\s\S]*?previousHomeGroup !== element\.dataset\.homeGroup\)\s*revealHomeSection\(element\)/);
-  assert.match(source, /key === "ArrowLeft"\) focus\(group\[circularIndex\(index, group\.length, -1\)\], true\)/);
-  assert.match(source, /key === "ArrowRight"\) focus\(group\[circularIndex\(index, group\.length, 1\)\], true\)/);
+  assert.match(source, /key === "ArrowLeft"\) focus\(group\[circularIndex\(index, group\.length, -1\)\], true/);
+  assert.match(source, /key === "ArrowRight"\) focus\(group\[circularIndex\(index, group\.length, 1\)\], true/);
   assert.match(css, /body\.watch-active \.watch-rows-scroll \{[^}]*scroll-behavior: auto/s);
   assert.match(source, /element\.getBoundingClientRect\(\)\.bottom/);
 });
@@ -155,4 +155,13 @@ test("completed Continue waits for verified episode metadata before enabling the
   assert.match(source, /core\.nextConfirmedEpisode\(recent, rows/);
   assert.match(source, /if \(next\) launchEpisode\(next\.season, next\.episode, false, next\.title\)/);
   assert.match(source, /primary\.disabled = completed && !next && !noNext/);
+});
+
+test("Details has no per-title subtitle control and Watch rows preserve normal full-width track layout", () => {
+  assert.doesNotMatch(source, /function appendSubtitleAction/);
+  assert.doesNotMatch(source, /appendSubtitleAction\(\)/);
+  assert.doesNotMatch(html, /detail-subtitles/);
+  assert.doesNotMatch(css, /\.detail-actions \.detail-subtitles/);
+  assert.match(css, /body\.watch-active \.watch-home-track \{[^}]*display: contents/);
+  assert.match(css, /body\.watch-active \.watch-home-row \{[^}]*overflow-x: auto/);
 });

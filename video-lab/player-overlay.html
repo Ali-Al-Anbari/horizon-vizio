@@ -55,6 +55,7 @@
             <button id="manual-end" type="button" tabindex="-1" aria-label="Test episode end" title="Test episode end" hidden><svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6l10 6-10 6V6zm12 0h2v12h-2V6z"/></svg><span class="action-label">Test: episode ended</span></button>
             <button id="unload-provider" type="button" tabindex="-1" aria-label="Stop and unload" title="Stop / Unload" hidden><svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg><span class="action-label">Stop / Unload</span></button>
             <button id="subtitles" type="button" tabindex="-1" aria-label="Subtitles" title="YapGrid subtitles"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 10a2 2 0 0 0-2 2v0a2 2 0 0 0 2 2m7-4a2 2 0 0 0-2 2v0a2 2 0 0 0 2 2"/></svg><span class="action-label">Subtitles: <span id="subtitle-mode">OFF</span></span></button>
+            <button id="audio-language" type="button" tabindex="-1" aria-label="Audio language" title="Audio language"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg><span class="action-label">Audio: <span id="audio-language-mode">Default</span></span></button>
             <button id="diagnostics-open" type="button" tabindex="-1" aria-label="Diagnostics" title="Diagnostics"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg><span class="action-label">Diagnostics</span></button>
             <button id="watch-fullscreen" type="button" tabindex="-1" aria-pressed="false" aria-label="Fullscreen" title="Fullscreen" hidden><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg><span class="action-label">Fullscreen</span></button>
             <button id="watch-exit" type="button" tabindex="-1" aria-label="Exit to Watch" title="Exit to Watch" hidden><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 5 5v5"/></svg><span class="action-label">Exit to Watch</span></button>
@@ -85,6 +86,14 @@
             <button id="independent-subtitle-english" type="button" tabindex="-1">English</button>
             <button id="independent-subtitle-offset" type="button" tabindex="-1">Timing: 0.0s · Left / Right to adjust</button>
             <button id="independent-subtitle-setup" type="button" tabindex="-1" hidden>Connect Video Lab</button>
+          </section>
+          <section id="audio-language-menu" class="independent-subtitle-menu audio-language-menu" aria-label="Audio language settings" hidden>
+            <h2>Audio Language</h2>
+            <p id="audio-language-status">Spoken audio preference for VidBolt. Actual track availability depends on provider.</p>
+            <button id="audio-lang-auto" type="button" tabindex="-1" aria-pressed="true">Automatic / Default</button>
+            <button id="audio-lang-en" type="button" tabindex="-1" aria-pressed="false">English</button>
+            <button id="audio-lang-ja" type="button" tabindex="-1" aria-pressed="false">Japanese</button>
+            <button id="audio-lang-de" type="button" tabindex="-1" aria-pressed="false">German</button>
           </section>
           <p id="command-status" class="command-status" role="status" aria-live="polite"></p>
           </div>

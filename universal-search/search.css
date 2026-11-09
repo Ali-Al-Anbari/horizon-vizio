@@ -820,7 +820,8 @@ body.watch-active .watch-home-section h2 { margin: 0 0 31px var(--watch-gutter);
   font-size: clamp(24px, 1.9vw, 32px); line-height: 1.1; font-weight: 650; letter-spacing: -.025em; text-shadow: 0 2px 12px #000; }
 body.watch-active .watch-home-row { width: 100%; gap: clamp(13px, 1vw, 22px);
   padding: 11px var(--watch-gutter) 22px; scroll-padding-left: var(--watch-gutter);
-  scroll-padding-right: var(--watch-gutter); scroll-behavior: auto; scrollbar-width: none; }
+  scroll-padding-right: var(--watch-gutter); scroll-behavior: auto; scrollbar-width: none;
+  overflow-x: auto; }
 body.watch-active .watch-home-track { display: contents; }
 body.watch-active .watch-home-row::-webkit-scrollbar { display: none; }
 body.watch-active .home-card { flex-basis: clamp(270px, 22vw, 430px); }

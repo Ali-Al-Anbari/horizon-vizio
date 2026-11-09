@@ -59,7 +59,7 @@
     return value === "defaultOn" || value === "jwOn" ? value : "defaultOff";
   }
 
-  function embedUrl(target, provider, subtitle, pageOrigin, catalog, testMode, startAt) {
+  function embedUrl(target, provider, subtitle, pageOrigin, catalog, testMode, startAt, audioLang) {
     if (!target || !catalog) return null;
     // Preserved CineSrc embed generation for reference only:
     if (provider === CINESRC) {
@@ -119,6 +119,7 @@
       if (chosen === VIDBOLT) {
         var params = testMode === "autoPlayOff" ? "" : "?autoPlay=true";
         if (finiteNonnegative(startAt)) params += (params ? "&" : "?") + "startAt=" + startAt;
+        if (audioLang && audioLang !== "auto") params += (params ? "&" : "?") + "audio=" + encodeURIComponent(audioLang);
         return base + params;
       }
       return base;

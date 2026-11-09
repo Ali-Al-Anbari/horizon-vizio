@@ -10,7 +10,7 @@
     NATIVE_FOCUS: "NATIVE_FOCUS",
   };
   var PREVIEW_ORIGIN = "https://horizon-video-lab-preview.ali-al-anbari.workers.dev";
-  var CONTROL_IDS = ["rewind", "play-pause", "forward", "previous-episode", "subtitles", "episodes", "next-episode", "manual-end", "provider-choice", "unload-provider", "diagnostics-open", "recover-provider", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip", "watch-exit", "watch-fullscreen"];
+  var CONTROL_IDS = ["rewind", "play-pause", "forward", "previous-episode", "subtitles", "episodes", "next-episode", "manual-end", "provider-choice", "unload-provider", "diagnostics-open", "recover-provider", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip", "watch-exit", "watch-fullscreen", "audio-language"];
   var COMMANDS = { rewind: "seek_backward", "play-pause": "pause_toggle", forward: "seek_forward" };
   var IDLE_MS = 5000;
   // A watchdog for a future acknowledged adapter, not a delay before sending.
@@ -54,6 +54,33 @@
     var menuButtons = [get("menu-cancel"), get("menu-change")];
     var independentButtons = [get("independent-subtitle-off"), get("independent-subtitle-english"),
       get("independent-subtitle-offset"), get("independent-subtitle-setup")];
+    var audioLanguages = ["auto", "en", "ja", "de"];
+    var audioLabels = { auto: "Default", en: "English", ja: "Japanese", de: "German" };
+    var audioMenuButtons = [get("audio-lang-auto"), get("audio-lang-en"),
+      get("audio-lang-ja"), get("audio-lang-de")];
+    var audioLanguageMenuOpen = false;
+    var audioLanguageSelected = 0;
+    function readAudioLanguagePref() {
+      try {
+        var saved = clock.sessionStorage && clock.sessionStorage.getItem("horizon_audio_pref");
+        return saved && audioLanguages.indexOf(saved) !== -1 ? saved : "auto";
+      } catch (_e) {
+        return "auto";
+      }
+    }
+    function writeAudioLanguagePref(lang) {
+      try {
+        if (clock.sessionStorage) clock.sessionStorage.setItem("horizon_audio_pref", lang);
+      } catch (_e) {}
+    }
+    var currentAudioLanguage = readAudioLanguagePref();
+    function updateAudioLanguageUI() {
+      var mode = get("audio-language-mode");
+      if (mode) mode.textContent = audioLabels[currentAudioLanguage] || "Default";
+      audioMenuButtons.forEach(function (btn, idx) {
+        if (btn) btn.setAttribute("aria-pressed", audioLanguages[idx] === currentAudioLanguage ? "true" : "false");
+      });
+    }
     var upNextButtons = [get("up-next-play")];
     var catalog = root.HorizonEpisodes;
     var providers = root.HorizonPlaybackProviders;
@@ -349,6 +376,9 @@
         ? independentSubtitles.state().enabled ? "EN" : "OFF" : subtitleMode.toUpperCase();
       get("subtitles").hidden = isMovie && provider !== providers.VIDBOLT;
       get("subtitles").title = provider === providers.VIDBOLT ? "Horizon subtitles" : "YapGrid subtitles";
+      var audioLangBtn = get("audio-language");
+      if (audioLangBtn) audioLangBtn.hidden = provider !== providers.VIDBOLT;
+      updateAudioLanguageUI();
       renderBoltPlayPause();
       renderSeekLabels();
     }
@@ -806,7 +836,7 @@
       controls.forEach(function (button, index) {
         if (button) button.tabIndex = visible && !button.hidden
           && (index < 12 || usesExperimentalRow() || index === 20 && route.fromSearch
-            || index === 21 && desktopWatch) ? 0 : -1;
+            || index === 21 && desktopWatch || index === 22) ? 0 : -1;
       });
     }
     function focusControl(index) {
@@ -1038,7 +1068,7 @@
         focus(upNextButtons[0]);
         return true;
       }
-      var rows = [[0, 1, 2], [3, 5, 6, 8, 11, 7, 9, 4, 10, 21, 20]]
+      var rows = [[0, 1, 2], [3, 5, 6, 8, 11, 7, 9, 4, 22, 10, 21, 20]]
         .map(function (row) { return row.filter(function (index) {
           return controls[index] && !controls[index].hidden && !controls[index].disabled;
         }); }).filter(function (row) { return row.length; });
@@ -1073,6 +1103,10 @@
     }
     function closeMenu() {
       if (state !== STATES.SUBMENU_OPEN) return;
+      if (audioLanguageMenuOpen) {
+        closeAudioLanguageMenu();
+        return;
+      }
       if (provider === providers.VIDBOLT) {
         get("independent-subtitle-menu").hidden = true;
         playerShell.classList.remove("subtitle-settings-open");
@@ -1168,6 +1202,70 @@
         }
         focus(independentButtons[independentMenuIndex]);
       }
+    }
+    function openAudioLanguageMenu() {
+      if (state !== STATES.CONTROLS_VISIBLE) return;
+      clearIdle();
+      state = STATES.SUBMENU_OPEN;
+      audioLanguageMenuOpen = true;
+      playerShell.classList.add("subtitle-settings-open");
+      var idx = audioLanguages.indexOf(currentAudioLanguage);
+      audioLanguageSelected = idx >= 0 ? idx : 0;
+      get("audio-language-menu").hidden = false;
+      audioMenuButtons.forEach(function (button) {
+        if (button) button.tabIndex = 0;
+      });
+      focus(audioMenuButtons[audioLanguageSelected]);
+    }
+    function closeAudioLanguageMenu() {
+      if (!audioLanguageMenuOpen) return;
+      get("audio-language-menu").hidden = true;
+      playerShell.classList.remove("subtitle-settings-open");
+      audioMenuButtons.forEach(function (button) {
+        if (button) button.tabIndex = -1;
+      });
+      audioLanguageMenuOpen = false;
+      state = STATES.CONTROLS_VISIBLE;
+      focusControl(22);
+      resetIdle();
+    }
+    function audioLanguageMenuKey(key) {
+      if (key === "Back") { closeAudioLanguageMenu(); return; }
+      if (key === "ArrowUp" || key === "ArrowDown") {
+        audioLanguageSelected = Math.max(0, Math.min(audioMenuButtons.length - 1,
+          audioLanguageSelected + (key === "ArrowDown" ? 1 : -1)));
+        focus(audioMenuButtons[audioLanguageSelected]);
+      } else if (key === "OK") {
+        chooseAudioLanguage(audioLanguages[audioLanguageSelected]);
+      }
+    }
+    function chooseAudioLanguage(lang) {
+      if (audioLanguages.indexOf(lang) === -1) lang = "auto";
+      currentAudioLanguage = lang;
+      writeAudioLanguagePref(lang);
+      updateAudioLanguageUI();
+      var confirmed = confirmedProgressRecord();
+      var restore = boltLastConfirmed && boltLastConfirmed.identity === boltIdentity()
+        ? boltLastConfirmed.position : confirmed && confirmed.position;
+      if (restore === null && boltSession && boltSession.position !== null
+          && boltSession.identity === boltIdentity()) {
+        restore = boltSession.position;
+      }
+      if (confirmed) {
+        storePlayerProgress(confirmed.position, confirmed.duration, confirmed.completed, true);
+      }
+      if (provider === providers.VIDBOLT) {
+        boltRestoreRequest = restore !== null && Number.isFinite(restore) && restore >= 0
+          ? { identity: boltIdentity(), target: restore, kind: "resume" } : null;
+        unloadFrame();
+        vidBoltAutoplay = true;
+        loadProviderFrame(null, true);
+        var label = audioLabels[lang] || "Default";
+        get("command-status").textContent = lang === "auto"
+          ? "VidBolt audio preference set to Automatic / Default."
+          : "VidBolt audio preference set to " + label + "; actual track availability is unverified.";
+      }
+      closeAudioLanguageMenu();
     }
     function restoreFromCommand(reason, late, parentFocused) {
       if (disposed || state !== STATES.COMMAND_IN_PROGRESS) return;
@@ -1848,6 +1946,7 @@
       if (id === "watch-exit" && route.fromSearch) { exitPlayer(); return; }
       if (id === "watch-fullscreen" && desktopWatch) { toggleDesktopFullscreen(); return; }
       if (id === "subtitles" && provider === providers.VIDBOLT) { openMenu(); return; }
+      if (id === "audio-language") { openAudioLanguageMenu(); return; }
       if (isMovie && !COMMANDS[id]) return;
       if (activeBatch) {
         get("command-status").textContent = "Seek in progress; wait for completion or timeout.";
@@ -1934,7 +2033,10 @@
         return;
       }
       if (state === STATES.SUBMENU_OPEN) {
-        if (provider === providers.VIDBOLT) {
+        if (audioLanguageMenuOpen) {
+          if (!event.repeat || key.indexOf("Arrow") === 0) audioLanguageMenuKey(key);
+        }
+        else if (provider === providers.VIDBOLT) {
           if (!event.repeat || key.indexOf("Arrow") === 0) independentMenuKey(key);
         }
         else if (key === "Back") { if (!event.repeat) closeMenu(); }
@@ -2253,7 +2355,7 @@
         nav.origin, catalog, provider === providers.VIDFAST ? vidFastMode
           : provider === providers.VIDLINK ? vidLinkMode
           : provider === providers.VIDBOLT ? (vidBoltAutoplay ? "autoPlayTrue" : "autoPlayOff")
-          : compatibilityMode, null);
+          : compatibilityMode, null, currentAudioLanguage);
       if (!url) {
         loading(isMovie ? "Invalid movie ID. Press Back to return to Horizon Watch."
           : "Invalid episode ID. Press Back to return to Horizon Watch.");
@@ -2699,8 +2801,7 @@
       });
       button.addEventListener("click", function () {
         if (disposed || state !== STATES.CONTROLS_VISIBLE) return;
-        if (button.hidden || (index >= 12 && !usesExperimentalRow() && index !== 20
-            && !(index === 21 && desktopWatch))) return;
+        if (button.hidden || (index >= 12 && index <= 19 && !usesExperimentalRow())) return;
         if (selected !== index) {
           pendingEpisode = null;
           episodeLookup += 1;
@@ -2737,6 +2838,16 @@
         if (state !== STATES.SUBMENU_OPEN || provider !== providers.VIDBOLT) return;
         independentMenuIndex = index;
         independentMenuKey("OK");
+      });
+    });
+    audioMenuButtons.forEach(function (button, index) {
+      if (!button) return;
+      button.addEventListener("focus", function () {
+        if (state === STATES.SUBMENU_OPEN && audioLanguageMenuOpen) audioLanguageSelected = index;
+      });
+      button.addEventListener("click", function () {
+        if (state !== STATES.SUBMENU_OPEN || !audioLanguageMenuOpen) return;
+        chooseAudioLanguage(audioLanguages[index]);
       });
     });
     upNextButtons.forEach(function (button, index) {

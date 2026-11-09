@@ -217,11 +217,11 @@
           get("watch-rows-scroll").getBoundingClientRect().top) - home.top + "px";
       }
     }
-    function focus(element, skipHomeVertical) { if (element) {
+    function focus(element, skipHomeVertical, direction) { if (element) {
       var previous = doc.querySelector("[data-focus].is-focused");
       var previousHomeGroup = previous && previous.dataset.homeGroup || "";
       if (previous && previous !== element) previous.classList.remove("is-focused");
-      if (element.dataset.homeGroup) revealHomeWindow(element);
+      if (element.dataset.homeGroup) revealHomeWindow(element, direction);
       element.focus({ preventScroll: true }); element.classList.add("is-focused");
       var seasonStrip = element.closest("#seasons");
       var episodeScroll = element.closest("#episode-list");
@@ -353,32 +353,123 @@
         });
       });
     }
-    function revealHomeWindow(element) {
+    function revealHomeWindow(element, direction) {
       var group = element.dataset.homeGroup, cards = homeCards[group];
       if (!cards || !cards.length) return;
       var row = get("watch-" + group + "-row"), track = row.querySelector(".watch-home-track");
-      var count = homeWindowSizes[group];
-      if (!count) {
-        var first = track.querySelector(".home-card") || cards[0];
-        var width = first.offsetWidth || 280;
-        count = homeWindowSizes[group] = Math.min(cards.length,
-          Math.max(3, Math.ceil(row.clientWidth / width) + 2));
-      }
-      if (cards.length <= count) {
-        if (track.childElementCount !== cards.length) track.replaceChildren.apply(track, cards);
+      if (!row || !track) return;
+
+      var first = track.firstElementChild || cards[0];
+      var width = first.offsetWidth || 280;
+      var nextEl = first.nextElementSibling;
+      var cardStep = (nextEl && first && (nextEl.offsetLeft - first.offsetLeft))
+        || (width + 16);
+      if (cardStep <= 0) cardStep = width + 16;
+      var rowWidth = row.clientWidth || (clock.innerWidth ? clock.innerWidth - 180 : 1735);
+      var visibleSlots = Math.max(1, Math.ceil(rowWidth / cardStep));
+      var overscan = 3;
+
+      // Short rows: avoid duplicate titles, keep all cards in natural order
+      if (cards.length <= visibleSlots) {
+        if (track.childElementCount !== cards.length) {
+          track.replaceChildren.apply(track, cards);
+        }
+        track.style.transform = "";
+        row.scrollLeft = 0;
         loadHomeWindowArt(cards);
         return;
       }
-      var attached = Array.from(track.children), position = attached.indexOf(element);
-      if (position > 0 && position < attached.length - 1 && attached.length === count) {
-        loadHomeWindowArt(attached); return;
+
+      var windowSize = Math.min(cards.length, visibleSlots + overscan * 2);
+      var attached = Array.from(track.children);
+      var pos = attached.indexOf(element);
+
+      // Handle wrap left from the initial entry at card 0
+      if (direction === -1 && element === cards[cards.length - 1] && row.scrollLeft <= cardStep
+          && attached[0] === cards[0]) {
+        var toPrepend = Math.min(cards.length - 1, overscan + 1);
+        var prependCards = [];
+        for (var p = toPrepend; p >= 1; p--) {
+          var pIdx = (cards.length - p) % cards.length;
+          prependCards.push(cards[pIdx]);
+        }
+        for (var pi = 0; pi < prependCards.length; pi++) {
+          track.insertBefore(prependCards[pi], track.firstElementChild);
+        }
+        row.scrollLeft += toPrepend * cardStep;
+        while (track.childElementCount > windowSize) {
+          track.removeChild(track.lastElementChild);
+        }
+        attached = Array.from(track.children);
+        pos = attached.indexOf(element);
+        loadHomeWindowArt(attached);
+        return;
       }
-      var index = cards.indexOf(element), selected = [];
-      var start = index === 0 ? 0 : index - 1;
-      for (var i = 0; i < count; i++) selected.push(cards[(start + i) % cards.length]);
-      track.replaceChildren.apply(track, selected);
-      loadHomeWindowArt(selected);
-      row.scrollLeft = 0;
+
+      // If element is not currently in track (e.g. restoring focus from memory or large jump)
+      if (pos < 0) {
+        var cardIndex = cards.indexOf(element);
+        if (cardIndex < 0) return;
+        var start = (cardIndex === 0 && row.scrollLeft <= 2) ? 0 : Math.max(0, cardIndex - overscan);
+        var selected = [];
+        for (var s = 0; s < windowSize; s++) {
+          selected.push(cards[(start + s) % cards.length]);
+        }
+        track.replaceChildren.apply(track, selected);
+        attached = Array.from(track.children);
+        pos = attached.indexOf(element);
+      }
+
+      // On first entering Watch Home: first poster at left gutter, nothing to the left
+      if (row.scrollLeft <= 2 && element === cards[0] && attached[0] === cards[0]) {
+        loadHomeWindowArt(attached);
+        return;
+      }
+
+      var behindCount = pos;
+      var aheadCount = attached.length - 1 - pos;
+
+      // Approaching the end (moving right): recycle cards from front to back
+      if (aheadCount < visibleSlots + overscan && behindCount > overscan) {
+        var toMoveAhead = Math.min((visibleSlots + overscan) - aheadCount, behindCount - overscan);
+        for (var ma = 0; ma < toMoveAhead; ma++) {
+          var frontCard = track.firstElementChild;
+          if (frontCard && frontCard !== element) {
+            track.removeChild(frontCard);
+            var lastAttached = track.lastElementChild;
+            var lastIdx = cards.indexOf(lastAttached);
+            var nextCardToAdd = cards[(lastIdx + 1) % cards.length];
+            track.appendChild(nextCardToAdd);
+            row.scrollLeft -= cardStep;
+            behindCount--;
+            aheadCount++;
+          }
+        }
+        attached = Array.from(track.children);
+        pos = attached.indexOf(element);
+      }
+
+      // Approaching the start (moving left): recycle cards from back to front
+      if (behindCount < overscan && aheadCount > visibleSlots + overscan) {
+        var toMoveBehind = Math.min(overscan - behindCount, aheadCount - (visibleSlots + overscan));
+        for (var mb = 0; mb < toMoveBehind; mb++) {
+          var backCard = track.lastElementChild;
+          if (backCard && backCard !== element) {
+            track.removeChild(backCard);
+            var firstAttached = track.firstElementChild;
+            var firstIdx = cards.indexOf(firstAttached);
+            var prevCardToAdd = cards[(firstIdx - 1 + cards.length) % cards.length];
+            track.insertBefore(prevCardToAdd, track.firstElementChild);
+            row.scrollLeft += cardStep;
+            behindCount++;
+            aheadCount--;
+          }
+        }
+        attached = Array.from(track.children);
+        pos = attached.indexOf(element);
+      }
+
+      loadHomeWindowArt(attached);
     }
     function resolveHomeSelection(saved) {
       if (!saved || homeRowOrder.indexOf(saved.group) < 0) return null;
@@ -1363,8 +1454,8 @@
           var index = group.indexOf(current);
           var down = adjacentHomeRow(watchRows, groupIndex, 1);
           var up = adjacentHomeRow(watchRows, groupIndex, -1);
-          if (key === "ArrowLeft") focus(group[circularIndex(index, group.length, -1)], true);
-          else if (key === "ArrowRight") focus(group[circularIndex(index, group.length, 1)], true);
+          if (key === "ArrowLeft") focus(group[circularIndex(index, group.length, -1)], true, -1);
+          else if (key === "ArrowRight") focus(group[circularIndex(index, group.length, 1)], true, 1);
           else if (key === "ArrowDown") {
             if (down) { var downGroup = homeRowOrder[watchRows.indexOf(down)];
               focus(resolveHomeSelection(homeRowMemory[downGroup]) || down[0]); }
@@ -1669,7 +1760,8 @@
         { poster: incoming.get("poster"), backdrop: incoming.get("backdrop"), episodeTitle: incoming.get("episodeTitle"),
           tvdbId: Number(incoming.get("tvdb")) });
       if (requested) {
-        state.title = requested; state.season = requested.season; state.subtitle = core.readSubtitlePref(local);
+        state.title = requested; state.season = requested.season;
+        state.subtitle = core.readSubtitlePref(local);
         state.episodes = [{ number: requested.episode, title: requested.episodeTitle }];
         setView("episodes"); launchEpisode(requested.season, requested.episode);
       } else text("search-status", "Saved episode is invalid. Search for the show to continue.");

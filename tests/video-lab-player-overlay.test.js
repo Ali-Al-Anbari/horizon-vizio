@@ -19,6 +19,8 @@ const ids = ["player-frame", "player-loading", "remote-capture", "overlay", "see
   "horizon-caption-text", "independent-subtitle-menu", "independent-subtitle-status",
   "independent-subtitle-off", "independent-subtitle-english", "independent-subtitle-offset",
   "independent-subtitle-setup",
+  "audio-language", "audio-language-mode", "audio-language-menu", "audio-language-status",
+  "audio-lang-auto", "audio-lang-en", "audio-lang-ja", "audio-lang-de",
   "command-status", "screen-reader-status", "provider-choice", "unload-provider", "recover-provider", "watch-fullscreen", "watch-exit", "provider-telemetry", "diagnostics-open", "diagnostics-close", "diagnostics-panel", "diag-user-agent", "diag-media-source", "diag-native-hls", "diag-html5", "diag-permissions", "diag-frame-events", "diag-events", "diag-message-checks", "diag-sources", "diag-elapsed", "diag-assessment", "diag-vidbolt-session", "compat-controls", "compat-quality", "compat-play", "compat-autoplay", "compat-reset", "compat-status", "diag-variant", "vidfast-compat-controls", "vidfast-autoplay", "vidfast-reset", "vidfast-compat-status", "diag-vidfast-mode", "vidlink-compat-controls", "vidlink-default-off", "vidlink-default-on", "vidlink-jw-on", "vidlink-focus-default", "vidlink-focus-status", "vidlink-compat-status", "diag-vidlink-mode", "vidbolt-compat-controls", "vidbolt-autoplay-toggle", "vidbolt-auto-recover", "vidbolt-stop", "vidbolt-native-focus", "diag-vidbolt-mode", "vidbolt-compat-status", "experimental-controls", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip", "player-shell"];
 const baseUrl = "https://yapgrid.com/embed/tv/2190/13/2";
 const previewOrigin = "https://horizon-video-lab-preview.ali-al-anbari.workers.dev";
@@ -62,7 +64,7 @@ function setup({ search = "?sub=on", adapter = null, animationFrame = true, epis
     let source = "";
     const style = {};
     const element = {
-      id, hidden: id === "subtitle-menu" || id === "independent-subtitle-menu" || id === "horizon-caption-text" || id === "up-next" || id === "manual-end" || id === "playback-timeline" || id === "diagnostics-panel" || id === "compat-controls" || id === "vidfast-compat-controls" || id === "vidlink-compat-controls" || id === "vidbolt-compat-controls" || id === "experimental-controls", textContent: "", tabIndex: -1, sourceChanges: 0,
+      id, hidden: id === "subtitle-menu" || id === "independent-subtitle-menu" || id === "audio-language-menu" || id === "horizon-caption-text" || id === "up-next" || id === "manual-end" || id === "playback-timeline" || id === "diagnostics-panel" || id === "compat-controls" || id === "vidfast-compat-controls" || id === "vidlink-compat-controls" || id === "vidbolt-compat-controls" || id === "experimental-controls", textContent: "", tabIndex: -1, sourceChanges: 0,
       attributes,
       style,
       classList: {
@@ -392,14 +394,14 @@ test("single secondary icon row reaches every VidBolt action without skipping", 
   const app = setup({ search: "?showId=1396&season=1&episode=2&from=search&provider=vidbolt" });
   app.key("ArrowUp"); app.get("previous-episode").focus();
   const visited = [app.document.activeElement.id];
-  for (let i = 0; i < 8; i += 1) {
+  for (let i = 0; i < 9; i += 1) {
     const before = app.document.activeElement.id;
     app.key("ArrowRight");
     if (app.document.activeElement.id === before) break;
     visited.push(app.document.activeElement.id);
   }
   assert.deepEqual(visited, ["previous-episode", "episodes", "next-episode",
-    "provider-choice", "recover-provider", "subtitles", "diagnostics-open", "watch-exit"]);
+    "provider-choice", "recover-provider", "subtitles", "audio-language", "diagnostics-open", "watch-exit"]);
   assert.equal(app.get("subtitles").hidden, false);
   assert.equal(app.get("player-shell").classList.contains("controls-open"), true);
   app.key("Backspace");
@@ -1086,7 +1088,7 @@ test("Watch opens VidBolt, pointer reveals controls, and Exit returns to Watch",
   assert.equal(app.state(), "CONTROLS_VISIBLE");
   app.key("ArrowDown");
   assert.equal(app.document.activeElement.id, "recover-provider");
-  app.key("ArrowRight"); app.key("ArrowRight"); app.key("ArrowRight");
+  app.key("ArrowRight"); app.key("ArrowRight"); app.key("ArrowRight"); app.key("ArrowRight");
   assert.equal(app.document.activeElement.id, "watch-exit");
   app.key("Enter");
   assert.equal(app.get("player-frame").src, "about:blank");
@@ -1122,7 +1124,7 @@ test("desktop Watch fullscreen lives in the control row, keeps the iframe, and c
   const app = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt", desktop: true });
   const frame = app.get("player-frame"), changes = frame.sourceChanges;
   assert.match(html, /id="recover-provider"[\s\S]*id="watch-fullscreen"[\s\S]*id="watch-exit"/);
-  app.key("ArrowDown"); app.key("ArrowRight"); app.key("ArrowRight"); app.key("ArrowRight");
+  app.key("ArrowDown"); app.key("ArrowRight"); app.key("ArrowRight"); app.key("ArrowRight"); app.key("ArrowRight");
   assert.equal(app.document.activeElement.id, "watch-fullscreen", "D-pad reaches Fullscreen from Recover");
   app.key("Enter");
   assert.equal(app.document.fullscreenElement, app.get("player-shell"));
@@ -1150,7 +1152,7 @@ test("desktop Watch reports unavailable or rejected fullscreen without replacing
   const unsupported = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt",
     desktop: true, fullscreenOutcome: "unsupported" });
   assert.equal(unsupported.get("watch-fullscreen").disabled, true);
-  unsupported.key("ArrowDown"); unsupported.key("ArrowRight"); unsupported.key("ArrowRight"); unsupported.key("ArrowRight");
+  unsupported.key("ArrowDown"); unsupported.key("ArrowRight"); unsupported.key("ArrowRight"); unsupported.key("ArrowRight"); unsupported.key("ArrowRight");
   assert.equal(unsupported.document.activeElement.id, "watch-exit", "disabled Fullscreen is skipped");
   const rejected = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt",
     desktop: true, fullscreenOutcome: "reject" });
@@ -3294,7 +3296,7 @@ test("timeline updates style properties at 0, 50, 100 percent, freezes on pause,
 
 test("secondary controls render self-contained inline SVG icons without visible overlapping labels", () => {
   for (const id of ["previous-episode", "episodes", "next-episode", "provider-choice",
-    "recover-provider", "diagnostics-open", "watch-fullscreen", "watch-exit"]) {
+    "recover-provider", "subtitles", "audio-language", "diagnostics-open", "watch-fullscreen", "watch-exit"]) {
     const pattern = new RegExp('id="' + id + '"[^>]*>[\\s\\S]*?<svg[^>]*aria-hidden="true"[\\s\\S]*?<\\/svg>[\\s\\S]*?<span class="action-label"');
     assert.match(html, pattern, id + " must have inline SVG and hidden action-label");
   }
@@ -3303,4 +3305,100 @@ test("secondary controls render self-contained inline SVG icons without visible 
   assert.match(css, /\.action-row button::before \{ content: none !important; \}/);
   assert.match(css, /\.action-label \{ position: absolute; width: 1px; height: 1px;/);
   assert.match(css, /\.action-row button:focus[^{]*\{ outline: 2px solid/);
+});
+
+test("Audio language menu supports D-pad selection, persists preference, and relaunches VidBolt", () => {
+  const sessionStorageMap = new Map();
+  const mockSessionStorage = {
+    getItem(k) { return sessionStorageMap.get(k) || null; },
+    setItem(k, v) { sessionStorageMap.set(k, String(v)); },
+    removeItem(k) { sessionStorageMap.delete(k); },
+  };
+  const app = setup({
+    search: "?showId=1396&season=1&episode=2&from=search&provider=vidbolt",
+    subtitleSessionStorage: mockSessionStorage,
+  });
+  // Initially, button label is Default
+  assert.equal(app.get("audio-language-mode").textContent, "Default");
+  assert.equal(app.get("audio-language-menu").hidden, true);
+
+  // Focus audio-language button
+  app.key("ArrowUp");
+  app.get("audio-language").focus();
+  assert.equal(app.document.activeElement.id, "audio-language");
+
+  // Press OK to open menu
+  app.key("Enter");
+  assert.equal(app.state(), "SUBMENU_OPEN");
+  assert.equal(app.get("audio-language-menu").hidden, false);
+  assert.equal(app.document.activeElement.id, "audio-lang-auto");
+  assert.equal(app.get("audio-lang-auto").getAttribute("aria-pressed"), "true");
+
+  // ArrowDown to English
+  app.key("ArrowDown");
+  assert.equal(app.document.activeElement.id, "audio-lang-en");
+
+  // ArrowDown to Japanese
+  app.key("ArrowDown");
+  assert.equal(app.document.activeElement.id, "audio-lang-ja");
+
+  // Simulate established playback position
+  app.get("player-frame").fire("load");
+  app.message({ type: "ready" }, "https://vidbolt.xyz");
+  app.message({ type: "durationchange", duration: 1800 }, "https://vidbolt.xyz");
+  app.message({ type: "timeupdate", time: 450 }, "https://vidbolt.xyz");
+
+  // Press OK to select Japanese
+  app.key("Enter");
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  assert.equal(app.get("audio-language-menu").hidden, true);
+  assert.equal(app.document.activeElement.id, "audio-language");
+  assert.equal(app.get("audio-language-mode").textContent, "Japanese");
+  assert.equal(app.get("audio-lang-ja").getAttribute("aria-pressed"), "true");
+  assert.equal(app.get("audio-lang-auto").getAttribute("aria-pressed"), "false");
+
+  // Check URL of new frame has audio=ja
+  assert.match(app.get("player-frame").src, /vidbolt\.xyz\/tv\/1396\/1\/2\?autoPlay=true&audio=ja/);
+
+  // Status notes that actual track availability is unverified
+  assert.match(app.get("command-status").textContent, /VidBolt audio preference set to Japanese; actual track availability is unverified/);
+
+  // Independent subtitles remain OFF
+  assert.equal(app.get("subtitle-mode").textContent, "OFF");
+});
+
+test("Audio language selection preserves movie identity and timestamp on relaunch", () => {
+  const sessionStorageMap = new Map();
+  const mockSessionStorage = {
+    getItem(k) { return sessionStorageMap.get(k) || null; },
+    setItem(k, v) { sessionStorageMap.set(k, String(v)); },
+    removeItem(k) { sessionStorageMap.delete(k); },
+  };
+  const app = setup({
+    search: "?type=movie&id=550&from=search&provider=vidbolt",
+    subtitleSessionStorage: mockSessionStorage,
+  });
+  app.key("ArrowDown");
+  app.get("audio-language").focus();
+  app.key("Enter");
+  assert.equal(app.state(), "SUBMENU_OPEN");
+
+  // ArrowDown down to German
+  app.key("ArrowDown"); // en
+  app.key("ArrowDown"); // ja
+  app.key("ArrowDown"); // de
+  assert.equal(app.document.activeElement.id, "audio-lang-de");
+
+  // Select German
+  app.key("Enter");
+  assert.equal(app.get("audio-language-mode").textContent, "German");
+  assert.match(app.get("player-frame").src, /vidbolt\.xyz\/movie\/550\?autoPlay=true&audio=de/);
+  assert.match(app.get("command-status").textContent, /German.*actual track availability is unverified/);
+
+  // Back closes without changing if open
+  app.key("Enter"); // re-open
+  assert.equal(app.state(), "SUBMENU_OPEN");
+  app.key("Backspace");
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  assert.equal(app.get("audio-language-mode").textContent, "German");
 });

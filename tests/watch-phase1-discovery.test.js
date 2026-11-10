@@ -29,6 +29,7 @@ test("Phase 1A: Left rail exposes all discovery destinations in exact order", ()
     "watch-toggle",
     "tv-toggle",
     "movies-toggle",
+    "discover-toggle",
     "history-toggle",
     "settings-toggle"
   ]);
@@ -37,6 +38,7 @@ test("Phase 1A: Left rail exposes all discovery destinations in exact order", ()
   assert.match(html, /id="watch-toggle"[^>]*aria-label="Watch Home"/);
   assert.match(html, /id="tv-toggle"[^>]*aria-label="TV Shows"/);
   assert.match(html, /id="movies-toggle"[^>]*aria-label="Movies"/);
+  assert.match(html, /id="discover-toggle"[^>]*aria-label="Discover"/);
   assert.match(html, /id="history-toggle"[^>]*aria-label="Watch History"/);
   assert.match(html, /id="settings-toggle"[^>]*aria-label="Watch Settings"/);
 
@@ -45,7 +47,7 @@ test("Phase 1A: Left rail exposes all discovery destinations in exact order", ()
 });
 
 test("Phase 1A: D-pad navigation maps rail, filter strip, content rows, and current-cycle boundary correctly", () => {
-  assert.match(searchSource, /railButtons = \[get\("search-toggle"\), get\("watch-toggle"\), get\("tv-toggle"\), get\("movies-toggle"\), get\("history-toggle"\), get\("settings-toggle"\)\]/);
+  assert.match(searchSource, /railButtons = \[get\("search-toggle"\), get\("watch-toggle"\), get\("tv-toggle"\), get\("movies-toggle"\), get\("discover-toggle"\), get\("history-toggle"\), get\("settings-toggle"\)\]/);
   assert.match(searchSource, /current\.classList\.contains\("filter-chip"\)/);
   assert.match(searchSource, /current\.classList\.contains\("filter-menu-option"\)/);
 

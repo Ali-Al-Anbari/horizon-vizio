@@ -40,8 +40,10 @@ export async function localPreflight(role) {
   requireCheck(page.includes(target.marker), "expected entry page marker missing");
   if (role === "watch") {
     requireCheck(main.includes('url.pathname === "/api/recommendations"')
+      && main.includes('url.pathname === "/api/discover-similar"')
+      && (await source(path.join(config.assets.directory, "discover-engine.js"))).includes("HorizonDiscoverEngine")
       && main.includes("env.TMDB_TOKEN") && main.includes("env.ASSETS.fetch(request)"),
-    "Watch API, secret lookup, or asset fallback missing");
+    "Watch API, discover-similar API, discover-engine asset, secret lookup, or asset fallback missing");
   } else {
     requireCheck(config.vars?.PAIRING_ONLY === true, "Video Lab pairing-only mode missing");
     const bindings = config.durable_objects?.bindings || [];

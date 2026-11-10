@@ -786,6 +786,16 @@ body.watch-active .filter-chip {
 body.watch-active .filter-chip.is-active {
   background: rgba(138,186,255,.16); border-color: #8abaff; color: #fff;
 }
+body.watch-active .filter-seed-chip {
+  font-weight: 600; border-color: rgba(138,186,255,.45); background: rgba(138,186,255,.15); color: #fff;
+}
+body.watch-active .home-card .card-match-reason {
+  display: block; font-size: .74rem; color: #8abaff; margin-top: 2px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 500;
+}
+body.watch-active .detail-more-like-this svg {
+  width: 16px; height: 16px; vertical-align: -2px; margin-right: 6px;
+}
 body.watch-active .filter-chip:focus, body.watch-active .filter-chip.is-focused {
   outline: 2px solid #8abaff; outline-offset: 2px; background: rgba(255,255,255,.18);
   color: #fff; box-shadow: 0 0 10px rgba(138,186,255,.4);

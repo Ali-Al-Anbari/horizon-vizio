@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="search.css" />
   <script src="core.js" defer></script>
   <script src="recommendations.js" defer></script>
+  <script src="discover-engine.js" defer></script>
   <script src="player-adapter.js" defer></script>
   <script src="mock-data.js" defer></script>
   <script src="watch-performance.js" defer></script>
@@ -21,6 +22,7 @@
       <button id="watch-toggle" class="rail-action is-current" data-focus type="button" aria-label="Watch Home"><img src="icons/house.svg" alt="" /><span class="rail-label">Home</span></button>
       <button id="tv-toggle" class="rail-action" data-focus type="button" aria-label="TV Shows"><img src="icons/tv.svg" alt="" /><span class="rail-label">TV Shows</span></button>
       <button id="movies-toggle" class="rail-action" data-focus type="button" aria-label="Movies"><img src="icons/film.svg" alt="" /><span class="rail-label">Movies</span></button>
+      <button id="discover-toggle" class="rail-action" data-focus type="button" aria-label="Discover"><img src="icons/compass.svg" alt="" /><span class="rail-label">Discover</span></button>
       <button id="history-toggle" class="rail-action" data-focus type="button" aria-label="Watch History"><img src="icons/clock-history.svg" alt="" /><span class="rail-label">History</span></button>
       <button id="settings-toggle" class="rail-action" data-focus type="button" aria-label="Watch Settings"><img src="icons/gear.svg" alt="" /><span class="rail-label">Settings</span></button>
     </nav>
@@ -32,6 +34,10 @@
     <section id="watch-view" class="view watch-home" aria-label="Watch homepage">
       <div id="watch-hero" class="watch-hero">
         <div id="watch-filter-strip" class="watch-filter-strip" aria-label="Filters" hidden>
+          <button id="filter-btn-seed" class="filter-chip filter-seed-chip" data-filter-type="seed" data-focus type="button" hidden>Seed: None</button>
+          <button id="filter-btn-mode" class="filter-chip" data-filter-type="mode" data-focus type="button" hidden>Mode: All</button>
+          <button id="filter-btn-media" class="filter-chip" data-filter-type="media" data-focus type="button" hidden>Type: Same</button>
+          <button id="filter-btn-finished" class="filter-chip" data-filter-type="finished" data-focus type="button" hidden>Hide Finished</button>
           <button id="filter-btn-genre" class="filter-chip" data-filter-type="genre" data-focus type="button">Genre</button>
           <button id="filter-btn-length" class="filter-chip" data-filter-type="length" data-focus type="button">Length</button>
           <button id="filter-btn-rating" class="filter-chip" data-filter-type="rating" data-focus type="button">Age Rating</button>
@@ -128,6 +134,22 @@
       <section id="watch-movies-gems-section" class="watch-home-section" aria-label="Hidden Gem Films" hidden>
         <h2 id="watch-movies-gems-heading"></h2>
         <div id="watch-movies-gems-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-discover-closest-section" class="watch-home-section" aria-label="Closest Matches" hidden>
+        <h2 id="watch-discover-closest-heading">Closest Matches</h2>
+        <div id="watch-discover-closest-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-discover-vibe-section" class="watch-home-section" aria-label="Same Vibe" hidden>
+        <h2 id="watch-discover-vibe-heading">Same Vibe</h2>
+        <div id="watch-discover-vibe-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-discover-genre-section" class="watch-home-section" aria-label="Same Genre, Different Story" hidden>
+        <h2 id="watch-discover-genre-heading">Same Genre, Different Story</h2>
+        <div id="watch-discover-genre-row" class="watch-home-row"><div class="watch-home-track"></div></div>
+      </section>
+      <section id="watch-discover-gems-section" class="watch-home-section" aria-label="Hidden Gems" hidden>
+        <h2 id="watch-discover-gems-heading">Hidden Gems</h2>
+        <div id="watch-discover-gems-row" class="watch-home-row"><div class="watch-home-track"></div></div>
       </section>
       <section id="watch-filtered-section" class="watch-home-section" aria-label="Matching Titles" hidden>
         <h2 id="watch-filtered-heading">Matching Titles</h2>

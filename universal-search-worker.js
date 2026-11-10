@@ -3,6 +3,7 @@ const TYPES = new Set(["movie", "tv"]);
 const buckets = new Map(); // Best-effort per-isolate guard; Cloudflare edge cache is the main cost control.
 const searchCache = new Map();
 const recommendationCache = new Map();
+const discoverCache = new Map();
 const SEARCH_LIMIT = 18;
 const EXPANSIONS = "etaoinsh"; // Common next letters, including continuations such as t and h.
 const SEARCH_CACHE_MS = 5 * 60 * 1000;
@@ -112,6 +113,97 @@ async function recommendTmdb(fetcher, env, seeds, avoids, signal) {
     });
   });
   return { seeds: seedDetails, avoids: avoidDetails, candidates: [...candidates.values()].slice(0, 180) };
+}
+const WORKER_MOVIE_TO_TV_GENRES = {
+  28: [10759], 12: [10759], 16: [16], 35: [35], 80: [80], 99: [99], 18: [18],
+  10751: [10751, 10762], 14: [10765], 36: [18, 10768], 27: [9648, 18],
+  10402: [10402], 9648: [9648], 10749: [18, 10766], 878: [10765], 53: [9648, 80],
+  10752: [10768], 37: [37]
+};
+const WORKER_TV_TO_MOVIE_GENRES = {
+  10759: [28, 12], 16: [16], 35: [35], 80: [80], 99: [99], 18: [18],
+  10751: [10751], 10762: [16, 10751], 9648: [9648, 53], 10765: [878, 14],
+  10766: [10749, 18], 10768: [10752, 36], 37: [37]
+};
+function mapWorkerGenres(sourceType, targetType, genreIds) {
+  if (!Array.isArray(genreIds) || !genreIds.length) return [];
+  if (sourceType === targetType) return genreIds.slice();
+  const mapping = sourceType === "movie" ? WORKER_MOVIE_TO_TV_GENRES : WORKER_TV_TO_MOVIE_GENRES;
+  const mapped = new Set();
+  genreIds.forEach(g => {
+    const targets = mapping[g] || [g];
+    targets.forEach(t => mapped.add(t));
+  });
+  return Array.from(mapped);
+}
+async function discoverSimilarTmdb(fetcher, env, type, id, target, avoids, signal) {
+  const seedRaw = await tmdbJson(fetcher, env,
+    `/${type}/${id}?language=en-US&append_to_response=keywords,credits,${type === "tv" ? "content_ratings" : "release_dates"}`, signal);
+  const seedDetail = detail(seedRaw, type);
+  const kwList = type === "movie" ? seedRaw.keywords?.keywords : seedRaw.keywords?.results;
+  seedDetail.keywords = Array.isArray(kwList) ? kwList.slice(0, 15).map(k => ({ id: k.id, name: String(k.name || "").slice(0, 50) })) : [];
+  seedDetail.keywordIds = seedDetail.keywords.map(k => k.id);
+  seedDetail.genreIds = (seedRaw.genres || []).filter(g => Number.isInteger(g.id) && g.id > 0).map(g => g.id);
+
+  const queries = [];
+  const includeSame = target === "same" || target === "both" || target === type;
+  const oppType = type === "movie" ? "tv" : "movie";
+  const includeOpposite = target === "both" || target === oppType;
+
+  if (includeSame) {
+    queries.push({ path: `/${type}/${id}/recommendations?language=en-US&page=1`, type, kind: "recommendation" });
+    queries.push({ path: `/${type}/${id}/similar?language=en-US&page=1`, type, kind: "similar" });
+    if (seedDetail.genreIds.length) {
+      const g = seedDetail.genreIds[0], k = seedDetail.keywordIds[0];
+      queries.push({
+        path: `/discover/${type}?language=en-US&sort_by=popularity.desc&include_adult=false&vote_count.gte=30&with_genres=${g}${k ? `&with_keywords=${k}` : ""}&page=1`,
+        type, kind: "discovery", keywordId: k || null
+      });
+    }
+  }
+
+  if (includeOpposite) {
+    const mapped = mapWorkerGenres(type, oppType, seedDetail.genreIds);
+    const k = seedDetail.keywordIds[0];
+    if (mapped.length) {
+      queries.push({
+        path: `/discover/${oppType}?language=en-US&sort_by=popularity.desc&include_adult=false&vote_count.gte=30&with_genres=${mapped[0]}${k ? `&with_keywords=${k}` : ""}&page=1`,
+        type: oppType, kind: "cross_media", keywordId: k || null
+      });
+      queries.push({
+        path: `/discover/${oppType}?language=en-US&sort_by=vote_average.desc&vote_count.gte=80&include_adult=false&with_genres=${mapped[0]}&page=1`,
+        type: oppType, kind: "cross_media"
+      });
+    }
+  }
+
+  const settled = await Promise.allSettled(queries.map(q => tmdbJson(fetcher, env, q.path, signal)));
+  const candidates = new Map();
+  const avoidKeys = new Set((avoids || []).map(a => a.key));
+
+  settled.forEach((result, idx) => {
+    if (result.status !== "fulfilled") return;
+    const q = queries[idx], rows = Array.isArray(result.value.results) ? result.value.results : [];
+    rows.slice(0, 20).forEach((row, rank) => {
+      if (!Number.isInteger(row.id) || row.id <= 0 || row.adult) return;
+      const key = `${q.type}:${row.id}`;
+      if (key === `${type}:${id}` || avoidKeys.has(key)) return;
+      let cand = candidates.get(key);
+      if (!cand) {
+        cand = recommendationTitle(row, q.type);
+        candidates.set(key, cand);
+      }
+      cand.sources.push({ kind: q.kind, rank });
+      if (q.keywordId && !cand.keywordIds.includes(q.keywordId)) {
+        cand.keywordIds.push(q.keywordId);
+      }
+    });
+  });
+
+  return {
+    seed: seedDetail,
+    candidates: [...candidates.values()].slice(0, 180)
+  };
 }
 function detail(row, type) {
   const base = title(row, type);
@@ -247,6 +339,19 @@ export async function api(request, env, options = {}) {
         || recommendationAvoidsValue.some(seed => recommendationSeedsValue.some(item => item.key === seed.key)))
       return json(400, { error: "invalid_query" });
     path = null; shape = null; ttl = 600;
+  } else if (url.pathname === "/api/discover-similar") {
+    const allowed = new Set(["type", "id", "target", "avoid"]);
+    if ([...url.searchParams.keys()].some(k => !allowed.has(k))) return json(400, { error: "invalid_query" });
+    const type = url.searchParams.get("type");
+    const id = positive(url.searchParams.get("id"));
+    const target = url.searchParams.get("target") || "same";
+    if (!TYPES.has(type) || !id || !["same", "movie", "tv", "both"].includes(target))
+      return json(400, { error: "invalid_query" });
+    const avoidParam = url.searchParams.get("avoid");
+    const avoids = avoidParam ? recommendationSeeds(avoidParam) : [];
+    if (avoidParam && !avoids) return json(400, { error: "invalid_query" });
+    path = null; shape = null; ttl = 1200;
+    var discoverParams = { type, id, target, avoids: avoids || [] };
   } else if (url.pathname === "/api/search") {
     const query = (url.searchParams.get("q") || "").trim();
     const type = url.searchParams.get("type") || "all";
@@ -367,6 +472,17 @@ export async function api(request, env, options = {}) {
         recommendationAvoidsValue, controller.signal);
       if (recommendationCache.size >= 24) recommendationCache.delete(recommendationCache.keys().next().value);
       recommendationCache.set(cacheKey, { at: Date.now(), value });
+      return json(200, value, ttl);
+    }
+    if (discoverParams) {
+      const cacheKey = `${discoverParams.type}:${discoverParams.id}:${discoverParams.target}|`
+        + (discoverParams.avoids || []).map(s => s.key).join(",");
+      const cached = discoverCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < 15 * 60 * 1000) return json(200, cached.value, ttl);
+      const value = await discoverSimilarTmdb(fetcher, env, discoverParams.type, discoverParams.id,
+        discoverParams.target, discoverParams.avoids, controller.signal);
+      if (discoverCache.size >= 40) discoverCache.delete(discoverCache.keys().next().value);
+      discoverCache.set(cacheKey, { at: Date.now(), value });
       return json(200, value, ttl);
     }
     if (search) {

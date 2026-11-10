@@ -160,6 +160,87 @@
 
       return { results: unique };
     },
+    discoverSimilar: function (type, id, target, avoid) {
+      type = String(type || "tv").toLowerCase();
+      id = Number(id) || 70523;
+      target = target || "same";
+      avoid = avoid || [];
+      var avoidSet = new Set(Array.isArray(avoid) ? avoid : String(avoid).split(",").filter(Boolean));
+
+      var seed = null;
+      var foundTitle = titles.find(function (t) { return t.type === type && t.id === id; });
+      var foundPreview = previewTitles.find(function (p) { return p[0] === type && p[1] === id; });
+      var foundRec = recommendationCandidates().find(function (r) { return r.type === type && r.id === id; });
+
+      var titleStr = (foundRec && foundRec.title) || (foundPreview && foundPreview[2]) || (foundTitle && foundTitle.title) || ("Title " + id);
+      var posterStr = (foundRec && foundRec.poster) || (foundPreview && foundPreview[3]) || null;
+      var backdropStr = (foundPreview && foundPreview[4]) || null;
+      var genreIds = (foundRec && foundRec.genreIds) || (type === "tv" ? [18, 9648, 10765] : [18, 878, 12]);
+      var rating = (foundRec && foundRec.rating) || "TV-MA";
+      var runtime = foundRec ? foundRec.runtime : (type === "movie" ? 120 : null);
+      var episodeRuntime = foundRec ? foundRec.episodeRuntime : (type === "tv" ? 50 : null);
+      var overview = (foundTitle && foundTitle.overview) || "An intricate story exploring mystery, time, human connection, and hidden secrets.";
+
+      seed = {
+        type: type,
+        id: id,
+        title: titleStr,
+        date: (foundRec && foundRec.date) || "2020-01-01",
+        overview: overview,
+        poster: posterStr,
+        backdrop: backdropStr,
+        rating: rating,
+        runtime: runtime,
+        episodeRuntime: episodeRuntime,
+        genreIds: genreIds,
+        genres: genreIds.map(function (gid) { return { id: gid, name: gid === 18 ? "Drama" : gid === 9648 ? "Mystery" : gid === 10765 ? "Sci-Fi & Fantasy" : gid === 878 ? "Science Fiction" : gid === 35 ? "Comedy" : "Genre" }; }),
+        keywordIds: [123, 456, 789],
+        keywords: [{ id: 123, name: "time travel" }, { id: 456, name: "mystery" }, { id: 789, name: "dystopia" }],
+        creators: type === "tv" ? ["Baran bo Odar", "Jantje Friese"] : ["Christopher Nolan"],
+        cast: ["Louis Hofmann", "Oliver Masucci", "Jördis Triebel"]
+      };
+
+      var targetTypes = (target === "both") ? ["movie", "tv"] : (target === "movie" || target === "tv") ? [target] : [type];
+      var all = recommendationCandidates();
+      var cands = [];
+      var seen = new Set();
+      seen.add(type + ":" + id);
+
+      all.forEach(function (c, idx) {
+        var key = c.type + ":" + c.id;
+        if (seen.has(key) || avoidSet.has(key)) return;
+        if (!targetTypes.includes(c.type)) return;
+        seen.add(key);
+
+        var sharedGenres = (c.genreIds || []).filter(function (g) { return seed.genreIds.includes(g); });
+        var sourceKind = idx < 8 ? "recommendations" : idx < 16 ? "similar" : (c.type !== type ? "cross_media" : "discovery");
+
+        cands.push({
+          type: c.type,
+          id: c.id,
+          title: c.title,
+          date: c.date,
+          overview: c.title + " features thrilling adventures and suspenseful storytelling.",
+          poster: c.poster,
+          backdrop: c.backdrop,
+          genreIds: c.genreIds || [],
+          genres: (c.genreIds || []).map(function (g) { return { id: g, name: "Genre " + g }; }),
+          keywordIds: sharedGenres.length > 0 ? [123, 456] : [999],
+          keywords: sharedGenres.length > 0 ? [{ id: 123, name: "time travel" }, { id: 456, name: "mystery" }] : [],
+          creators: idx === 0 ? seed.creators : [],
+          cast: idx === 1 ? [seed.cast[0]] : [],
+          popularity: c.popularity || 50,
+          voteAverage: c.voteAverage || 7.5,
+          voteCount: c.voteCount || 1000,
+          rating: c.rating,
+          runtime: c.runtime,
+          episodeRuntime: c.episodeRuntime,
+          source: sourceKind
+        });
+      });
+
+      return { seed: seed, candidates: cands };
+    },
     title: function (type, id) { var row = titles.find(function (value) { return value.type === type && value.id === id; });
       if (!row) { var preview = previewTitles.find(function (value) { return value[0] === type && value[1] === id; });
         if (preview) row = { type: type, id: id, title: preview[2], poster: preview[3], backdrop: preview[4] }; }

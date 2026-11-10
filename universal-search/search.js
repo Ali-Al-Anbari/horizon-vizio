@@ -57,26 +57,40 @@
     var historyReady = false, restoringHistory = false, historyBackPending = false, historyDepth = 0;
     var searchTimer = null, searchToken = 0, detailToken = 0, seasonToken = 0, activeAbort = null;
     var cache = new Map(), disposed = false, returningHome = false, pendingEpisodeFocus = null,
+      pendingActionFocus = null,
       nextContinue = null, homeHeroEntry = null, homeDefaultEntry = null, homeHeroToken = 0,
       homeOpenPending = false, homeOpenToken = 0, homeReturnFocus = null, homeDetailCache = new Map(),
       launchingEpisode = false, clearPending = false;
     var tabRowMemory = {
       "for-you": Object.create(null),
       "tv": Object.create(null),
-      "movies": Object.create(null)
+      "movies": Object.create(null),
+      "discover": Object.create(null)
     };
     var tabLastContent = {
       "for-you": null,
       "tv": null,
-      "movies": null
+      "movies": null,
+      "discover": null
     };
     var tabScrollTop = {
       "for-you": 0,
       "tv": 0,
-      "movies": 0
+      "movies": 0,
+      "discover": 0
     };
     var tvFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
     var movieFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
+    var discoverFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
+    var discoverMode = "all";
+    var discoverMedia = "same";
+    var discoverHideFinished = true;
+    var discoverActiveSeed = null;
+    var discoverData = null;
+    var discoverFetchToken = 0;
+    var discoverLoading = false;
+    var discoverError = false;
+    var pickingDiscoverSeed = false;
     var activeFilterMenuType = null;
     var homeRowMemory = tabRowMemory["for-you"], homeLastContent = null;
     var rowCycleIndex = Object.create(null);
@@ -95,6 +109,13 @@
       if (state.watchTab === "movies") {
         if (isFilterActive("movies")) return ["filtered"];
         return ["movies-recommended", "movies-trending", "movies-genres", "movies-short", "movies-acclaimed", "movies-gems"];
+      }
+      if (state.watchTab === "discover") {
+        if (discoverMode === "closest") return ["discover-closest"];
+        if (discoverMode === "vibe") return ["discover-vibe"];
+        if (discoverMode === "genre") return ["discover-genre"];
+        if (discoverMode === "gems") return ["discover-gems"];
+        return ["discover-closest", "discover-vibe", "discover-genre", "discover-gems"];
       }
       return ["continue", "top", "because", "trending", "gems", "explore", "recent"];
     }
@@ -128,6 +149,8 @@
       get("watch-toggle").classList.toggle("is-current", isWatch && curTab === "for-you");
       get("tv-toggle").classList.toggle("is-current", isWatch && curTab === "tv");
       get("movies-toggle").classList.toggle("is-current", isWatch && curTab === "movies");
+      var discToggle = get("discover-toggle");
+      if (discToggle) discToggle.classList.toggle("is-current", isWatch && curTab === "discover");
       get("search-toggle").classList.toggle("is-current", state.view === "search" && !state.continueMode
         || (state.view === "details" || state.view === "episodes") && state.detailSource === "search");
       get("history-toggle").classList.toggle("is-current", state.view === "history"
@@ -309,6 +332,7 @@
         var bits = parsed.pathname.split("/");
         var value = bits[2] === "search" ? mock.search(parsed.searchParams.get("q") || "", parsed.searchParams.get("type") || "all")
           : bits[2] === "discover" ? (mock.discover ? mock.discover(parsed.searchParams) : { results: [] })
+          : bits[2] === "discover-similar" ? (mock.discoverSimilar ? mock.discoverSimilar(parsed.searchParams.get("type"), parsed.searchParams.get("id"), parsed.searchParams.get("target"), parsed.searchParams.get("avoid")) : { seed: null, candidates: [] })
           : bits[2] === "title" ? mock.title(bits[3], Number(bits[4]))
           : mock.season(Number(bits[4]), Number(bits[5]));
         if (!value) throw Error("not_found");
@@ -618,6 +642,7 @@
         if (detail && detail.runtime) meta.push(detail.runtime + " min");
         else if (detail && detail.episodeRuntime && row.type === "tv") meta.push(detail.episodeRuntime + " min episodes");
         if (row.type === "tv" && row.season && row.episode) meta.push("S" + row.season + " E" + row.episode);
+        if (row.matchReason) meta.push(row.matchReason);
         text("watch-hero-context", meta.join("  ·  "));
         text("watch-hero-description", detail && detail.overview || row.overview || "");
       } else {
@@ -661,12 +686,50 @@
         function () { if (token === homeOpenToken) openEpisode(null); });
     }
     function isFilterActive(tab) {
-      var f = tab === "tv" ? tvFilters : movieFilters;
+      var f = tab === "tv" ? tvFilters : (tab === "movies" ? movieFilters : discoverFilters);
       return !!(f.genre || f.length || f.rating || f.year || (f.sort && f.sort !== "best"));
     }
     function updateFilterStripUI() {
       var isTv = state.watchTab === "tv";
-      var f = isTv ? tvFilters : movieFilters;
+      var isDiscover = state.watchTab === "discover";
+      var f = isTv ? tvFilters : (state.watchTab === "movies" ? movieFilters : discoverFilters);
+
+      var seedBtn = get("filter-btn-seed");
+      var modeBtn = get("filter-btn-mode");
+      var mediaBtn = get("filter-btn-media");
+      var finishedBtn = get("filter-btn-finished");
+
+      if (seedBtn) {
+        seedBtn.hidden = !isDiscover;
+        if (isDiscover) {
+          seedBtn.textContent = "Seed: " + (discoverActiveSeed ? discoverActiveSeed.title : "Choose Seed");
+          seedBtn.classList.add("is-active");
+        }
+      }
+      if (modeBtn) {
+        modeBtn.hidden = !isDiscover;
+        if (isDiscover) {
+          var modeLabels = { all: "All Categories", closest: "Closest", vibe: "Same Vibe", genre: "Same Genre", gems: "Hidden Gems" };
+          modeBtn.textContent = "Category: " + (modeLabels[discoverMode] || "All Categories");
+          modeBtn.classList.toggle("is-active", discoverMode !== "all");
+        }
+      }
+      if (mediaBtn) {
+        mediaBtn.hidden = !isDiscover;
+        if (isDiscover) {
+          var mediaLabels = { same: "Same Type", tv: "TV Shows", movie: "Movies", both: "Both" };
+          mediaBtn.textContent = "Type: " + (mediaLabels[discoverMedia] || "Same Type");
+          mediaBtn.classList.toggle("is-active", discoverMedia !== "same");
+        }
+      }
+      if (finishedBtn) {
+        finishedBtn.hidden = !isDiscover;
+        if (isDiscover) {
+          finishedBtn.textContent = discoverHideFinished ? "Hide Finished" : "Show Finished";
+          finishedBtn.classList.toggle("is-active", discoverHideFinished);
+        }
+      }
+
       var genreBtn = get("filter-btn-genre");
       var lengthBtn = get("filter-btn-length");
       var ratingBtn = get("filter-btn-rating");
@@ -701,7 +764,8 @@
         sortBtn.classList.toggle("is-active", f.sort && f.sort !== "best");
       }
       if (clearBtn) {
-        clearBtn.hidden = !isFilterActive(state.watchTab);
+        var hasActive = isFilterActive(state.watchTab) || (isDiscover && (discoverMode !== "all" || discoverMedia !== "same" || !discoverHideFinished));
+        clearBtn.hidden = !hasActive;
       }
     }
     function openFilterMenu(filterType) {
@@ -711,10 +775,39 @@
       if (!menu || !host) return;
       host.replaceChildren();
       var isTv = state.watchTab === "tv";
-      var f = isTv ? tvFilters : movieFilters;
+      var f = isTv ? tvFilters : (state.watchTab === "movies" ? movieFilters : discoverFilters);
       var options = [];
 
-      if (filterType === "genre") {
+      if (filterType === "seed") {
+        var hist = core.readHistory(local) || [];
+        var seenIds = new Set();
+        options.push({ label: "Search for Any Title…", value: "__search__" });
+        hist.forEach(function (h) {
+          if (!h || !h.id || seenIds.has(h.type + ":" + h.id)) return;
+          seenIds.add(h.type + ":" + h.id);
+          options.push({ label: h.title + " (" + (h.type === "tv" ? "TV" : "Movie") + ")", value: h.type + ":" + h.id });
+        });
+        if (recommendationRows && recommendationRows.seed) {
+          var s = recommendationRows.seed;
+          if (!seenIds.has(s.type + ":" + s.id)) {
+            options.push({ label: s.title + " (" + (s.type === "tv" ? "TV" : "Movie") + ")", value: s.type + ":" + s.id });
+          }
+        }
+      } else if (filterType === "mode") {
+        options.push({ label: "All Categories", value: "all" });
+        options.push({ label: "Closest Matches", value: "closest" });
+        options.push({ label: "Same Vibe", value: "vibe" });
+        options.push({ label: "Same Genre, Different Story", value: "genre" });
+        options.push({ label: "Hidden Gems", value: "gems" });
+      } else if (filterType === "media") {
+        options.push({ label: "Same Media Type", value: "same" });
+        options.push({ label: "TV Shows Only", value: "tv" });
+        options.push({ label: "Movies Only", value: "movie" });
+        options.push({ label: "Both TV & Movies", value: "both" });
+      } else if (filterType === "finished") {
+        options.push({ label: "Hide Finished Titles", value: "true" });
+        options.push({ label: "Show Finished Titles", value: "false" });
+      } else if (filterType === "genre") {
         options.push({ label: "All Genres", value: "" });
         var genreList = isTv
           ? [[10759, "Action & Adventure"], [16, "Animation"], [35, "Comedy"], [80, "Crime"], [18, "Drama"], [9648, "Mystery"], [10765, "Sci-Fi & Fantasy"]]
@@ -748,7 +841,11 @@
         options.push({ label: "Newest", value: "newest" });
       }
 
-      var currentVal = filterType === "genre" ? (f.genre ? String(f.genre) : "")
+      var currentVal = filterType === "seed" ? (discoverActiveSeed ? (discoverActiveSeed.type + ":" + discoverActiveSeed.id) : "")
+        : filterType === "mode" ? discoverMode
+        : filterType === "media" ? discoverMedia
+        : filterType === "finished" ? (discoverHideFinished ? "true" : "false")
+        : filterType === "genre" ? (f.genre ? String(f.genre) : "")
         : filterType === "length" ? (f.length || "")
         : filterType === "rating" ? (f.rating || "")
         : filterType === "year" ? (f.year || "")
@@ -779,8 +876,66 @@
       }
     }
     function selectFilterOption(filterType, value) {
+      if (filterType === "seed") {
+        closeFilterMenu();
+        if (value === "__search__") {
+          pickingDiscoverSeed = true;
+          state.continueMode = false;
+          setView("search");
+          scheduleSearch(0);
+          focus(query);
+          return;
+        }
+        var parts = value.split(":");
+        var newType = parts[0], newId = Number(parts[1]);
+        var hist = core.readHistory(local) || [];
+        var found = hist.find(function (h) { return h.type === newType && h.id === newId; });
+        if (found) {
+          discoverActiveSeed = { type: found.type, id: found.id, title: found.title, poster: found.poster, backdrop: found.backdrop };
+        } else {
+          discoverActiveSeed = { type: newType, id: newId, title: "Title " + newId };
+        }
+        discoverData = null;
+        rowCycleIndex = Object.create(null);
+        updateFilterStripUI();
+        loadDiscoverData(true);
+        var originatingSeed = get("filter-btn-seed");
+        if (originatingSeed) focus(originatingSeed);
+        return;
+      }
+      if (filterType === "mode") {
+        discoverMode = value || "all";
+        closeFilterMenu();
+        rowCycleIndex = Object.create(null);
+        updateFilterStripUI();
+        renderDiscoverRows(discoverData);
+        var originatingMode = get("filter-btn-mode");
+        if (originatingMode) focus(originatingMode);
+        return;
+      }
+      if (filterType === "media") {
+        discoverMedia = value || "same";
+        closeFilterMenu();
+        discoverData = null;
+        rowCycleIndex = Object.create(null);
+        updateFilterStripUI();
+        loadDiscoverData(true);
+        var originatingMedia = get("filter-btn-media");
+        if (originatingMedia) focus(originatingMedia);
+        return;
+      }
+      if (filterType === "finished") {
+        discoverHideFinished = (value === "true");
+        closeFilterMenu();
+        rowCycleIndex = Object.create(null);
+        updateFilterStripUI();
+        renderDiscoverRows(discoverData);
+        var originatingFinished = get("filter-btn-finished");
+        if (originatingFinished) focus(originatingFinished);
+        return;
+      }
       var isTv = state.watchTab === "tv";
-      var f = isTv ? tvFilters : movieFilters;
+      var f = isTv ? tvFilters : (state.watchTab === "movies" ? movieFilters : discoverFilters);
       if (filterType === "genre") f.genre = value ? Number(value) : null;
       else if (filterType === "length") f.length = value || null;
       else if (filterType === "rating") f.rating = value || null;
@@ -790,28 +945,41 @@
       closeFilterMenu();
       rowCycleIndex = Object.create(null);
       updateFilterStripUI();
-      renderFilterResultsIfActive();
-      updateHomeSections();
+      if (state.watchTab === "discover") {
+        renderDiscoverRows(discoverData);
+      } else {
+        renderFilterResultsIfActive();
+        updateHomeSections();
+      }
       var originating = get("filter-btn-" + filterType);
       if (originating) focus(originating);
     }
     function clearActiveFilters() {
       if (state.watchTab === "tv") {
         tvFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
-      } else {
+      } else if (state.watchTab === "movies") {
         movieFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
+      } else if (state.watchTab === "discover") {
+        discoverFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
+        discoverMode = "all";
+        discoverMedia = "same";
+        discoverHideFinished = true;
       }
       closeFilterMenu();
       rowCycleIndex = Object.create(null);
       updateFilterStripUI();
-      renderFilterResultsIfActive();
-      updateHomeSections();
+      if (state.watchTab === "discover") {
+        renderDiscoverRows(discoverData);
+      } else {
+        renderFilterResultsIfActive();
+        updateHomeSections();
+      }
       var first = firstHomeButton();
       if (first) focus(first);
-      else focus(get("filter-btn-genre"));
+      else focus(state.watchTab === "discover" ? (get("filter-btn-seed") || get("filter-btn-genre")) : get("filter-btn-genre"));
     }
     function setWatchTab(tabName) {
-      if (["for-you", "tv", "movies"].indexOf(tabName) < 0) return;
+      if (["for-you", "tv", "movies", "discover"].indexOf(tabName) < 0) return;
       if (activeFilterMenuType) closeFilterMenu();
       var scroller = get("watch-rows-scroll");
       if (scroller) tabScrollTop[state.watchTab] = scroller.scrollTop;
@@ -834,7 +1002,7 @@
 
       if (scroller) scroller.scrollTop = tabScrollTop[tabName] || 0;
       if (doc.activeElement && doc.activeElement.closest && doc.activeElement.closest(".watch-rail")) {
-        var railMap = { "for-you": "watch-toggle", "tv": "tv-toggle", "movies": "movies-toggle" };
+        var railMap = { "for-you": "watch-toggle", "tv": "tv-toggle", "movies": "movies-toggle", "discover": "discover-toggle" };
         focus(get(railMap[tabName]));
       } else {
         var target = resolveHomeSelection(tabLastContent[tabName]);
@@ -859,6 +1027,12 @@
         card.homeEntry = { row: candidate, group: group };
         var title = doc.createElement("strong"); title.textContent = candidate.title;
         card.appendChild(verticalPosterArt(candidate, true)); card.appendChild(title);
+        if (candidate.matchReason) {
+          var reasonEl = doc.createElement("small");
+          reasonEl.className = "card-match-reason";
+          reasonEl.textContent = candidate.matchReason;
+          card.appendChild(reasonEl);
+        }
         card.setAttribute("aria-label", candidate.title + ", " + (candidate.type === "tv" ? "TV series" : "movie"));
         card.addEventListener("mouseenter", function () {
           if (state.view === "watch") showHomeHero(card.homeEntry);
@@ -998,6 +1172,7 @@
         "continue", "top", "because", "recent", "trending", "gems", "explore",
         "tv-recommended", "tv-trending", "tv-genres", "tv-short", "tv-gems", "tv-acclaimed",
         "movies-recommended", "movies-trending", "movies-genres", "movies-short", "movies-acclaimed", "movies-gems",
+        "discover-closest", "discover-vibe", "discover-genre", "discover-gems",
         "filtered"
       ];
       var activeOrder = currentTabRowOrder();
@@ -1169,11 +1344,217 @@
         if (!disposed && recommendationWantedSignature !== signature) refreshRecommendations();
       });
     }
+    function getFallbackDiscoverSeed() {
+      var hist = core.readHistory(local);
+      if (Array.isArray(hist) && hist.length > 0) {
+        var first = hist[0];
+        if (first && first.id) return { type: first.type, id: first.id, title: first.title, poster: first.poster, backdrop: first.backdrop };
+      }
+      if (recommendationRows && recommendationRows.seed) {
+        return recommendationRows.seed;
+      }
+      return { type: "tv", id: 70523, title: "Dark", poster: "/wiiyc3m6HKaQhFBYeuM7ySCNQsG.jpg" };
+    }
+    function launchDiscoverWithSeed(seedTitle, source) {
+      if (source === "details") {
+        state.discoverReturnDetails = {
+          title: state.title,
+          season: state.season,
+          episodes: state.episodes
+        };
+      } else {
+        state.discoverReturnDetails = null;
+      }
+      discoverActiveSeed = {
+        type: seedTitle.type,
+        id: seedTitle.id,
+        title: seedTitle.title,
+        date: seedTitle.date,
+        poster: seedTitle.poster,
+        backdrop: seedTitle.backdrop
+      };
+      discoverData = null;
+      if (state.view !== "watch") setView("watch");
+      setWatchTab("discover");
+    }
+    function normalizeDiscoverCard(s) {
+      if (!s) return null;
+      var c = s.candidate || s;
+      if (!c || !c.id) return null;
+      var reason = s.matchReason || s.reason || (s.candidate && (s.candidate.matchReason || s.candidate.reason)) || "";
+      var rawTitle = c.title || c.name || "Untitled";
+      var posterPath = c.poster || c.poster_path || null;
+      var backdropPath = c.backdrop || c.backdrop_path || null;
+      return Object.assign({}, c, {
+        type: c.type === "tv" ? "tv" : "movie",
+        id: Number(c.id),
+        title: String(rawTitle).slice(0, 160),
+        poster: posterPath,
+        backdrop: backdropPath,
+        matchReason: reason
+      });
+    }
+    function loadDiscoverData(force) {
+      if (force) {
+        discoverData = null;
+        discoverError = false;
+      }
+      if (!discoverActiveSeed) {
+        discoverActiveSeed = getFallbackDiscoverSeed();
+        updateFilterStripUI();
+      }
+      var emptySec = get("watch-filter-empty");
+      if (!discoverActiveSeed) {
+        discoverLoading = false;
+        discoverError = false;
+        if (emptySec) {
+          var p = emptySec.querySelector("p");
+          if (p) p.textContent = "Choose a seed title to find similar movies and TV shows.";
+          var btn = get("watch-filter-empty-clear");
+          if (btn) btn.textContent = "Select Seed";
+          emptySec.hidden = false;
+        }
+        populatePosterRow("discover-closest", []);
+        populatePosterRow("discover-vibe", []);
+        populatePosterRow("discover-genre", []);
+        populatePosterRow("discover-gems", []);
+        updateHomeSections();
+        return;
+      }
+      var seed = discoverActiveSeed;
+      var token = ++discoverFetchToken;
+      discoverLoading = true;
+      discoverError = false;
+
+      var feedback = recommendations ? recommendations.readFeedback(local) : { ratings: {} };
+      var avoids = [];
+      if (feedback && feedback.ratings) {
+        Object.keys(feedback.ratings).forEach(function (k) {
+          if (feedback.ratings[k] === "disliked") avoids.push(k);
+        });
+      }
+
+      function handleResponse(data) {
+        if (disposed || token !== discoverFetchToken || state.view !== "watch") return;
+        discoverLoading = false;
+        discoverError = false;
+        discoverData = data;
+        renderDiscoverRows(data);
+      }
+
+      if (useMock && mock.discoverSimilar) {
+        var mockRes = mock.discoverSimilar(seed.type, seed.id, discoverMedia, avoids);
+        handleResponse(mockRes);
+      } else {
+        var queryParams = new URLSearchParams();
+        queryParams.set("type", seed.type);
+        queryParams.set("id", String(seed.id));
+        queryParams.set("target", discoverMedia);
+        if (avoids.length) queryParams.set("avoid", avoids.slice(0, 50).join(","));
+        api("/api/discover-similar?" + queryParams.toString()).then(function (data) {
+          handleResponse(data);
+        }).catch(function () {
+          if (useMock && mock.discoverSimilar) {
+            handleResponse(mock.discoverSimilar(seed.type, seed.id, discoverMedia, avoids));
+            return;
+          }
+          if (disposed || token !== discoverFetchToken || state.view !== "watch") return;
+          discoverLoading = false;
+          discoverError = true;
+          var emp = get("watch-filter-empty");
+          if (emp) {
+            var p = emp.querySelector("p");
+            if (p) p.textContent = "Could not load recommendations. Check your connection and retry.";
+            var btn = get("watch-filter-empty-clear");
+            if (btn) btn.textContent = "Retry";
+            emp.hidden = false;
+          }
+          populatePosterRow("discover-closest", []);
+          populatePosterRow("discover-vibe", []);
+          populatePosterRow("discover-genre", []);
+          populatePosterRow("discover-gems", []);
+          updateHomeSections();
+        });
+      }
+    }
+    function renderDiscoverRows(data) {
+      if (!data || !data.seed) return;
+      var rawSeed = data.seed;
+      var seed = {
+        type: rawSeed.type === "tv" ? "tv" : "movie",
+        id: Number(rawSeed.id),
+        title: String(rawSeed.title || rawSeed.name || "Untitled").slice(0, 160),
+        poster: rawSeed.poster || rawSeed.poster_path || null,
+        backdrop: rawSeed.backdrop || rawSeed.backdrop_path || null,
+        genreIds: rawSeed.genreIds || rawSeed.genre_ids || [],
+        keywords: rawSeed.keywords || [],
+        creators: rawSeed.creators || []
+      };
+      var candidates = data.candidates || [];
+      discoverActiveSeed = seed;
+      updateFilterStripUI();
+      var feedback = recommendations ? recommendations.readFeedback(local) : { ratings: {} };
+      var hist = core.readHistory(local);
+
+      var discoverEngine = root.HorizonDiscoverEngine;
+      var ranked = null;
+      if (discoverEngine && discoverEngine.rankDiscoverCategories) {
+        ranked = discoverEngine.rankDiscoverCategories(seed, candidates, {
+          feedback: feedback,
+          history: hist,
+          hideFinished: discoverHideFinished,
+          targetMedia: discoverMedia,
+          filters: isFilterActive("discover") ? discoverFilters : null
+        });
+      }
+
+      var closestList = ranked ? (ranked.closest || []).map(normalizeDiscoverCard).filter(Boolean) : [];
+      var vibeList = ranked ? (ranked.vibe || []).map(normalizeDiscoverCard).filter(Boolean) : [];
+      var genreList = ranked ? (ranked.genre || []).map(normalizeDiscoverCard).filter(Boolean) : [];
+      var gemsList = ranked ? (ranked.gems || []).map(normalizeDiscoverCard).filter(Boolean) : [];
+
+      populatePosterRow("discover-closest", closestList);
+      populatePosterRow("discover-vibe", vibeList);
+      populatePosterRow("discover-genre", genreList);
+      populatePosterRow("discover-gems", gemsList);
+
+      text("watch-discover-closest-heading", "Closest Matches to " + seed.title);
+      text("watch-discover-vibe-heading", "Same Vibe as " + seed.title);
+      text("watch-discover-genre-heading", "Same Genre, Different Story");
+      text("watch-discover-gems-heading", "Hidden Gems for Fans of " + seed.title);
+
+      var emptySec = get("watch-filter-empty");
+      var anyResults = (discoverMode === "closest" ? closestList.length >= 2
+        : discoverMode === "vibe" ? vibeList.length >= 2
+        : discoverMode === "genre" ? genreList.length >= 2
+        : discoverMode === "gems" ? gemsList.length >= 2
+        : (closestList.length >= 2 || vibeList.length >= 2 || genreList.length >= 2 || gemsList.length >= 2));
+      if (emptySec) {
+        if (!anyResults) {
+          var isFiltered = isFilterActive("discover") || discoverMode !== "all" || discoverMedia !== "same";
+          var msg = isFiltered
+            ? "No similar titles match the selected filters."
+            : "No similar titles found for " + seed.title + ".";
+          var p = emptySec.querySelector("p");
+          if (p) p.textContent = msg;
+          var btn = get("watch-filter-empty-clear");
+          if (btn) btn.textContent = isFiltered ? "Clear Filters" : "Choose Another Seed";
+          emptySec.hidden = (state.watchTab !== "discover");
+        } else {
+          emptySec.hidden = true;
+        }
+      }
+
+      updateHomeSections();
+    }
     function renderHomepage() {
       var rows = previewRows || core.readHistory(local);
       paintHomepage(core.homepageContinueCandidates(rows, local).filter(function (row) {
         return !core.isContinueHidden(local, row);
       }), core.homepageFinished(rows, local));
+      if (state.watchTab === "discover") {
+        loadDiscoverData();
+      }
       if (!previewHistoryMode) core.groupedHistory(rows).filter(function (row) {
         return row.type === "tv" && row.progress && row.progress.completed;
       }).slice(0, 6).forEach(function (row) {
@@ -1472,7 +1853,7 @@
     }
     function renderActions() {
       var actions = get("detail-actions");
-      var focusedAction = actions.contains(doc.activeElement) ? doc.activeElement.dataset.action : null;
+      var focusedAction = actions.contains(doc.activeElement) ? doc.activeElement.dataset.action : (pendingActionFocus || null);
       actions.replaceChildren();
       function restoreActionFocus() {
         if (focusedAction) focus(actions.querySelector('[data-action="' + focusedAction + '"]:not(:disabled)')
@@ -1524,6 +1905,9 @@
           function () { launchMovie(false); }, "detail-primary", "primary"));
         if (movieProgress) actions.appendChild(detailAction("Start Over", function () { launchMovie(true); },
           "detail-secondary", "start-over"));
+        actions.appendChild(detailAction("More Like This", function () {
+          launchDiscoverWithSeed(state.title, "details");
+        }, "detail-secondary detail-more-like-this", "more-like-this"));
         appendFeedbackActions();
         restoreActionFocus();
         return;
@@ -1561,11 +1945,20 @@
           launchEpisode(recent.season, recent.episode, true);
         }, "detail-secondary", "start-over"));
         if (!noNext) actions.appendChild(detailAction("Episodes", browseEpisodes, "detail-secondary", "episodes"));
+        actions.appendChild(detailAction("More Like This", function () {
+          launchDiscoverWithSeed(state.title, "details");
+        }, "detail-secondary detail-more-like-this", "more-like-this"));
         appendFeedbackActions();
         restoreActionFocus();
       }
     }
-    function openDetails(row, episodeTarget) {
+    function openDetails(row, episodeTarget, focusAction) {
+      if (pickingDiscoverSeed) {
+        pickingDiscoverSeed = false;
+        launchDiscoverWithSeed(row, "search");
+        return;
+      }
+      if (focusAction) pendingActionFocus = focusAction;
       detailToken += 1; seasonToken += 1;
       if (episodeTarget && row.type === "tv") pendingEpisodeFocus = { season: episodeTarget.season, episode: episodeTarget.episode };
       state.detailSource = state.view === "history" ? "history" : state.view === "watch" ? "watch" : "search";
@@ -1582,8 +1975,10 @@
       renderDetailArt(row);
       text("detail-status", "Loading details…");
       renderActions();
-      var initialPrimary = get("detail-actions").querySelector(".detail-primary");
+      var targetAction = pendingActionFocus ? get("detail-actions").querySelector('[data-action="' + pendingActionFocus + '"]') : null;
+      var initialPrimary = targetAction || get("detail-actions").querySelector(".detail-primary");
       focus(initialPrimary && !initialPrimary.disabled ? initialPrimary : get("details-back"));
+      pendingActionFocus = null;
       saveView();
       var token = detailToken;
       api("/api/title/" + row.type + "/" + row.id).then(function (detail) {
@@ -1829,7 +2224,7 @@
     function move(key) {
       var current = doc.activeElement, rect = current && current.getBoundingClientRect();
       if (!rect) { focus(query); return; }
-      var railButtons = [get("search-toggle"), get("watch-toggle"), get("tv-toggle"), get("movies-toggle"), get("history-toggle"), get("settings-toggle")];
+      var railButtons = [get("search-toggle"), get("watch-toggle"), get("tv-toggle"), get("movies-toggle"), get("discover-toggle"), get("history-toggle"), get("settings-toggle")];
       var railPosition = railButtons.indexOf(current);
       if (railPosition >= 0 && (key === "ArrowDown" || key === "ArrowUp")) {
         focus(railButtons[Math.max(0, Math.min(railButtons.length - 1,
@@ -1890,7 +2285,14 @@
           return;
         }
         if (current.id === "watch-filter-empty-clear") {
-          if (key === "ArrowUp") focus(get("filter-btn-genre"));
+          if (key === "ArrowUp") {
+            var upTarget = (state.watchTab === "discover")
+              ? (get("filter-btn-seed") || get("filter-btn-genre"))
+              : get("filter-btn-genre");
+            focus(upTarget);
+          } else if (key === "ArrowLeft") {
+            focus(get("watch-toggle"));
+          }
           return;
         }
         var groupIndex = watchRows.findIndex(function (row) { return row.indexOf(current) >= 0; });
@@ -1921,8 +2323,9 @@
             var upGroup = currentTabRowOrder()[watchRows.indexOf(up)];
             if (up) {
               focus(resolveHomeSelection(homeRowMemory[upGroup]) || up[0]);
-            } else if (state.watchTab === "tv" || state.watchTab === "movies") {
-              focus(get("filter-btn-genre"));
+            } else if (state.watchTab === "tv" || state.watchTab === "movies" || state.watchTab === "discover") {
+              var firstChip = get("filter-btn-seed");
+              focus((state.watchTab === "discover" && firstChip && !firstChip.hidden) ? firstChip : get("filter-btn-genre"));
             } else {
               focus(get("watch-toggle"));
             }
@@ -1936,7 +2339,7 @@
         });
         var actionIndex = actions.indexOf(current), credits = get("details-view").querySelector(".detail-credits a");
         var railToggle = state.detailSource === "watch"
-          ? (state.detailSourceTab === "tv" ? get("tv-toggle") : state.detailSourceTab === "movies" ? get("movies-toggle") : get("watch-toggle"))
+          ? (state.detailSourceTab === "tv" ? get("tv-toggle") : state.detailSourceTab === "movies" ? get("movies-toggle") : state.detailSourceTab === "discover" ? get("discover-toggle") : get("watch-toggle"))
           : state.detailSource === "history" ? get("history-toggle") : get("search-toggle");
         if (current === get("details-back")) {
           if (key === "ArrowDown") focus(actions[0] || credits);
@@ -1967,7 +2370,7 @@
           return plays.length && Math.abs(item.getBoundingClientRect().top - plays[0].getBoundingClientRect().top) < 2;
         }).length || 3;
         var railToggle = state.detailSource === "watch"
-          ? (state.detailSourceTab === "tv" ? get("tv-toggle") : state.detailSourceTab === "movies" ? get("movies-toggle") : get("watch-toggle"))
+          ? (state.detailSourceTab === "tv" ? get("tv-toggle") : state.detailSourceTab === "movies" ? get("movies-toggle") : state.detailSourceTab === "discover" ? get("discover-toggle") : get("watch-toggle"))
           : state.detailSource === "history" ? get("history-toggle") : get("search-toggle");
         if (current === get("episodes-back")) {
           if (key === "ArrowDown") focus(seasonButtons.find(function (item) {
@@ -2069,7 +2472,12 @@
           query.value = ""; state.query = ""; scheduleSearch(0); focus(query); saveView();
         } else if (state.view === "search") showWatch();
         else if (state.view === "watch") {
-          if (state.watchTab !== "for-you") {
+          if (state.watchTab === "discover" && state.discoverReturnDetails) {
+            var ret = state.discoverReturnDetails;
+            state.discoverReturnDetails = null;
+            openDetails(ret.title, null, "more-like-this");
+            return;
+          } else if (state.watchTab !== "for-you") {
             setWatchTab("for-you");
           } else if (doc.activeElement && doc.activeElement.dataset && doc.activeElement.dataset.homeGroup) {
             focus(get("watch-toggle"));
@@ -2116,6 +2524,10 @@
       if (state.view !== "watch") setView("watch");
       setWatchTab("movies");
     });
+    get("discover-toggle").addEventListener("click", function () {
+      if (state.view !== "watch") setView("watch");
+      setWatchTab("discover");
+    });
     get("search-toggle").addEventListener("click", function () {
       state.continueMode = false; setView("search"); scheduleSearch(0); focus(query); saveView();
     });
@@ -2130,7 +2542,7 @@
     });
     get("details-back").addEventListener("click", function () { returnWithinWatch(backToResults); });
     get("episodes-back").addEventListener("click", function () { returnWithinWatch(backToDetails); });
-    ["genre", "length", "rating", "year", "sort"].forEach(function (t) {
+    ["seed", "mode", "media", "finished", "genre", "length", "rating", "year", "sort"].forEach(function (t) {
       var b = get("filter-btn-" + t);
       if (b) b.addEventListener("click", function () { openFilterMenu(t); });
     });
@@ -2138,7 +2550,19 @@
     if (clearBtn) clearBtn.addEventListener("click", clearActiveFilters);
     var filterEmptyClear = get("watch-filter-empty-clear");
     if (filterEmptyClear) filterEmptyClear.addEventListener("click", function () {
-      clearActiveFilters(); focus(get("filter-btn-genre"));
+      if (state.watchTab === "discover") {
+        if (discoverError) {
+          discoverError = false;
+          loadDiscoverData(true);
+        } else if (isFilterActive("discover") || discoverMode !== "all" || discoverMedia !== "same") {
+          clearActiveFilters();
+          focus(get("filter-btn-seed") || get("watch-toggle"));
+        } else {
+          openFilterMenu("seed");
+        }
+      } else {
+        clearActiveFilters(); focus(get("filter-btn-genre"));
+      }
     });
     query.addEventListener("input", function () { state.query = query.value; scheduleSearch(300); });
     doc.querySelectorAll("[data-filter]").forEach(function (filter) { filter.addEventListener("click", function () {

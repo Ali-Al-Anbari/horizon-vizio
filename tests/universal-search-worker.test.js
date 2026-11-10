@@ -335,3 +335,203 @@ test("discover endpoint validates parameters and returns shaped titles", async (
   assert.equal(failRes.status, 502);
   assert.deepEqual(await failRes.json(), { error: "metadata_unavailable" });
 });
+
+test("discover-similar: input validation strictly rejects invalid, missing, or malformed parameters", async () => {
+  const sReq = path => new Request("https://search.example" + path, { headers: { "cf-connecting-ip": "192.168.1.110" } });
+
+  // Missing query string or missing required fields
+  assert.equal((await api(sReq("/api/discover-similar"), env)).status, 400);
+  assert.equal((await api(sReq("/api/discover-similar?type=tv"), env)).status, 400);
+  assert.equal((await api(sReq("/api/discover-similar?id=100088"), env)).status, 400);
+
+  // Unknown extra query parameters
+  assert.equal((await api(sReq("/api/discover-similar?type=tv&id=100088&extra=bad"), env)).status, 400);
+
+  // Invalid types
+  assert.equal((await api(sReq("/api/discover-similar?type=book&id=100088"), env)).status, 400);
+  assert.equal((await api(sReq("/api/discover-similar?type=anime&id=100088"), env)).status, 400);
+
+  // Invalid IDs
+  assert.equal((await api(sReq("/api/discover-similar?type=tv&id=abc"), env)).status, 400);
+  assert.equal((await api(sReq("/api/discover-similar?type=tv&id=0"), env)).status, 400);
+  assert.equal((await api(sReq("/api/discover-similar?type=tv&id=-42"), env)).status, 400);
+  assert.equal((await api(sReq("/api/discover-similar?type=tv&id=1.5"), env)).status, 400);
+
+  // Invalid target parameter
+  assert.equal((await api(sReq("/api/discover-similar?type=tv&id=100088&target=invalid"), env)).status, 400);
+  assert.equal((await api(sReq("/api/discover-similar?type=tv&id=100088&target=all"), env)).status, 400);
+
+  // Invalid avoid parameter
+  assert.equal((await api(sReq("/api/discover-similar?type=tv&id=100088&avoid=bad_seed"), env)).status, 400);
+  assert.equal((await api(sReq("/api/discover-similar?type=tv&id=100088&avoid=movie:-1"), env)).status, 400);
+});
+
+test("discover-similar: movie seed handles movie schema, director/cast credits, and cross-media target options", async () => {
+  const sReq = path => new Request("https://search.example" + path, { headers: { "cf-connecting-ip": "192.168.1.111" } });
+  const calls = [];
+
+  const movieFetch = async url => {
+    calls.push(url);
+    if (url.includes("/movie/157336?")) {
+      return new Response(JSON.stringify({
+        id: 157336, title: "Interstellar", release_date: "2014-11-05",
+        overview: "A team of explorers travel through a wormhole in space.",
+        genres: [{ id: 878, name: "Science Fiction" }, { id: 18, name: "Drama" }],
+        keywords: { keywords: [{ id: 401, name: "black hole" }, { id: 402, name: "space travel" }] },
+        credits: {
+          crew: [{ name: "Christopher Nolan", job: "Director" }],
+          cast: [{ name: "Matthew McConaughey" }]
+        },
+        release_dates: { results: [{ iso_3166_1: "US", release_dates: [{ certification: "PG-13" }] }] }
+      }));
+    }
+    if (url.includes("/recommendations?")) {
+      return new Response(JSON.stringify({
+        results: [
+          { id: 27205, title: "Inception", release_date: "2010-07-16", overview: "Dream theft", genre_ids: [28, 878, 12], popularity: 140, vote_count: 35000, vote_average: 8.4 },
+          { id: 99999, title: "Avoided Film", genre_ids: [18], popularity: 10, vote_count: 50 }
+        ]
+      }));
+    }
+    if (url.includes("/similar?")) {
+      return new Response(JSON.stringify({
+        results: [
+          { id: 157337, title: "Contact", release_date: "1997-07-11", overview: "Radio signal from space", genre_ids: [18, 878], popularity: 45, vote_count: 4000, vote_average: 7.4 }
+        ]
+      }));
+    }
+    if (url.includes("/discover/movie")) {
+      return new Response(JSON.stringify({
+        results: [
+          { id: 264660, title: "Ex Machina", release_date: "2014-12-16", overview: "AI evaluation", genre_ids: [18, 878], popularity: 75, vote_count: 12000, vote_average: 7.6 }
+        ]
+      }));
+    }
+    if (url.includes("/discover/tv")) {
+      return new Response(JSON.stringify({
+        results: [
+          { id: 70523, name: "Dark", first_air_date: "2017-12-01", overview: "Time travel mystery", genre_ids: [18, 10765], popularity: 85, vote_count: 5000, vote_average: 8.5 }
+        ]
+      }));
+    }
+    return new Response("{}", { status: 404 });
+  };
+
+  // Test target=both on Movie seed
+  const res = await api(sReq("/api/discover-similar?type=movie&id=157336&target=both&avoid=movie:99999"), env, { fetch: movieFetch });
+  assert.equal(res.status, 200);
+  const data = await res.json();
+
+  // Verify movie seed parsing
+  assert.equal(data.seed.title, "Interstellar");
+  assert.equal(data.seed.rating, "PG-13");
+  assert.deepEqual(data.seed.genreIds, [878, 18]);
+  assert.deepEqual(data.seed.keywordIds, [401, 402]);
+  assert.equal(data.seed.directors[0], "Christopher Nolan");
+  assert.equal(data.seed.cast[0], "Matthew McConaughey");
+
+  // Verify candidates extraction and avoid filtering
+  const candIds = data.candidates.map(c => c.id);
+  assert.ok(candIds.includes(27205), "Inception should be included");
+  assert.ok(candIds.includes(157337), "Contact should be included");
+  assert.ok(candIds.includes(70523), "Dark (TV series) should be included via cross-media discovery");
+  assert.ok(!candIds.includes(99999), "Avoided movie 99999 must be excluded");
+  assert.ok(!candIds.includes(157336), "Seed itself must not be in candidate pool");
+
+  // Verify cross-media endpoint was invoked for TV with mapped sci-fi genre (10765)
+  assert.ok(calls.some(c => c.includes("/discover/tv") && c.includes("with_genres=10765")),
+    "Cross-media query must translate movie genre 878 to TV genre 10765");
+});
+
+test("discover-similar: edge caching serves identical queries and distinguishes target/avoid parameter variations", async () => {
+  const sReq = path => new Request("https://search.example" + path, { headers: { "cf-connecting-ip": "192.168.1.112" } });
+  let fetchCount = 0;
+
+  const countingFetch = async url => {
+    fetchCount++;
+    if (url.includes("/tv/70523?")) {
+      return new Response(JSON.stringify({
+        id: 70523, name: "Dark", first_air_date: "2017-12-01", overview: "Time mystery",
+        genres: [{ id: 18, name: "Drama" }, { id: 10765, name: "Sci-Fi & Fantasy" }],
+        keywords: { results: [{ id: 101, name: "time travel" }] },
+        content_ratings: { results: [{ iso_3166_1: "US", rating: "TV-MA" }] }
+      }));
+    }
+    return new Response(JSON.stringify({ results: [{ id: 100088, name: "Severance", genre_ids: [18, 10765], popularity: 50, vote_count: 500, vote_average: 8.0 }] }));
+  };
+
+  // First request: hits fetcher
+  const res1 = await api(sReq("/api/discover-similar?type=tv&id=70523&target=same"), env, { fetch: countingFetch });
+  assert.equal(res1.status, 200);
+  const initialFetchCount = fetchCount;
+  assert.ok(initialFetchCount > 0, "Initial request must call upstream fetcher");
+
+  // Second identical request: served from cache without any additional fetcher calls
+  const res2 = await api(sReq("/api/discover-similar?type=tv&id=70523&target=same"), env, { fetch: countingFetch });
+  assert.equal(res2.status, 200);
+  assert.equal(fetchCount, initialFetchCount, "Cached request must not invoke fetcher");
+  assert.deepEqual(await res2.json(), await res1.json());
+
+  // Third request with different target: cache miss, invokes fetcher
+  const res3 = await api(sReq("/api/discover-similar?type=tv&id=70523&target=both"), env, { fetch: countingFetch });
+  assert.equal(res3.status, 200);
+  assert.ok(fetchCount > initialFetchCount, "Target change must constitute a cache miss and invoke fetcher");
+});
+
+test("discover-similar: handles upstream 404, 500, 429, timeout, and partial candidate query resilience", async () => {
+  const sReq = path => new Request("https://search.example" + path, { headers: { "cf-connecting-ip": "192.168.1.113" } });
+
+  // 1. Upstream 404 on seed details returns safe 404 not_found
+  const notFoundFetch = async () => new Response("{}", { status: 404 });
+  const res404 = await api(sReq("/api/discover-similar?type=movie&id=9999999"), env, { fetch: notFoundFetch });
+  assert.equal(res404.status, 404);
+  assert.deepEqual(await res404.json(), { error: "not_found" });
+
+  // 2. Upstream 500 on seed details returns safe 502 metadata_unavailable
+  const errorFetch = async () => new Response("{}", { status: 500 });
+  const res502 = await api(sReq("/api/discover-similar?type=movie&id=8888888"), env, { fetch: errorFetch });
+  assert.equal(res502.status, 502);
+  assert.deepEqual(await res502.json(), { error: "metadata_unavailable" });
+
+  // 3. Upstream 429 returns 429 rate_limited with forwarded Retry-After header
+  const rateLimitFetch = async () => new Response("{}", { status: 429, headers: { "Retry-After": "25" } });
+  const res429 = await api(sReq("/api/discover-similar?type=movie&id=7777777"), env, { fetch: rateLimitFetch });
+  assert.equal(res429.status, 429);
+  assert.equal(res429.headers.get("Retry-After"), "25");
+  assert.deepEqual(await res429.json(), { error: "rate_limited" });
+
+  // 4. Upstream timeout / network abort returns 504 metadata_timeout_or_network
+  const timeoutFetch = async () => {
+    const err = new Error("aborted");
+    err.name = "AbortError";
+    throw err;
+  };
+  const res504 = await api(sReq("/api/discover-similar?type=movie&id=6666666"), env, { fetch: timeoutFetch });
+  assert.equal(res504.status, 504);
+  assert.deepEqual(await res504.json(), { error: "metadata_timeout_or_network" });
+
+  // 5. Partial failure resilience: seed succeeds, recommendations fails (500), but similar succeeds -> 200 with candidates
+  const partialFetch = async url => {
+    if (url.includes("/movie/550?")) {
+      return new Response(JSON.stringify({
+        id: 550, title: "Fight Club", release_date: "1999-10-15", overview: "Disillusioned worker",
+        genres: [{ id: 18, name: "Drama" }], keywords: { keywords: [{ id: 1, name: "insomnia" }] },
+        release_dates: { results: [{ iso_3166_1: "US", release_dates: [{ certification: "R" }] }] }
+      }));
+    }
+    if (url.includes("/recommendations?")) {
+      return new Response("{}", { status: 500 }); // Partial failure
+    }
+    if (url.includes("/similar?")) {
+      return new Response(JSON.stringify({
+        results: [{ id: 680, title: "Pulp Fiction", release_date: "1994-09-10", genre_ids: [18, 80], popularity: 90, vote_count: 24000, vote_average: 8.5 }]
+      }));
+    }
+    return new Response("{}", { status: 404 });
+  };
+  const resPartial = await api(sReq("/api/discover-similar?type=movie&id=550&target=same"), env, { fetch: partialFetch });
+  assert.equal(resPartial.status, 200);
+  const partialData = await resPartial.json();
+  assert.equal(partialData.seed.title, "Fight Club");
+  assert.ok(partialData.candidates.some(c => c.id === 680), "Candidates from successful endpoint should be returned despite partial failure");
+});

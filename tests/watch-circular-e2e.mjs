@@ -200,5 +200,130 @@ try {
   await until("document.querySelector('#watch-view').hidden === false");
   assert.equal(await evaluate("document.activeElement.homeEntry.row.title"), "Interstellar",
     "Back from details restores Interstellar focus");
-  console.log("Instant circular Watch E2E passed at 1920x1080 and 1024x768.");
+
+  // Phase 2 Discover & Find Similar verification in Chrome
+  // 1. Open Discover directly from the left rail
+  await key("ArrowLeft"); // Enter rail at Home
+  assert.equal(await evaluate("document.activeElement.id"), "watch-toggle");
+  for (const id of ["tv-toggle", "movies-toggle", "discover-toggle"]) {
+    await key("ArrowDown");
+    assert.equal(await evaluate("document.activeElement.id"), id);
+  }
+  await key("Enter"); // Activate Discover destination
+  await until("document.querySelector('#watch-view').hidden === false && document.querySelector('#discover-toggle').classList.contains('is-current')");
+
+  // 2. Verify automatically selected seed (South Park or fallback)
+  const autoSeedText = await evaluate("document.querySelector('#filter-btn-seed')?.textContent");
+  assert.ok(autoSeedText.includes("South Park") || autoSeedText.includes("Dark") || autoSeedText.includes("Severance"),
+    `Discover auto seed must be valid: ${autoSeedText}`);
+
+  // 3. Confirm recommendation cards display recognizable titles, poster images, and match reasons
+  await until("document.querySelectorAll('#watch-discover-closest-row .home-card').length >= 2");
+  const autoTitles = await evaluate("Array.from(document.querySelectorAll('#watch-discover-closest-row .home-card strong')).map(e => e.textContent.trim())");
+  assert.ok(autoTitles.length >= 2, "Closest Matches must display at least 2 cards");
+  assert.ok(autoTitles.every(t => t.length > 0 && t !== "undefined"), `Cards must have non-empty titles: ${JSON.stringify(autoTitles)}`);
+
+  const autoImages = await evaluate("Array.from(document.querySelectorAll('#watch-discover-closest-row .home-card img')).map(i => i.src)");
+  assert.ok(autoImages.length >= 2 && autoImages.every(src => src.includes("image.tmdb.org/t/p/")),
+    `Cards must have valid TMDB poster image sources: ${JSON.stringify(autoImages)}`);
+
+  const autoReasons = await evaluate("Array.from(document.querySelectorAll('#watch-discover-closest-row .home-card .card-match-reason')).map(r => r.textContent.trim())");
+  assert.ok(autoReasons.length >= 2 && autoReasons.every(r => r.length > 0),
+    `Cards must display non-empty match reasons: ${JSON.stringify(autoReasons)}`);
+
+  const autoKeys = await evaluate("Array.from(document.querySelectorAll('#watch-discover-closest-row .home-card')).map(c => c.dataset.homeKey)");
+  assert.ok(autoKeys.every(k => k && !k.includes("undefined")),
+    `Cards must have canonical media keys: ${JSON.stringify(autoKeys)}`);
+
+  // 4. Move from rail into Discover content, then press Left to verify Home focus invariant
+  await key("ArrowRight"); // Enters first card of Closest Matches
+  assert.equal(await evaluate("document.activeElement.closest('.watch-home-row')?.id"), "watch-discover-closest-row");
+  await key("ArrowLeft"); // Left at first title of cycle enters left rail with Home focused
+  assert.equal(await evaluate("document.activeElement.id"), "watch-toggle");
+  await key("Enter"); // Return to Watch Home
+  await until("document.querySelector('#watch-toggle').classList.contains('is-current')");
+  await key("ArrowRight"); // Enters remembered card in Continue Watching
+  while (await evaluate("document.activeElement.homeEntry?.row?.title !== 'Interstellar'")) {
+    await key("ArrowRight");
+  }
+  assert.equal(await evaluate("document.activeElement.homeEntry.row.title"), "Interstellar");
+  await key("Enter"); // Open Interstellar details
+  await until("document.querySelector('#details-view').hidden === false");
+
+  const moreLikeThisBtn = await evaluate("!!document.querySelector('#detail-actions [data-action=\"more-like-this\"]')");
+  assert.equal(moreLikeThisBtn, true, "'More Like This' action must be present in Details view");
+
+  // 5. Click 'More Like This' and verify Discover launches with Interstellar as seed
+  await evaluate("document.querySelector('#detail-actions [data-action=\"more-like-this\"]').click()");
+  await until("document.querySelector('#watch-view').hidden === false && document.querySelector('#discover-toggle').classList.contains('is-current')");
+  const interstellarSeedText = await evaluate("document.querySelector('#filter-btn-seed')?.textContent");
+  assert.ok(interstellarSeedText.includes("Interstellar"), `Discover seed must be Interstellar: ${interstellarSeedText}`);
+
+  // 6. Verify cards updated for Interstellar with real titles and posters
+  await until("document.querySelectorAll('#watch-discover-closest-row .home-card').length >= 2");
+  const interstellarTitles = await evaluate("Array.from(document.querySelectorAll('#watch-discover-closest-row .home-card strong')).map(e => e.textContent.trim())");
+  assert.ok(interstellarTitles.every(t => t.length > 0 && t !== "undefined"),
+    `Interstellar cards must have non-empty titles: ${JSON.stringify(interstellarTitles)}`);
+
+  // 7. Switch between Category modes (Closest Matches vs All Categories)
+  await evaluate("document.querySelector('#filter-btn-mode').click()"); // Open mode menu
+  await until("document.querySelector('#watch-filter-menu')?.hidden === false");
+  await evaluate("Array.from(document.querySelectorAll('.filter-menu-option')).find(o => o.textContent.includes('Closest Matches'))?.click()");
+  await until("document.querySelector('#watch-filter-menu')?.hidden === true");
+  assert.equal(await evaluate("!document.querySelector('#watch-discover-closest-section').hidden"), true);
+  assert.equal(await evaluate("document.querySelector('#watch-discover-vibe-section').hidden"), true);
+  assert.equal(await evaluate("document.querySelector('#watch-discover-genre-section').hidden"), true);
+  assert.equal(await evaluate("document.querySelector('#watch-discover-gems-section').hidden"), true);
+
+  // Restore All Categories
+  await evaluate("document.querySelector('#filter-btn-mode').click()");
+  await until("document.querySelector('#watch-filter-menu')?.hidden === false");
+  await evaluate("Array.from(document.querySelectorAll('.filter-menu-option')).find(o => o.textContent.includes('All Categories'))?.click()");
+  await until("document.querySelector('#watch-filter-menu')?.hidden === true");
+  assert.equal(await evaluate("!document.querySelector('#watch-discover-closest-section').hidden"), true);
+
+  // 8. Change Media Type filter (Movies Only vs Same)
+  await evaluate("document.querySelector('#filter-btn-media').click()");
+  await until("document.querySelector('#watch-filter-menu')?.hidden === false");
+  await evaluate("Array.from(document.querySelectorAll('.filter-menu-option')).find(o => o.textContent.includes('Movies Only'))?.click()");
+  await until("document.querySelector('#watch-filter-menu')?.hidden === true");
+  const movieTypes = await evaluate("Array.from(document.querySelectorAll('#watch-discover-closest-row .home-card')).map(c => c.dataset.homeKey.split(':')[0])");
+  assert.ok(movieTypes.every(t => t === "movie"), `Movies Only filter must restrict results to movie: ${JSON.stringify(movieTypes)}`);
+
+  // Clear filters
+  await evaluate("document.querySelector('#filter-btn-clear')?.click()");
+  await pause();
+
+  // 9. Confirm there are no blank cards or offscreen focus outlines
+  const allCardKeys = await evaluate("Array.from(document.querySelectorAll('.watch-home-row .home-card')).map(c => c.dataset.homeKey)");
+  assert.ok(allCardKeys.every(k => k && !k.includes("undefined")), "Zero undefined card keys allowed");
+
+  // 10. Select a recommendation card and verify correct details view opens
+  const firstCardTitle = await evaluate("document.querySelector('#watch-discover-closest-row .home-card strong')?.textContent.trim()");
+  await evaluate("document.querySelector('#watch-discover-closest-row .home-card').click()");
+  await until("document.querySelector('#details-view').hidden === false");
+  const openedDetailTitle = await evaluate("document.querySelector('#detail-title')?.textContent.trim()");
+  assert.equal(openedDetailTitle, firstCardTitle, "Details view title must match clicked recommendation card title");
+
+  // 11. Press Back from Details and verify focus is restored
+  await key("Back");
+  await until("document.querySelector('#watch-view').hidden === false");
+  assert.equal(await evaluate("document.querySelector('#discover-toggle').classList.contains('is-current')"), true,
+    "Back from card details must restore Discover view");
+
+  // 12. Full rail traversal verification
+  await key("ArrowLeft"); // Enter rail at Home
+  assert.equal(await evaluate("document.activeElement.id"), "watch-toggle");
+  await key("ArrowDown"); // TV
+  assert.equal(await evaluate("document.activeElement.id"), "tv-toggle");
+  await key("ArrowDown"); // Movies
+  assert.equal(await evaluate("document.activeElement.id"), "movies-toggle");
+  await key("ArrowDown"); // Discover
+  assert.equal(await evaluate("document.activeElement.id"), "discover-toggle");
+  await key("ArrowDown"); // History
+  assert.equal(await evaluate("document.activeElement.id"), "history-toggle");
+  await key("ArrowDown"); // Settings
+  assert.equal(await evaluate("document.activeElement.id"), "settings-toggle");
+
+  console.log("Instant circular Watch E2E and Phase 2 Discover passed at 1920x1080 and 1024x768.");
 } finally { socket.close(); }

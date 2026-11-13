@@ -12,6 +12,7 @@
   var HIDDEN_CONTINUE_KEY = "horizon-watch-hidden-continue-v1";
   var HISTORY_BACKUP_KEY = "horizon-universal-search-history-backup-v1";
   var HISTORY_DELETIONS_KEY = "horizon-watch-history-deletions-v1";
+  var ACTIVE_EPISODES_KEY = "horizon-watch-active-episodes-v1";
   var APP_NAMES = { "Amazon Prime Video": "Prime Video", "Disney Plus": "Disney+",
     "Plex": "Plex", "YouTube": "YouTube" };
   function positive(value) { return typeof value === "number" && isFinite(value) && value % 1 === 0
@@ -95,6 +96,7 @@
       readHistory(storage).forEach(function (row) { deleted[historyKey(row)] = Date.now(); });
       storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: [] }));
       storage.setItem(HISTORY_DELETIONS_KEY, JSON.stringify({ version: 1, items: deleted }));
+      storage.removeItem(ACTIVE_EPISODES_KEY);
     } catch (_error) {} }
   function backupHistory(storage) {
     try { if (!storage.getItem(HISTORY_BACKUP_KEY) && storage.getItem(HISTORY_KEY))
@@ -131,7 +133,17 @@
         deleted[historyKey(row)] = Date.now();
       });
       storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: kept }));
-      storage.setItem(HISTORY_DELETIONS_KEY, JSON.stringify({ version: 1, items: deleted })); return true; }
+      storage.setItem(HISTORY_DELETIONS_KEY, JSON.stringify({ version: 1, items: deleted }));
+      if (allTitle && type === "tv") {
+        try {
+          var activeData = JSON.parse(storage.getItem(ACTIVE_EPISODES_KEY) || "null");
+          if (activeData && activeData.shows && activeData.shows[String(id)]) {
+            delete activeData.shows[String(id)];
+            storage.setItem(ACTIVE_EPISODES_KEY, JSON.stringify(activeData));
+          }
+        } catch (_e) {}
+      }
+      return true; }
     catch (_error) { return false; }
   }
   function setHistoryWatched(storage, type, id, season, episode, watched) {
@@ -211,28 +223,231 @@
       storage.setItem(EPISODE_CATALOG_KEY, JSON.stringify({ version: 1, shows: shows })); return true;
     } catch (_error) { return false; }
   }
+  function readActiveEpisode(storage, showId) {
+    if (!positive(showId) || !storage || typeof storage.getItem !== "function") return null;
+    try {
+      var data = JSON.parse(storage.getItem(ACTIVE_EPISODES_KEY));
+      var value = data && data.version === 1 && data.shows && data.shows[String(showId)];
+      return value && positive(value.season) && positive(value.episode) && Number.isFinite(value.at)
+        ? { season: value.season, episode: value.episode, at: value.at }
+        : null;
+    } catch (_error) { return null; }
+  }
+  function writeActiveEpisode(storage, showId, entry) {
+    if (!positive(showId) || !storage || typeof storage.setItem !== "function" || !entry
+        || !positive(entry.season) || !positive(entry.episode)) return false;
+    try {
+      var data = JSON.parse(storage.getItem(ACTIVE_EPISODES_KEY) || "null");
+      var shows = data && data.version === 1 && data.shows && typeof data.shows === "object" ? data.shows : {};
+      shows[String(showId)] = {
+        season: entry.season,
+        episode: entry.episode,
+        at: Number.isFinite(entry.at) ? entry.at : Date.now()
+      };
+      storage.setItem(ACTIVE_EPISODES_KEY, JSON.stringify({ version: 1, shows: shows }));
+      return true;
+    } catch (_error) { return false; }
+  }
+  function isEpisodeCompleted(row) {
+    if (!row) return false;
+    if (row.manualWatched === true) return true;
+    if (row.manualWatched === false) return false;
+    if (row.progress && row.progress.completed === true) return true;
+    if (row.progress && Number.isFinite(row.progress.position) && Number.isFinite(row.progress.duration)
+        && row.progress.duration > 0 && (row.progress.position / row.progress.duration) >= 0.95) return true;
+    return false;
+  }
+  function nextCatalogEpisode(current, catalog) {
+    if (!current || !positive(current.season) || !positive(current.episode) || !catalog || !Array.isArray(catalog.seasons)) return null;
+    var seasons = catalog.seasons.filter(function (s) {
+      return s && positive(s.number) && positive(s.count);
+    }).sort(function (a, b) { return a.number - b.number; });
+    if (!seasons.length) return null;
+    var currentSeason = seasons.find(function (s) { return s.number === current.season; });
+    if (!currentSeason) return null;
+    if (current.episode < currentSeason.count) {
+      return { season: currentSeason.number, episode: current.episode + 1 };
+    }
+    var nextSeason = seasons.find(function (s) { return s.number > currentSeason.number; });
+    if (nextSeason) {
+      return { season: nextSeason.number, episode: 1 };
+    }
+    return null;
+  }
+  function canonicalEpisodeTarget(rows, showId, storageOrCatalog, optStorage) {
+    if (!positive(showId)) return null;
+
+    var storage = null;
+    var catalog = null;
+    if (optStorage && typeof optStorage.getItem === "function") {
+      storage = optStorage;
+    }
+    if (storageOrCatalog && typeof storageOrCatalog.getItem === "function") {
+      storage = storage || storageOrCatalog;
+      catalog = readEpisodeCatalog(storage, showId);
+    } else if (storageOrCatalog && Array.isArray(storageOrCatalog.seasons)) {
+      catalog = storageOrCatalog;
+    }
+    if (!catalog && storage) {
+      catalog = readEpisodeCatalog(storage, showId);
+    }
+
+    var episodes = (Array.isArray(rows) ? rows : []).filter(function (row) {
+      return row && row.type === "tv" && row.id === showId;
+    });
+
+    var activePointer = storage ? readActiveEpisode(storage, showId) : null;
+    if (!episodes.length && !activePointer) return null;
+
+    function findEpisode(season, ep) {
+      return episodes.find(function (r) { return r.season === season && r.episode === ep; }) || null;
+    }
+
+    function makeTarget(season, episode, epRow, isNextUnwatched, isFinished, completed, at, baseEp) {
+      var ref = epRow || baseEp || episodes[0] || {};
+      return {
+        id: showId,
+        type: "tv",
+        title: ref.title || "",
+        season: season,
+        episode: episode,
+        episodeTitle: (epRow && epRow.episodeTitle) || (baseEp && baseEp.episodeTitle) || "",
+        poster: (epRow && epRow.poster) || ref.poster || null,
+        backdrop: (epRow && epRow.backdrop) || ref.backdrop || null,
+        tvdbId: ref.tvdbId || null,
+        progress: (!isNextUnwatched && epRow && epRow.progress) ? epRow.progress : null,
+        isNextUnwatched: !!isNextUnwatched,
+        isFinished: !!isFinished,
+        hasCatalog: !!catalog,
+        completed: !!completed,
+        at: at || (epRow && epRow.progress ? epRow.progress.updatedAt : (epRow ? epRow.at : Date.now())),
+        baseEpisode: baseEp || epRow || ref
+      };
+    }
+
+    if (activePointer) {
+      var current = activePointer;
+      var currentBase = findEpisode(current.season, current.episode);
+      var maxDepth = 200;
+      while (maxDepth-- > 0) {
+        var row = findEpisode(current.season, current.episode);
+        var rowUpdated = row && row.progress ? row.progress.updatedAt : (row ? row.at : 0);
+        var fresh = row && rowUpdated >= activePointer.at;
+        if (fresh && isEpisodeCompleted(row)) {
+          var nextCandidate = catalog ? nextCatalogEpisode(current, catalog) : null;
+          if (!nextCandidate) {
+            return makeTarget(current.season, current.episode, row, false, true, true, rowUpdated, row);
+          }
+          current = nextCandidate;
+          currentBase = row;
+        } else {
+          var isRewatchStart = current.season === activePointer.season && current.episode === activePointer.episode;
+          if (row && fresh && row.progress && row.progress.position > 0) {
+            return makeTarget(current.season, current.episode, row, false, false, false, rowUpdated, currentBase || row);
+          }
+          return makeTarget(current.season, current.episode, row, !isRewatchStart, false, false,
+            currentBase ? (currentBase.progress ? currentBase.progress.updatedAt : currentBase.at) : activePointer.at,
+            currentBase || row);
+        }
+      }
+    }
+
+    var byRecency = episodes.slice().sort(function (a, b) {
+      var aTime = a.progress ? a.progress.updatedAt : a.at;
+      var bTime = b.progress ? b.progress.updatedAt : b.at;
+      return (bTime - aTime) || (b.season - a.season) || (b.episode - a.episode);
+    });
+
+    var mostRecent = byRecency[0];
+    if (!mostRecent) return null;
+
+    if (!isEpisodeCompleted(mostRecent)) {
+      return makeTarget(mostRecent.season, mostRecent.episode, mostRecent, false, false, false,
+        mostRecent.progress ? mostRecent.progress.updatedAt : mostRecent.at, mostRecent);
+    }
+
+    var next = catalog ? nextCatalogEpisode(mostRecent, catalog) : null;
+    if (next) {
+      var existingNext = findEpisode(next.season, next.episode);
+      if (existingNext && !isEpisodeCompleted(existingNext) && existingNext.progress && existingNext.progress.position > 0) {
+        return makeTarget(next.season, next.episode, existingNext, false, false, false,
+          existingNext.progress.updatedAt, mostRecent);
+      }
+      return makeTarget(next.season, next.episode, existingNext, true, false, false,
+        mostRecent.progress ? mostRecent.progress.updatedAt : mostRecent.at, mostRecent);
+    }
+
+    if (catalog) {
+      return makeTarget(mostRecent.season, mostRecent.episode, mostRecent, false, true, true,
+        mostRecent.progress ? mostRecent.progress.updatedAt : mostRecent.at, mostRecent);
+    }
+
+    return makeTarget(mostRecent.season, mostRecent.episode, mostRecent, false, false, true,
+      mostRecent.progress ? mostRecent.progress.updatedAt : mostRecent.at, mostRecent);
+  }
   function homepageFinishedRow(row, allRows, storage) {
     if (row.type !== "tv") return row.manualWatched === true || !!(row.progress && row.progress.completed && row.manualWatched !== false);
-    var catalog = storage && readEpisodeCatalog(storage, row.id);
-    if (!catalog) return false;
-    var episodes = (allRows || []).filter(function (entry) { return entry.type === "tv" && entry.id === row.id; });
-    return catalog.seasons.length > 0 && catalog.seasons.every(function (season) {
-      for (var number = 1; number <= season.count; number += 1) {
-        var episode = episodes.find(function (entry) { return entry.season === season.number && entry.episode === number; });
-        if (!episode || !(episode.manualWatched === true || episode.progress && episode.progress.completed
-          && episode.manualWatched !== false)) return false;
-      }
-      return true;
-    });
+    var target = canonicalEpisodeTarget(allRows, row.id, storage);
+    if (!target) return false;
+    return target.isFinished === true;
   }
   function homepageContinueCandidates(rows, storage) {
-    return groupedHistory(rows.filter(function (row) { return !!row.progress; })).filter(function (row) {
-      return !homepageFinishedRow(row, rows, storage);
+    var groups = {}, order = [];
+    (Array.isArray(rows) ? rows : []).forEach(function (row) {
+      if (!row || !row.progress && row.manualWatched !== true) return;
+      var key = row.type + ":" + row.id;
+      if (!groups[key]) { groups[key] = []; order.push({ type: row.type, id: row.id }); }
+      groups[key].push(row);
+    });
+    var candidates = [];
+    order.forEach(function (item) {
+      var showRows = groups[item.type + ":" + item.id];
+      if (item.type === "movie") {
+        var movieRow = showRows[0];
+        if (!homepageFinishedRow(movieRow, rows, storage)) candidates.push(movieRow);
+      } else {
+        var target = canonicalEpisodeTarget(rows, item.id, storage);
+        if (target && !target.isFinished) {
+          candidates.push({
+            type: "tv",
+            id: target.id,
+            title: target.title,
+            season: target.season,
+            episode: target.episode,
+            episodeTitle: target.episodeTitle,
+            poster: target.poster,
+            backdrop: target.backdrop,
+            tvdbId: target.tvdbId,
+            progress: target.progress,
+            manualWatched: null,
+            isNextUnwatched: target.isNextUnwatched,
+            at: target.at
+          });
+        }
+      }
+    });
+    return candidates.sort(function (a, b) {
+      return (b.progress ? b.progress.updatedAt : b.at) - (a.progress ? a.progress.updatedAt : a.at);
     }).slice(0, 12);
   }
   function homepageFinished(rows, storage) {
-    return groupedHistory(rows.filter(function (row) { return !!row.progress || row.manualWatched === true; })).filter(function (row) {
-      return homepageFinishedRow(row, rows, storage);
+    var groups = {}, order = [];
+    (Array.isArray(rows) ? rows : []).forEach(function (row) {
+      if (!row || !row.progress && row.manualWatched !== true) return;
+      var key = row.type + ":" + row.id;
+      if (!groups[key]) { groups[key] = []; order.push({ type: row.type, id: row.id }); }
+      groups[key].push(row);
+    });
+    var finished = [];
+    order.forEach(function (item) {
+      var showRows = groups[item.type + ":" + item.id];
+      var baseRow = showRows[0];
+      if (homepageFinishedRow(baseRow, rows, storage)) {
+        finished.push(baseRow);
+      }
+    });
+    return finished.sort(function (a, b) {
+      return (b.progress ? b.progress.updatedAt : b.at) - (a.progress ? a.progress.updatedAt : a.at);
     }).slice(0, 12);
   }
   function continueRows(rows) { return groupedHistory(rows).filter(function (row) {
@@ -267,7 +482,7 @@
     return first ? { season: nextSeason, episode: 1, title: safeText(first.title, 160) } : null;
   }
   function episodeProgressFraction(row) {
-    if (!row) return 0;
+    if (!row || row.isNextUnwatched) return 0;
     if (row.manualWatched === true || row.manualWatched !== false
         && row.progress && row.progress.completed) return 1;
     return row.progress && row.progress.duration > 0
@@ -434,7 +649,8 @@
     HISTORY_KEY: HISTORY_KEY, PREFS_KEY: PREFS_KEY, SUBTITLE_KEY: SUBTITLE_KEY, STATE_KEY: STATE_KEY,
     HANDOFF_KEY: HANDOFF_KEY, BROWSED_SEASONS_KEY: BROWSED_SEASONS_KEY, EPISODE_CATALOG_KEY: EPISODE_CATALOG_KEY,
     HIDDEN_CONTINUE_KEY: HIDDEN_CONTINUE_KEY, HISTORY_BACKUP_KEY: HISTORY_BACKUP_KEY,
-    HISTORY_DELETIONS_KEY: HISTORY_DELETIONS_KEY,
+    HISTORY_DELETIONS_KEY: HISTORY_DELETIONS_KEY, ACTIVE_EPISODES_KEY: ACTIVE_EPISODES_KEY,
+    readActiveEpisode: readActiveEpisode, writeActiveEpisode: writeActiveEpisode,
     readBrowsedSeason: readBrowsedSeason, writeBrowsedSeason: writeBrowsedSeason,
     readEpisodeCatalog: readEpisodeCatalog, writeEpisodeCatalog: writeEpisodeCatalog,
     progressRecord: progressRecord, validHandoff: validHandoff, item: item,
@@ -446,6 +662,7 @@
     setHistoryWatched: setHistoryWatched, setContinueHidden: setContinueHidden, isContinueHidden: isContinueHidden,
     continueRows: continueRows, lastWatchedEpisode: lastWatchedEpisode,
     nextConfirmedEpisode: nextConfirmedEpisode, episodeProgressFraction: episodeProgressFraction,
+    canonicalEpisodeTarget: canonicalEpisodeTarget, isEpisodeCompleted: isEpisodeCompleted, nextCatalogEpisode: nextCatalogEpisode,
     rankResults: rankResults,
     readPrefs: readPrefs, writePrefs: writePrefs, readSubtitlePref: readSubtitlePref, writeSubtitlePref: writeSubtitlePref,
     tvPlayerUrl: tvPlayerUrl, moviePlayerUrl: moviePlayerUrl, imageUrl: imageUrl, providerApp: providerApp, providerWatchUrl: providerWatchUrl,

@@ -263,7 +263,13 @@
     season: function (id, number) { return { number: number, episodes: number === 13 && id === 2190
       ? [{ number: 1, title: "The Ring", date: "2009-03-11", overview: "", still: null },
         { number: 2, title: "The Coon", date: "2009-03-18", overview: "", still: null },
-        { number: 3, title: "Margaritaville", date: "2009-03-25", overview: "", still: null }]
-      : [{ number: 1, title: "Episode 1", date: "2010-03-17", overview: "", still: null }] }; }
+        { number: 3, title: "Margaritaville", date: "2009-03-25", overview: "", still: null },
+        { number: 4, title: "Eat, Pray, Queef", date: "2009-04-01", overview: "", still: null }]
+      : number === 14 && id === 2190
+        ? [{ number: 1, title: "Sexual Healing", date: "2010-03-17", overview: "", still: null },
+          { number: 2, title: "The Tale of Scrotie McBoogerballs", date: "2010-03-24", overview: "", still: null },
+          { number: 3, title: "Medicinal Fried Chicken", date: "2010-03-31", overview: "", still: null },
+          { number: 4, title: "You Have 0 Friends", date: "2010-04-07", overview: "", still: null }]
+        : [{ number: 1, title: "Episode 1", date: "2010-03-17", overview: "", still: null }] }; }
   };
 })(typeof window !== "undefined" ? window : globalThis);

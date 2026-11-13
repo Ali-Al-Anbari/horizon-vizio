@@ -325,5 +325,133 @@ try {
   await key("ArrowDown"); // Settings
   assert.equal(await evaluate("document.activeElement.id"), "settings-toggle");
 
-  console.log("Instant circular Watch E2E and Phase 2 Discover passed at 1920x1080 and 1024x768.");
+  // Phase 3A: Continue Watching Reliability & Completed-Episode Advancement
+  for (const viewport of [{ width: 1920, height: 1080 }, { width: 1024, height: 768 }]) {
+    await send("Emulation.setDeviceMetricsOverride", { ...viewport, deviceScaleFactor: 1, mobile: false });
+
+    // 1. Set up catalog and initial partial checkpoint S14E3 (40%)
+    const initUrl = new URL(base);
+    initUrl.searchParams.set("mock", "1");
+    initUrl.searchParams.set("run", `init-p3a-${viewport.width}-${Date.now()}`);
+    await send("Page.navigate", { url: initUrl.href });
+    await until("!!window.HorizonUniversalSearch && document.activeElement.id === 'watch-toggle'");
+
+    await evaluate(`
+      localStorage.clear();
+      sessionStorage.clear();
+      window.HorizonSearchCore.writeEpisodeCatalog(localStorage, 2190, [
+        { number: 13, count: 14 },
+        { number: 14, count: 14 }
+      ]);
+      window.HorizonSearchCore.writeHistory(localStorage, window.HorizonSearchCore.item(
+        "tv", 2190, "South Park", 14, 3, "off", Date.now(), {
+          poster: "/k7n2EVge7G77eMr3brztRGG1fFU.jpg",
+          backdrop: "/3UviYOlhn8EgXMBuiT6MnUuo1w9.jpg",
+          progress: { position: 400, duration: 1000, updatedAt: Date.now(), provider: "vidbolt", completed: false }
+        }
+      ));
+    `);
+
+    // Reload with real storage history (no preview-history parameter)
+    const runMarker = `p3a-start-${viewport.width}-${Date.now()}`;
+    const p3aUrl = new URL(base);
+    p3aUrl.searchParams.set("mock", "1");
+    p3aUrl.searchParams.set("run", runMarker);
+    await send("Page.navigate", { url: p3aUrl.href });
+    await until(`location.search.includes(${JSON.stringify(runMarker)}) && !!window.HorizonUniversalSearch
+      && document.activeElement.id === 'watch-toggle'
+      && document.querySelectorAll('#watch-continue-row .home-card').length > 0`);
+
+    // 2 & 3. Confirm the card displays S14E3 and 40% progress
+    const cardTextS14E3 = await evaluate("document.querySelector('#watch-continue-row [data-home-key=\"tv:2190\"] .home-card-caption small')?.textContent");
+    assert.ok(cardTextS14E3.includes("S14 E3"), `Card must display S14 E3: ${cardTextS14E3}`);
+    const progressWidth40 = await evaluate("document.querySelector('#watch-continue-row [data-home-key=\"tv:2190\"] .home-progress-fill')?.style.width");
+    assert.ok(progressWidth40.startsWith("40"), `Progress bar should be ~40%: ${progressWidth40}`);
+
+    // 4. Confirm selecting the card launches / opens S14E3
+    await evaluate("document.querySelector('#watch-continue-row [data-home-key=\"tv:2190\"]').click()");
+    await until("document.querySelector('#episodes-view')?.hidden === false");
+    const focusedEp3 = await evaluate("document.activeElement.dataset.episode");
+    const curSeason14 = await evaluate("document.querySelector('#seasons .is-current')?.dataset.season");
+    assert.equal(curSeason14, "14", "Episodes view opens Season 14");
+    assert.equal(focusedEp3, "3", "Episodes view focuses Episode 3");
+
+    // 5. Import a verified 95%-complete S14E3 checkpoint via playback return handoff
+    const returnHandoff = "handoff_p3a_test_" + Date.now();
+    await evaluate(`
+      sessionStorage.setItem(window.HorizonSearchCore.STATE_KEY, JSON.stringify({ version: 1, view: "watch", source: "watch" }));
+      sessionStorage.setItem(window.HorizonSearchCore.HANDOFF_KEY, JSON.stringify({
+        token: ${JSON.stringify(returnHandoff)},
+        type: "tv",
+        id: 2190,
+        season: 14,
+        episode: 3,
+        at: Date.now()
+      }));
+    `);
+    const compMarker = `return-comp-${viewport.width}-${Date.now()}`;
+    const returnUrl = new URL(base);
+    returnUrl.searchParams.set("mock", "1");
+    returnUrl.searchParams.set("return", "1");
+    returnUrl.searchParams.set("showId", "2190");
+    returnUrl.searchParams.set("season", "14");
+    returnUrl.searchParams.set("episode", "3");
+    returnUrl.searchParams.set("position", "960");
+    returnUrl.searchParams.set("duration", "1000");
+    returnUrl.searchParams.set("updated", String(Date.now()));
+    returnUrl.searchParams.set("completed", "1");
+    returnUrl.searchParams.set("progressProvider", "vidbolt");
+    returnUrl.searchParams.set("handoff", returnHandoff);
+    returnUrl.searchParams.set("run", compMarker);
+
+    await send("Page.navigate", { url: returnUrl.href });
+    await until("!!window.HorizonUniversalSearch && document.querySelector('#watch-view')?.hidden === false && document.querySelectorAll('#watch-continue-row .home-card').length > 0");
+
+    // 6. Confirm the card advances to S14E4
+    const cardTextS14E4 = await evaluate("document.querySelector('#watch-continue-row [data-home-key=\"tv:2190\"] .home-card-caption small')?.textContent");
+    assert.ok(cardTextS14E4.includes("S14 E4"), `Card must advance to S14 E4: ${cardTextS14E4}`);
+
+    // 7. Confirm S14E4 displays zero progress if not started
+    const zeroProgress = await evaluate("document.querySelector('#watch-continue-row [data-home-key=\"tv:2190\"] .home-progress-fill')");
+    assert.equal(zeroProgress, null, "S14E4 must display zero progress bar (ready to start)");
+
+    // 8. Confirm selecting the card launches / opens S14E4
+    await evaluate("document.querySelector('#watch-continue-row [data-home-key=\"tv:2190\"]').click()");
+    await until("document.querySelector('#episodes-view')?.hidden === false");
+    const focusedEp4 = await evaluate("document.activeElement.dataset.episode");
+    const curSeason14Adv = await evaluate("document.querySelector('#seasons .is-current')?.dataset.season");
+    assert.equal(curSeason14Adv, "14", "Episodes view opens Season 14");
+    assert.equal(focusedEp4, "4", "Episodes view focuses Episode 4");
+
+    // 9. Confirm the show's Details view agrees with the Continue Watching target
+    await evaluate("document.querySelector('#episodes-back').click()");
+    await until("document.querySelector('#details-view')?.hidden === false");
+    const detailsPrimary = await evaluate("document.querySelector('#detail-actions .detail-primary')?.textContent");
+    assert.ok(detailsPrimary.includes("Continue S14 E4"), `Details primary action must agree with Continue S14 E4: ${detailsPrimary}`);
+
+    // 10. Confirm an older delayed checkpoint cannot revert the card to S14E3
+    await evaluate(`
+      window.HorizonSearchCore.writeHistory(localStorage, window.HorizonSearchCore.item(
+        "tv", 2190, "South Park", 14, 3, "off", 500, {
+          progress: { position: 500, duration: 1000, updatedAt: 500, provider: "vidbolt", completed: false }
+        }
+      ));
+    `);
+    await evaluate("document.querySelector('#watch-toggle').click()");
+    await until("document.querySelector('#watch-view')?.hidden === false");
+    const preservedCard = await evaluate("document.querySelector('#watch-continue-row [data-home-key=\"tv:2190\"] .home-card-caption small')?.textContent");
+    assert.ok(preservedCard.includes("S14 E4"), `Delayed checkpoint must not revert S14 E4: ${preservedCard}`);
+
+    // 11. Verify the first-title carousel boundary, poster gutter, focus, and navigation remain intact
+    await evaluate("document.querySelector('#watch-toggle').focus()");
+    assert.equal(await evaluate("document.activeElement.id"), "watch-toggle");
+    await key("ArrowRight"); // Enters South Park card
+    const gutterP3 = viewport.width === 1024 ? 145 : 182;
+    const cardLeftP3 = await evaluate("Math.round(document.activeElement.getBoundingClientRect().left)");
+    assert.equal(cardLeftP3, gutterP3, `Card settles at clean left gutter (${gutterP3}px)`);
+    await key("ArrowLeft"); // Exits to left rail with Home focused
+    assert.equal(await evaluate("document.activeElement.id"), "watch-toggle", "Left enters left rail with Home focused");
+  }
+
+  console.log("Instant circular Watch E2E, Phase 2 Discover, and Phase 3A Continue Reliability passed at 1920x1080 and 1024x768.");
 } finally { socket.close(); }

@@ -568,7 +568,7 @@
     }
     function homeContext(row) {
       return (row.type === "tv" ? "S" + row.season + " E" + row.episode
-        + (row.episodeTitle ? " · " + row.episodeTitle : "") : "Movie");
+        + (row.episodeTitle ? " · " + row.episodeTitle : (row.isNextUnwatched ? " · Ready to start" : "")) : "Movie");
     }
     function homeDetail(row) {
       var key = row.type + ":" + row.id;
@@ -681,7 +681,8 @@
       homeOpenPending = true;
       var token = ++homeOpenToken;
       homeDetail(row).then(function (detail) {
-        return detail ? lookupNextEpisode(row, detail) : null;
+        var canonical = core.canonicalEpisodeTarget(core.readHistory(local), row.id, detail || local, local);
+        return canonical ? { season: canonical.season, episode: canonical.episode } : (detail ? lookupNextEpisode(row, detail) : null);
       }).then(function (target) { if (token === homeOpenToken) openEpisode(target); },
         function () { if (token === homeOpenToken) openEpisode(null); });
     }
@@ -1698,7 +1699,7 @@
       focus(results.querySelector("button") || query);
     }
     function renderSettings() {
-      var rows = core.readHistory(local), visible = core.homepageContinueCandidates(rows);
+      var rows = core.readHistory(local), visible = core.homepageContinueCandidates(rows, local);
       var continueHost = get("settings-continue"), historyHost = get("settings-history");
       continueHost.replaceChildren(); historyHost.replaceChildren();
       if (!visible.length) { var empty = doc.createElement("p"); empty.textContent = "No unfinished titles saved.";
@@ -1913,19 +1914,26 @@
         return;
       }
       if (state.title.type === "tv") {
-        var recent = core.lastWatchedEpisode(core.readHistory(local), state.title.id);
-        var resumable = recent && recent.progress && recent.manualWatched !== true
-          && (!recent.progress.completed || recent.manualWatched === false)
-          ? recent.progress : null;
-        var completed = recent && (recent.manualWatched === true || recent.progress
-          && recent.progress.completed && recent.manualWatched !== false);
-        if (completed) resolveNextContinue(recent);
-        var next = completed && nextContinue && nextContinue.status === "ready" ? nextContinue.target : null;
-        var noNext = completed && nextContinue && nextContinue.status === "unavailable";
-        var primary = detailAction(resumable ? "Resume S" + recent.season + " E" + recent.episode
-          : next ? "Continue S" + next.season + " E" + next.episode
+        var canonical = core.canonicalEpisodeTarget(core.readHistory(local), state.title.id, state.detail || local, local);
+        var recent = canonical ? (canonical.baseEpisode || canonical) : core.lastWatchedEpisode(core.readHistory(local), state.title.id);
+        var resumable = canonical && !canonical.isNextUnwatched && canonical.progress && canonical.manualWatched !== true
+          && (!canonical.progress.completed || canonical.manualWatched === false)
+          ? canonical.progress : null;
+        var completed = canonical ? canonical.completed : (recent && (recent.manualWatched === true || recent.progress
+          && recent.progress.completed && recent.manualWatched !== false));
+        if (completed && (!canonical || !canonical.isNextUnwatched)) resolveNextContinue(recent);
+        var next = canonical && canonical.isNextUnwatched ? canonical
+          : (completed && nextContinue && nextContinue.status === "ready" ? nextContinue.target : null);
+        var noNext = canonical ? canonical.isFinished
+          : (completed && nextContinue && nextContinue.status === "unavailable");
+        var targetSeason = canonical ? canonical.season : (next ? next.season : (recent ? recent.season : state.season));
+        var targetEpisode = canonical ? canonical.episode : (next ? next.episode : (recent ? recent.episode : (state.episodes.length ? state.episodes[0].number : 1)));
+        var targetTitle = canonical ? (canonical.episodeTitle || canonical.title) : (next ? next.title : "");
+
+        var primary = detailAction(resumable ? "Resume S" + targetSeason + " E" + targetEpisode
+          : next ? "Continue S" + targetSeason + " E" + targetEpisode
             : noNext ? "Episodes" : completed ? "Checking next episode…"
-              : recent ? "Continue S" + recent.season + " E" + recent.episode : "Start watching",
+              : recent ? "Continue S" + targetSeason + " E" + targetEpisode : "Start watching",
           function () {
             if (next) launchEpisode(next.season, next.episode, false, next.title);
             else if (noNext) browseEpisodes();
@@ -1933,10 +1941,10 @@
             else if (state.season && state.episodes.length) launchEpisode(state.season, state.episodes[0].number);
           }, "detail-primary", "primary");
         primary.disabled = completed && !next && !noNext || !recent && !state.episodes.length;
-        primary.setAttribute("aria-label", resumable ? "Resume Season " + recent.season + ", Episode " + recent.episode
-          : next ? "Continue with Season " + next.season + ", Episode " + next.episode
+        primary.setAttribute("aria-label", resumable ? "Resume Season " + targetSeason + ", Episode " + targetEpisode
+          : next ? "Continue with Season " + targetSeason + ", Episode " + targetEpisode
           : noNext ? "Choose an episode" : completed ? "Checking for the next episode"
-          : recent ? "Continue Season " + recent.season + ", Episode " + recent.episode
+          : recent ? "Continue Season " + targetSeason + ", Episode " + targetEpisode
           : state.episodes.length ? "Play Season " + state.season + ", Episode " + state.episodes[0].number
             : "Start watching when episode metadata loads");
         if (!recent && state.episodes.length) primary.textContent = "Play S" + state.season + " E" + state.episodes[0].number;
@@ -2158,6 +2166,7 @@
       if (url && handoff) url += "&handoffAt=" + Date.now();
       if (!url) { text("detail-status", "Invalid episode selection."); return; }
       if (startOver) core.clearProgress(local, "tv", state.title.id, season, episode);
+      core.writeActiveEpisode(local, state.title.id, { season: season, episode: episode, at: Date.now() });
       launchingEpisode = true;
       saveView();
       try { nav.assign(url);
@@ -2649,6 +2658,20 @@
           core.writeHistory(local, core.item("tv", returned.id,
             old && old.title || returned.showTitle || "TV Show", returned.season, returned.episode,
             returned.subtitle, Date.now(), returnedArtwork));
+          if (acceptedEpisodeProgress) {
+            core.writeActiveEpisode(local, returned.id, {
+              season: returned.season,
+              episode: returned.episode,
+              at: acceptedEpisodeProgress.updatedAt || Date.now()
+            });
+          }
+        }
+        if (!core.readEpisodeCatalog(local, returned.id)) {
+          api("/api/title/tv/" + returned.id).then(function (detail) {
+            if (detail && core.writeEpisodeCatalog(local, returned.id, detail.seasons)) {
+              if (state.view === "watch") renderHomepage();
+            }
+          }, function () {});
         }
       }
       if (returnedMovie) {

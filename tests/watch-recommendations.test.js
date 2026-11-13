@@ -81,6 +81,59 @@ test("empty history uses ranked popular fallback, with no invented personal reas
   { now }).length, 0);
 });
 
+test("taste profile ignores brief starts and short ambiguous media, caps series repetition", () => {
+  const brief = core.item("tv", 9, "Brief", 1, 1, "off", now, { progress: {
+    position: 12, duration: 1300, updatedAt: now, provider: "vidbolt", completed: false } });
+  const ad = core.item("tv", 10, "Short timeline", 1, 1, "off", now, { progress: {
+    position: 22, duration: 22, updatedAt: now, provider: "vidbolt", completed: true } });
+  const episodes = Array.from({ length: 30 }, (_, i) => row("tv", 11, "Long show", now - i * 1000,
+    i === 0, 1, i + 1));
+  const profile = engine.tasteProfile([brief, ad, ...episodes], { ratings: {} },
+    { seeds: [{ type: "tv", id: 11, genreIds: [35], keywordIds: [123] }] }, now);
+  assert.equal(profile.positive.length, 1);
+  assert.equal(profile.positive[0].count, 3);
+  assert.ok(profile.positive[0].strength < 34);
+  assert.ok(profile.genres["tv:35"] > 0 && profile.keywords["tv:123"] > 0);
+});
+
+test("resetting recommendation choices preserves playback history and rejects future schemas", () => {
+  const storage = store();
+  core.writeHistory(storage, row("movie", 1, "A", now));
+  const historyBefore = storage.getItem(core.HISTORY_KEY);
+  engine.setFeedback(storage, "movie", 1, "liked");
+  assert.equal(engine.resetFeedback(storage), true);
+  assert.equal(Object.keys(engine.readFeedback(storage).ratings).length, 0);
+  assert.equal(storage.getItem(core.HISTORY_KEY), historyBefore);
+  assert.equal(engine.readFeedback(storage).revision, 2);
+  const future = store({ [engine.FEEDBACK_KEY]: JSON.stringify({ version: 9, ratings: {} }) });
+  assert.equal(engine.resetFeedback(future), false);
+});
+
+test("Love It changes the same candidate pool and reset restores deterministic order", () => {
+  const storage = store();
+  const payload = { seeds: [{ type: "movie", id: 1, title: "Comedy seed", genreIds: [35] }],
+    candidates: [candidate("movie", 2, "Related", [35], [source("recommendation", "movie:1")]),
+      candidate("movie", 3, "Popular", [18], [{ kind: "trending" }], { popularity: 250 })] };
+  const baseline = engine.rank([], engine.readFeedback(storage), payload, { now }).map(item => item.id);
+  engine.setFeedback(storage, "movie", 1, "liked");
+  const liked = engine.rank([], engine.readFeedback(storage), payload, { now }).map(item => item.id);
+  assert.equal(liked[0], 2);
+  assert.notDeepEqual(liked, baseline);
+  engine.resetFeedback(storage);
+  assert.deepEqual(engine.rank([], engine.readFeedback(storage), payload, { now }).map(item => item.id), baseline);
+});
+
+test("generic For You rows exclude watched and duplicate identities", () => {
+  const watched = row("movie", 1, "Watched", now);
+  const payload = { seeds: [], candidates: [candidate("movie", 1, "Watched", [18]),
+    candidate("movie", 2, "Duplicate", [18]), candidate("movie", 2, "Duplicate", [18]),
+    candidate("movie", 3, "Other", [35])] };
+  const result = engine.selectRows([watched], { ratings: {} }, payload, { now });
+  const groups = [result.forYou.top, result.forYou.trending, result.forYou.gems, result.forYou.explore];
+  groups.forEach(group => assert.equal(new Set(group.map(item => item.type + ":" + item.id)).size, group.length));
+  assert.equal(groups.flat().some(item => item.id === 1), false);
+});
+
 test("one verified watch is moderate evidence; unverified launches and missing progress are not", () => {
   const watched = row("movie", 1, "Seed", now - 86400000);
   const launch = core.item("movie", 5, "Only opened", null, null, "off", now);

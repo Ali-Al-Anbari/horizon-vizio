@@ -1702,6 +1702,24 @@
       var rows = core.readHistory(local), visible = core.homepageContinueCandidates(rows, local);
       var continueHost = get("settings-continue"), historyHost = get("settings-history");
       continueHost.replaceChildren(); historyHost.replaceChildren();
+      var tasteHost = get("settings-taste");
+      tasteHost.replaceChildren();
+      var tasteRatings = recommendations && recommendations.readFeedback(local).ratings || {};
+      var tasteLine = doc.createElement("div"); tasteLine.className = "settings-entry";
+      var tasteLabel = doc.createElement("span");
+      tasteLabel.textContent = Object.keys(tasteRatings).length + " saved Love It / Not Interested choices";
+      tasteLine.appendChild(tasteLabel);
+      var confirmTasteReset = false;
+      tasteLine.appendChild(button("Reset recommendation choices", function () {
+        if (!confirmTasteReset) { confirmTasteReset = true;
+          this.textContent = "Confirm reset choices"; focus(this); return; }
+        if (recommendations && recommendations.resetFeedback(local)) {
+          recommendationLoadedSignature = "";
+          renderSettings(); refreshRecommendations();
+          focus(get("settings-taste").querySelector("button"));
+        }
+      }));
+      tasteHost.appendChild(tasteLine);
       if (!visible.length) { var empty = doc.createElement("p"); empty.textContent = "No unfinished titles saved.";
         continueHost.appendChild(empty); }
       visible.forEach(function (row) {

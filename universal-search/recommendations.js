@@ -43,16 +43,40 @@
       return true;
     } catch (_error) { return false; }
   }
+  // Feedback is independent of history and the active episode pointer.
+  function resetFeedback(storage) {
+    try {
+      var raw = storage && storage.getItem(FEEDBACK_KEY);
+      if (!storage) return false;
+      if (raw) {
+        var stored;
+        try { stored = JSON.parse(raw); } catch (_error) { stored = null; }
+        if (stored && stored.version !== 1) return false;
+      }
+      var current = readFeedback(storage);
+      storage.setItem(FEEDBACK_KEY, JSON.stringify({ version: 1,
+        revision: current.revision + 1, ratings: {} }));
+      return true;
+    } catch (_error) { return false; }
+  }
+  var TASTE_WEIGHTS = { movieSeconds: 600, episodeSeconds: 300,
+    minimumFraction: 0.1, repeatCap: 3, completionBonus: 4, love: 34 };
+  function meaningful(progress, type) {
+    return progress.duration >= 60 && progress.position >= 60
+      && (progress.position >= (type === "movie" ? TASTE_WEIGHTS.movieSeconds : TASTE_WEIGHTS.episodeSeconds)
+        || progress.position / progress.duration >= TASTE_WEIGHTS.minimumFraction);
+  }
   function signals(history, feedback, now) {
     var byKey = {};
     (Array.isArray(history) ? history : []).forEach(function (row) {
       var identity = row && key(row.type, row.id);
       // Only validated VidBolt progress is evidence. A launch, import, or missing progress is not.
       var progress = row && core.progressRecord(row.progress);
-      if (!identity || !progress || progress.updatedAt > now + 86400000) return;
+      if (!identity || !progress || !meaningful(progress, row.type)
+          || progress.updatedAt > now + 86400000) return;
       var signal = byKey[identity] || (byKey[identity] = { type: row.type, id: row.id,
         title: row.title || "", count: 0, completed: false, lastAt: 0 });
-      signal.count += 1; // Distinct verified TV episodes; history collapses repeat movie plays.
+      signal.count = Math.min(TASTE_WEIGHTS.repeatCap, signal.count + 1);
       signal.lastAt = Math.max(signal.lastAt, progress.updatedAt);
       signal.completed = signal.completed || progress.completed === true || row.manualWatched === true;
     });
@@ -61,8 +85,9 @@
       return ratings[identity] !== "disliked";
     }).map(function (identity) {
       var item = byKey[identity], ageDays = Math.max(0, (now - item.lastAt) / 86400000);
-      item.strength = (12 + Math.min(6, Math.max(0, item.count - 1) * 2)
-        + (item.completed ? 4 : 0)) * (0.5 + 0.5 * Math.exp(-ageDays / 90));
+      item.strength = (12 + Math.max(0, item.count - 1) * 2
+        + (item.completed ? TASTE_WEIGHTS.completionBonus : 0))
+        * (0.5 + 0.5 * Math.exp(-ageDays / 90));
       return item;
     });
     Object.keys(ratings).forEach(function (identity) {
@@ -70,12 +95,29 @@
       var parts = identity.split(":"), item = byKey[identity];
       if (!item) { item = { type: parts[0], id: Number(parts[1]), title: "", count: 0,
         completed: false, lastAt: 0 }; positives.push(item); }
-      item.strength = 34 + Math.min(6, item.strength || 0);
+      item.strength = TASTE_WEIGHTS.love + Math.min(6, item.strength || 0);
       item.liked = true;
     });
     positives.sort(function (a, b) { return b.strength - a.strength || b.lastAt - a.lastAt
       || (a.type + ":" + a.id).localeCompare(b.type + ":" + b.id); });
     return positives;
+  }
+  function tasteProfile(history, feedback, payload, now) {
+    var positive = signals(history, feedback, Number.isFinite(now) ? now : Date.now());
+    var details = Array.isArray(payload && payload.seeds) ? payload.seeds : [];
+    var genres = {}, keywords = {};
+    positive.forEach(function (item) {
+      var detail = details.find(function (row) { return row.type === item.type && row.id === item.id; });
+      if (!detail) return;
+      (detail.genreIds || []).forEach(function (id) { var k = item.type + ":" + id;
+        genres[k] = Math.min(3, (genres[k] || 0) + item.strength / 34); });
+      (detail.keywordIds || []).forEach(function (id) { var k = item.type + ":" + id;
+        keywords[k] = Math.min(3, (keywords[k] || 0) + item.strength / 34); });
+    });
+    return { positive: positive, negative: Object.keys(feedback && feedback.ratings || {}).filter(function (k) {
+      return feedback.ratings[k] === "disliked";
+    }).sort(), genres: genres, keywords: keywords,
+      confidence: Math.min(1, positive.reduce(function (sum, item) { return sum + item.strength; }, 0) / 80) };
   }
   function seedQuery(history, feedback, now) {
     return signals(history, feedback, now).slice(0, 3).map(function (item) {
@@ -92,17 +134,15 @@
     var now = Number.isFinite(options.now) ? options.now : Date.now();
     var limit = Math.max(0, Math.min(24, Number.isInteger(options.limit) ? options.limit : 12));
     var rows = Array.isArray(history) ? history : [], ratings = feedback && feedback.ratings || {};
-    var positive = signals(rows, feedback, now), seeds = {};
+    var profile = tasteProfile(rows, feedback, payload, now);
+    var positive = profile.positive, seeds = {};
     positive.forEach(function (item) { seeds[item.type + ":" + item.id] = item; });
-    var genreWeight = {}, keywordWeight = {}, negativeGenres = {}, negativeKeywords = {};
+    var genreWeight = profile.genres, keywordWeight = profile.keywords,
+      negativeGenres = {}, negativeKeywords = {};
     (payload && Array.isArray(payload.seeds) ? payload.seeds : []).forEach(function (seed) {
       var signal = seeds[key(seed.type, seed.id)];
       if (!signal) return;
       signal.title = signal.title || seed.title || "";
-      (seed.genreIds || []).forEach(function (id) { var feature = seed.type + ":" + id;
-        genreWeight[feature] = (genreWeight[feature] || 0) + signal.strength / 34; });
-      (seed.keywordIds || []).forEach(function (id) { var feature = seed.type + ":" + id;
-        keywordWeight[feature] = (keywordWeight[feature] || 0) + signal.strength / 34; });
     });
     var knownAvoids = {};
     (payload && Array.isArray(payload.avoids) ? payload.avoids : []).forEach(function (avoid) {
@@ -256,6 +296,20 @@
         break;
       }
     }
+    // Generic rows share the same eligibility rules as ranked rows. Keep the
+    // original candidate pool above so duplicate source relationships can merge.
+    var inHistory = {}, seenCandidates = {};
+    (Array.isArray(history) ? history : []).forEach(function (row) {
+      var identity = row && key(row.type, row.id);
+      if (identity && (row.manualWatched === true || core.progressRecord(row.progress))) inHistory[identity] = true;
+    });
+    candidates = candidates.filter(function (candidate) {
+      var identity = candidate && key(candidate.type, candidate.id);
+      if (!identity || seenCandidates[identity] || inHistory[identity]
+          || ratings[identity] === "disliked" || ratings[identity] === "liked") return false;
+      seenCandidates[identity] = true;
+      return true;
+    });
 
     // For You additional rows
     var forYouReserved = {};
@@ -435,6 +489,8 @@
     return (await loadBundle(storage, fetcher, options)).results;
   }
   root.HorizonWatchRecommendations = { FEEDBACK_KEY: FEEDBACK_KEY, readFeedback: readFeedback,
-    setFeedback: setFeedback, signals: signals, seedQuery: seedQuery, avoidQuery: avoidQuery,
+    setFeedback: setFeedback, resetFeedback: resetFeedback, signals: signals,
+    tasteProfile: tasteProfile, TASTE_WEIGHTS: TASTE_WEIGHTS,
+    seedQuery: seedQuery, avoidQuery: avoidQuery,
     rank: rank, selectRows: selectRows, load: load, loadBundle: loadBundle, GENRE_NAMES: GENRE_NAMES };
 })(typeof window !== "undefined" ? window : globalThis);

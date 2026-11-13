@@ -320,7 +320,8 @@ test("Discover Rendering: Titles without posters retain valid title and fallback
     targetMedia: "both"
   });
 
-  const artless = ranked.closest.find(c => c.id === 991122);
+  const artless = [ranked.closest, ranked.vibe, ranked.genre, ranked.gems]
+    .flat().find(c => c.id === 991122);
   assert.ok(artless, "Candidate without poster must NOT be dropped from recommendations");
   assert.equal(artless.title, "Artless Mystery");
   assert.equal(artless.poster, null);

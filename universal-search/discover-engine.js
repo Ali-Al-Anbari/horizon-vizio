@@ -41,9 +41,10 @@
     10766: "Soap", 10767: "Talk", 10768: "War & Politics", 10770: "TV Movie"
   };
 
-  // Distinctive genres receive higher weight in genre matching than generic drama/comedy
+  // Distinctive genres receive higher weight in genre matching than generic drama/comedy.
+  // Animation (16) is a presentation style, not a similarity genre.
   var GENRE_WEIGHTS = {
-    878: 1.5, 10765: 1.5, 27: 1.4, 9648: 1.3, 16: 1.3, 14: 1.2, 37: 1.2,
+    878: 1.5, 10765: 1.5, 27: 1.4, 9648: 1.3, 14: 1.2, 37: 1.2,
     80: 1.1, 10759: 1.1, 28: 1.1, 12: 1.1, 10752: 1.1, 10768: 1.1,
     99: 1.0, 10402: 1.0, 10751: 1.0, 10762: 1.0, 10749: 0.9, 36: 0.9,
     18: 0.7, 35: 0.7
@@ -110,8 +111,10 @@
   }
 
   function genreOverlapSimilarity(seedGenres, candidateGenres) {
-    var sG = Array.isArray(seedGenres) ? seedGenres : [];
-    var cG = Array.isArray(candidateGenres) ? candidateGenres : [];
+    // Animation (genre 16) describes presentation style, not thematic similarity.
+    // Exclude genre 16 from similarity calculations so unrelated animated titles are not matched.
+    var sG = (Array.isArray(seedGenres) ? seedGenres : []).filter(function (g) { return Number(g) !== 16; });
+    var cG = (Array.isArray(candidateGenres) ? candidateGenres : []).filter(function (g) { return Number(g) !== 16; });
     if (!sG.length || !cG.length) return 0;
     var sSet = new Set(sG), cSet = new Set(cG);
     var intersectionWeight = 0, unionWeight = 0;
@@ -173,9 +176,11 @@
 
   function generateMatchReason(seed, candidate, breakdown) {
     if (!breakdown) {
+      var hasSem = typeof candidate.semanticSim === "number" && Number.isFinite(candidate.semanticSim) && candidate.semanticSim >= 0;
       breakdown = {
         creator: creatorOverlap(seed, candidate),
-        synopsis: textCosineSimilarity(seed.overview, candidate.overview)
+        synopsis: textCosineSimilarity(seed.overview, candidate.overview),
+        semantic: hasSem ? candidate.semanticSim : null
       };
     }
     if (breakdown.creator && breakdown.creator.name) {
@@ -184,46 +189,40 @@
       if (breakdown.creator.role === "cast") return "Starring " + breakdown.creator.name;
     }
     var seedKeywords = Array.isArray(seed.keywords) ? seed.keywords : [];
-    var candKeywords = Array.isArray(candidate.keywords) ? candidate.keywords : [];
+    var candKeywords = Array.isArray(candidate.keywords) && candidate.keywords.length
+      ? candidate.keywords : candidate.keywordIds || [];
     var sharedKwNames = [];
     seedKeywords.forEach(function (sk) {
       var skName = typeof sk === "object" ? sk.name : String(sk);
       var skId = typeof sk === "object" ? sk.id : null;
       if (candKeywords.some(function (ck) {
         var ckName = typeof ck === "object" ? ck.name : String(ck);
-        var ckId = typeof ck === "object" ? ck.id : null;
+        var ckId = typeof ck === "object" ? ck.id : Number.isInteger(ck) ? ck : null;
         return (skId && ckId && skId === ckId) || (skName && ckName && skName.toLowerCase() === ckName.toLowerCase());
       })) {
         sharedKwNames.push(skName);
       }
     });
     if (sharedKwNames.length >= 2) {
-      return "Themes: " + sharedKwNames.slice(0, 2).join(", ");
+      return "Shares themes: " + sharedKwNames.slice(0, 2).join(", ");
     }
-    if (sharedKwNames.length === 1 && breakdown.synopsis >= 0.2) {
+    if (sharedKwNames.length === 1 && (breakdown.keyword >= 0.25
+        || (breakdown.keyword >= 0.12 && breakdown.genre >= 0.35 && breakdown.synopsis >= 0.08))) {
       return "Shares theme: " + sharedKwNames[0];
     }
-    var seedG = Array.isArray(seed.genres) ? seed.genres : [];
-    var candG = Array.isArray(candidate.genres) ? candidate.genres : [];
-    var sGNames = seedG.map(function (g) { return typeof g === "object" ? g.name : GENRE_NAMES[g] || String(g); });
-    var cGNames = candG.map(function (g) { return typeof g === "object" ? g.name : GENRE_NAMES[g] || String(g); });
-    var sharedG = sGNames.filter(function (g) { return cGNames.includes(g); });
+    if (breakdown.semantic >= 0.65) return "Shares thematic atmosphere";
+    if (breakdown.synopsis >= 0.3) return "Similar plot descriptions";
+    if (breakdown.semantic >= 0.52) return "Similar plot concepts";
+    var mappedGenres = mapGenres(seed.type, candidate.type, (seed.genreIds || []).filter(function (id) { return Number(id) !== 16; }));
+    var sharedG = (candidate.genreIds || []).filter(function (id) { return Number(id) !== 16 && mappedGenres.includes(id); })
+      .map(function (id) { return GENRE_NAMES[id] || ""; }).filter(Boolean);
     if (sharedG.length >= 2) {
-      return "Matches " + sharedG.slice(0, 2).join(" & ");
-    }
-    if (sharedG.length === 1 && breakdown.synopsis >= 0.25) {
-      return "Similar " + sharedG[0].toLowerCase() + " atmosphere";
-    }
-    if (breakdown.synopsis >= 0.3) {
-      return "Similar premise & atmosphere";
+      return "Shares " + sharedG.slice(0, 2).join(" and ") + " genres";
     }
     if (sharedG.length === 1) {
       return "Shares " + sharedG[0] + " genre";
     }
-    if (breakdown.quality >= 0.75 && (candidate.voteCount || 0) <= 5000) {
-      return "Acclaimed hidden gem (" + (candidate.voteAverage ? candidate.voteAverage.toFixed(1) + "/10" : "8+/10") + ")";
-    }
-    return "Recommended for fans of " + seed.title;
+    return breakdown.genre > 0 ? "Related genre discovery" : "Related title discovery";
   }
 
   function scoreCandidate(seed, candidate, options) {
@@ -235,6 +234,24 @@
     var sourceRel = sourceRelevance(candidate.sources || []);
     var quality = bayesianQuality(candidate.voteCount, candidate.voteAverage);
     var creator = creatorOverlap(seed, candidate);
+    var crossMedia = candidate.type !== seed.type;
+
+    var hasSemantic = typeof candidate.semanticSim === "number" && Number.isFinite(candidate.semanticSim) && candidate.semanticSim >= 0;
+    var semanticSim = hasSemantic ? Math.min(1, Math.max(0, candidate.semanticSim)) : 0;
+
+    var keywordEvidence = kwSim >= 0.25 || (kwSim >= 0.12 && genreSim >= 0.35 && synopsisSim >= 0.08);
+    var semanticEvidence = hasSemantic && semanticSim >= 0.50;
+    var contentEvidence = creator.score >= 0.7 || keywordEvidence || semanticEvidence
+      || (synopsisSim >= 0.18 && genreSim >= 0.2)
+      || (crossMedia && kwSim >= 0.05 && genreSim >= 0.65 && synopsisSim >= 0.03);
+    var strongSource = sourceRel >= 0.94 || (candidate.sources || []).some(function (source) {
+      return source.kind === "similar" && Number.isInteger(source.rank) && source.rank <= 2;
+    });
+    var strongSameMediaSource = !crossMedia && strongSource && genreSim >= 0.55
+      && (candidate.genreIds || []).filter(function (id) { return Number(id) !== 16 && seedMappedGenres.includes(id); }).length >= 2;
+    // Cross-media retrieval alone is not a title-level similarity signal.
+    if (crossMedia) sourceRel *= 0.2 + 0.8 * Math.min(1,
+      2 * kwSim + 2 * synopsisSim + 0.5 * creator.score + 0.25 * genreSim + (hasSemantic ? 0.5 * semanticSim : 0));
 
     var ratings = options.feedback && options.feedback.ratings || {};
     var candKey = candidate.type + ":" + candidate.id;
@@ -242,23 +259,44 @@
     if (ratings[candKey] === "disliked") pref = -1.0;
 
     // Closest match baseline weights: 25% kw, 25% source, 20% genre, 15% synopsis, 5% creator, 5% quality, 5% pref
-    var closest = (0.25 * kwSim) + (0.25 * sourceRel) + (0.20 * genreSim)
-      + (0.15 * synopsisSim) + (0.05 * creator.score) + (0.05 * quality) + pref;
+    // When semantic embeddings are present, blend at 35% weight per benchmark findings
+    var closest;
+    if (hasSemantic) {
+      closest = (0.35 * semanticSim) + (0.20 * sourceRel) + (0.15 * kwSim) + (0.15 * genreSim)
+        + (0.05 * synopsisSim) + (0.05 * creator.score) + (0.05 * quality) + pref;
+    } else {
+      closest = (0.25 * kwSim) + (0.25 * sourceRel) + (0.20 * genreSim)
+        + (0.15 * synopsisSim) + (0.05 * creator.score) + (0.05 * quality) + pref;
+    }
+    if (!contentEvidence && !strongSameMediaSource) closest = 0;
 
     // Same vibe: heavy plot themes, keywords, narrative atmosphere
-    var vibe = (0.35 * kwSim) + (0.35 * synopsisSim) + (0.15 * sourceRel) + (0.10 * genreSim) + (0.05 * quality) + pref;
-    // Vibe requires thematic connection (keywords or synopsis)
-    if (kwSim < 0.05 && synopsisSim < 0.12 && !creator.name) vibe *= 0.3;
+    var vibe;
+    if (hasSemantic) {
+      vibe = (0.40 * semanticSim) + (0.20 * kwSim) + (0.15 * synopsisSim) + (0.15 * sourceRel) + (0.05 * genreSim) + (0.05 * quality) + pref;
+    } else {
+      vibe = (0.35 * kwSim) + (0.35 * synopsisSim) + (0.15 * sourceRel) + (0.10 * genreSim) + (0.05 * quality) + pref;
+    }
+    // Vibe requires thematic connection (keywords, synopsis, or semantic similarity)
+    var vibeThematic = creator.score >= 0.7 || keywordEvidence || (hasSemantic && semanticSim >= 0.48)
+      || synopsisSim >= 0.15 || (kwSim >= 0.05 && genreSim >= 0.65 && synopsisSim >= 0.04);
+    if (!vibeThematic) vibe = 0;
 
-    // Same genre, different story: high genre, low synopsis/keyword overlap
-    var genreDiffStory = (0.50 * genreSim) + (0.25 * quality) + (0.25 * sourceRel) - (0.20 * synopsisSim) - (0.15 * kwSim) + pref;
+    // Same genre, different story: high genre, low synopsis/keyword/semantic overlap
+    var genreDiffStory;
+    if (hasSemantic) {
+      genreDiffStory = (0.50 * genreSim) + (0.25 * quality) + (0.25 * sourceRel) - (0.15 * semanticSim) - (0.10 * synopsisSim) - (0.10 * kwSim) + pref;
+    } else {
+      genreDiffStory = (0.50 * genreSim) + (0.25 * quality) + (0.25 * sourceRel) - (0.20 * synopsisSim) - (0.15 * kwSim) + pref;
+    }
     if (genreSim < 0.3) genreDiffStory = -1; // Must belong to same genre family
 
     // Hidden gems: high quality, moderate relevance, lower popularity/vote count
     var vCount = Number(candidate.voteCount) || 0;
     var vAvg = Number(candidate.voteAverage) || 0;
     var gems = 0;
-    var gemEligible = (vAvg >= 7.0 && vCount >= 20 && vCount <= 6000 && (kwSim > 0 || genreSim > 0.2 || sourceRel > 0.3));
+    var gemEligible = (vAvg >= 7.0 && vCount >= 20 && vCount <= 6000
+      && (contentEvidence || (genreSim >= 0.45 && (kwSim >= 0.05 || synopsisSim >= 0.05 || (hasSemantic && semanticSim >= 0.45)))));
     if (gemEligible) {
       var obscurityBonus = Math.max(0, 1 - (vCount / 6000)) * 0.3;
       gems = (0.35 * quality) + (0.25 * genreSim) + (0.20 * sourceRel) + (0.10 * kwSim) + obscurityBonus + pref;
@@ -270,6 +308,7 @@
       keyword: kwSim,
       genre: genreSim,
       synopsis: synopsisSim,
+      semantic: hasSemantic ? semanticSim : null,
       source: sourceRel,
       quality: quality,
       creator: creator,
@@ -337,8 +376,71 @@
     return selected;
   }
 
+  function allocateDiscoverRows(scored, limit) {
+    var categories = ["closest", "vibe", "genreDiffStory", "gems"];
+    var lists = {}, maxScore = {}, choices = Object.create(null), assigned = Object.create(null);
+    var rows = { closest: [], vibe: [], genreDiffStory: [], gems: [] };
+    var byId = Object.create(null);
+    scored.forEach(function (item) { byId[item.candidate.type + ":" + item.candidate.id] = item; });
+    categories.forEach(function (category) {
+      var eligible = scored.filter(function (item) { return item.scores[category] > 0; });
+      // Four bounded candidate lists preserve the existing franchise rerank.
+      lists[category] = applyDiversityRerank(eligible, category, Math.min(eligible.length, limit * 4));
+      maxScore[category] = eligible.reduce(function (best, item) {
+        return Math.max(best, item.scores[category]); }, 0);
+      lists[category].forEach(function (item, index) {
+        var identity = item.type + ":" + item.id;
+        if (!choices[identity]) choices[identity] = [];
+        choices[identity].push({ category: category,
+          fit: item.discoverScore / maxScore[category] + 0.12 * (1 - index / lists[category].length) });
+      });
+    });
+    // Protect the strongest close matches, then place specialist candidates in
+    // their best relative category. Absolute category scores are not comparable.
+    lists.closest.slice(0, 2).forEach(function (item) {
+      var identity = item.type + ":" + item.id;
+      if (!assigned[identity] && rows.closest.length < limit) {
+        assigned[identity] = true; rows.closest.push(byId[identity]);
+      }
+    });
+    Object.keys(choices).map(function (identity) {
+      var fits = choices[identity].sort(function (a, b) { return b.fit - a.fit
+        || categories.indexOf(a.category) - categories.indexOf(b.category); });
+      return { identity: identity, fits: fits, margin: fits[0].fit - (fits[1] ? fits[1].fit : 0) };
+    }).sort(function (a, b) { return b.margin - a.margin || b.fits[0].fit - a.fits[0].fit
+      || a.identity.localeCompare(b.identity); }).forEach(function (entry) {
+      if (assigned[entry.identity]) return;
+      var fit = entry.fits.find(function (choice) { return rows[choice.category].length < limit; });
+      if (!fit) return;
+      assigned[entry.identity] = true;
+      rows[fit.category].push(byId[entry.identity]);
+    });
+    return { closest: applyDiversityRerank(rows.closest, "closest", limit),
+      vibe: applyDiversityRerank(rows.vibe, "vibe", limit),
+      genre: applyDiversityRerank(rows.genreDiffStory, "genreDiffStory", limit),
+      gems: applyDiversityRerank(rows.gems, "gems", limit) };
+  }
+
   function matchesDiscoverFilters(candidate, filters) {
     if (!filters) return true;
+    if (filters.style && filters.style !== "all") {
+      var hasGenreArray = Array.isArray(candidate.genreIds) && candidate.genreIds.length > 0;
+      var isAnimated = false;
+      if (hasGenreArray) {
+        isAnimated = candidate.genreIds.some(function (g) { return Number(g) === 16; });
+      } else if (Array.isArray(candidate.genres) && candidate.genres.length > 0) {
+        isAnimated = candidate.genres.some(function (g) {
+          return Number(g) === 16 || g === "Animation" || (typeof g === "object" && (Number(g.id) === 16 || g.name === "Animation"));
+        });
+        hasGenreArray = true;
+      }
+      if (!hasGenreArray) {
+        // Deliberate policy: unknown media is excluded when a specific style (animated or live_action) is selected.
+        return false;
+      }
+      if (filters.style === "animated" && !isAnimated) return false;
+      if (filters.style === "live_action" && isAnimated) return false;
+    }
     if (filters.genre && Array.isArray(candidate.genreIds)) {
       var requiredGenre = Number(filters.genre);
       if (!candidate.genreIds.includes(requiredGenre)) return false;
@@ -415,19 +517,15 @@
       return scoreCandidate(seed, candidate, options);
     });
 
-    var limit = options.limit || 12;
-
-    var closest = applyDiversityRerank(scored.filter(function (s) { return s.scores.closest > 0; }), "closest", limit);
-    var vibe = applyDiversityRerank(scored.filter(function (s) { return s.scores.vibe > 0; }), "vibe", limit);
-    var genre = applyDiversityRerank(scored.filter(function (s) { return s.scores.genreDiffStory > 0; }), "genreDiffStory", limit);
-    var gems = applyDiversityRerank(scored.filter(function (s) { return s.scores.gems > 0; }), "gems", limit);
+    var limit = Math.max(1, Math.min(24, options.limit || 12));
+    var allocated = allocateDiscoverRows(scored, limit);
 
     return {
       seed: seed,
-      closest: closest,
-      vibe: vibe,
-      genre: genre,
-      gems: gems,
+      closest: allocated.closest,
+      vibe: allocated.vibe,
+      genre: allocated.genre,
+      gems: allocated.gems,
       totalCandidates: validPool.length
     };
   }

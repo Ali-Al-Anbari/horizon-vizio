@@ -81,7 +81,8 @@
     };
     var tvFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
     var movieFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
-    var discoverFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
+    var discoverFilters = { genre: null, style: "all", sort: "best" };
+    var discoverStyle = "all";
     var discoverMode = "all";
     var discoverMedia = "same";
     var discoverHideFinished = true;
@@ -466,8 +467,8 @@
       }
 
       // On entering or returning to the first title: first poster at left gutter, nothing to the left
-      if (element === cards[0] && direction !== 1) {
-        if (attached[0] !== cards[0] || row.scrollLeft > 2) {
+      if (element === cards[0]) {
+        if (attached[0] !== cards[0] || row.scrollLeft > 2 || track.style.transform !== "") {
           var selected0 = [];
           for (var s0 = 0; s0 < windowSize; s0++) {
             selected0.push(cards[s0 % cards.length]);
@@ -687,17 +688,22 @@
         function () { if (token === homeOpenToken) openEpisode(null); });
     }
     function isFilterActive(tab) {
-      var f = tab === "tv" ? tvFilters : (tab === "movies" ? movieFilters : discoverFilters);
+      if (tab === "discover") {
+        return !!(discoverFilters.genre || (discoverFilters.style && discoverFilters.style !== "all"));
+      }
+      var f = tab === "tv" ? tvFilters : movieFilters;
       return !!(f.genre || f.length || f.rating || f.year || (f.sort && f.sort !== "best"));
     }
     function updateFilterStripUI() {
       var isTv = state.watchTab === "tv";
+      var isMovies = state.watchTab === "movies";
       var isDiscover = state.watchTab === "discover";
-      var f = isTv ? tvFilters : (state.watchTab === "movies" ? movieFilters : discoverFilters);
+      var f = isTv ? tvFilters : (isMovies ? movieFilters : discoverFilters);
 
       var seedBtn = get("filter-btn-seed");
       var modeBtn = get("filter-btn-mode");
       var mediaBtn = get("filter-btn-media");
+      var styleBtn = get("filter-btn-style");
       var finishedBtn = get("filter-btn-finished");
 
       if (seedBtn) {
@@ -707,13 +713,9 @@
           seedBtn.classList.add("is-active");
         }
       }
+      // Category (mode) filter removed from Discover per Phase 3C.4 specification
       if (modeBtn) {
-        modeBtn.hidden = !isDiscover;
-        if (isDiscover) {
-          var modeLabels = { all: "All Categories", closest: "Closest", vibe: "Same Vibe", genre: "Same Genre", gems: "Hidden Gems" };
-          modeBtn.textContent = "Category: " + (modeLabels[discoverMode] || "All Categories");
-          modeBtn.classList.toggle("is-active", discoverMode !== "all");
-        }
+        modeBtn.hidden = true;
       }
       if (mediaBtn) {
         mediaBtn.hidden = !isDiscover;
@@ -721,6 +723,14 @@
           var mediaLabels = { same: "Same Type", tv: "TV Shows", movie: "Movies", both: "Both" };
           mediaBtn.textContent = "Type: " + (mediaLabels[discoverMedia] || "Same Type");
           mediaBtn.classList.toggle("is-active", discoverMedia !== "same");
+        }
+      }
+      if (styleBtn) {
+        styleBtn.hidden = !isDiscover;
+        if (isDiscover) {
+          var styleLabels = { all: "Style: All", animated: "Style: Animated", live_action: "Style: Live Action" };
+          styleBtn.textContent = styleLabels[discoverStyle] || "Style: All";
+          styleBtn.classList.toggle("is-active", discoverStyle !== "all");
         }
       }
       if (finishedBtn) {
@@ -743,29 +753,42 @@
         genreBtn.textContent = genreName ? "Genre: " + genreName : "Genre";
         genreBtn.classList.toggle("is-active", !!f.genre);
       }
+      // Length, Rating, Year, Sort removed from Discover; preserved for TV and Movies
       if (lengthBtn) {
-        var lengthLabels = isTv
-          ? { short: "<30 min", medium: "30-60 min", long: ">60 min" }
-          : { short: "<90 min", medium: "90-120 min", long: ">120 min" };
-        lengthBtn.textContent = f.length ? "Length: " + (lengthLabels[f.length] || f.length) : "Length";
-        lengthBtn.classList.toggle("is-active", !!f.length);
+        lengthBtn.hidden = isDiscover;
+        if (!isDiscover) {
+          var lengthLabels = isTv
+            ? { short: "<30 min", medium: "30-60 min", long: ">60 min" }
+            : { short: "<90 min", medium: "90-120 min", long: ">120 min" };
+          lengthBtn.textContent = f.length ? "Length: " + (lengthLabels[f.length] || f.length) : "Length";
+          lengthBtn.classList.toggle("is-active", !!f.length);
+        }
       }
       if (ratingBtn) {
-        ratingBtn.textContent = f.rating ? "Rating: " + f.rating : "Age Rating";
-        ratingBtn.classList.toggle("is-active", !!f.rating);
+        ratingBtn.hidden = isDiscover;
+        if (!isDiscover) {
+          ratingBtn.textContent = f.rating ? "Rating: " + f.rating : "Age Rating";
+          ratingBtn.classList.toggle("is-active", !!f.rating);
+        }
       }
       if (yearBtn) {
-        var yearLabels = { "2020s": "2020s", "2010s": "2010s", "2000s": "2000s", "older": "Older" };
-        yearBtn.textContent = f.year ? "Year: " + (yearLabels[f.year] || f.year) : "Year";
-        yearBtn.classList.toggle("is-active", !!f.year);
+        yearBtn.hidden = isDiscover;
+        if (!isDiscover) {
+          var yearLabels = { "2020s": "2020s", "2010s": "2010s", "2000s": "2000s", "older": "Older" };
+          yearBtn.textContent = f.year ? "Year: " + (yearLabels[f.year] || f.year) : "Year";
+          yearBtn.classList.toggle("is-active", !!f.year);
+        }
       }
       if (sortBtn) {
-        var sortLabels = { best: "Best Match", popularity: "Popularity", rating: "Highest Rated", newest: "Newest" };
-        sortBtn.textContent = "Sort: " + (sortLabels[f.sort] || "Best Match");
-        sortBtn.classList.toggle("is-active", f.sort && f.sort !== "best");
+        sortBtn.hidden = isDiscover;
+        if (!isDiscover) {
+          var sortLabels = { best: "Best Match", popularity: "Popularity", rating: "Highest Rated", newest: "Newest" };
+          sortBtn.textContent = "Sort: " + (sortLabels[f.sort] || "Best Match");
+          sortBtn.classList.toggle("is-active", f.sort && f.sort !== "best");
+        }
       }
       if (clearBtn) {
-        var hasActive = isFilterActive(state.watchTab) || (isDiscover && (discoverMode !== "all" || discoverMedia !== "same" || !discoverHideFinished));
+        var hasActive = isFilterActive(state.watchTab) || (isDiscover && (discoverMode !== "all" || discoverMedia !== "same" || !discoverHideFinished || (discoverFilters.style && discoverFilters.style !== "all")));
         clearBtn.hidden = !hasActive;
       }
     }
@@ -805,14 +828,20 @@
         options.push({ label: "TV Shows Only", value: "tv" });
         options.push({ label: "Movies Only", value: "movie" });
         options.push({ label: "Both TV & Movies", value: "both" });
+      } else if (filterType === "style") {
+        options.push({ label: "All (Animated & Live Action)", value: "all" });
+        options.push({ label: "Animated", value: "animated" });
+        options.push({ label: "Live Action", value: "live_action" });
       } else if (filterType === "finished") {
         options.push({ label: "Hide Finished Titles", value: "true" });
         options.push({ label: "Show Finished Titles", value: "false" });
       } else if (filterType === "genre") {
         options.push({ label: "All Genres", value: "" });
-        var genreList = isTv
-          ? [[10759, "Action & Adventure"], [16, "Animation"], [35, "Comedy"], [80, "Crime"], [18, "Drama"], [9648, "Mystery"], [10765, "Sci-Fi & Fantasy"]]
-          : [[28, "Action"], [12, "Adventure"], [16, "Animation"], [35, "Comedy"], [80, "Crime"], [18, "Drama"], [27, "Horror"], [878, "Sci-Fi"], [53, "Thriller"]];
+        var genreList = state.watchTab === "discover"
+          ? [[28, "Action"], [12, "Adventure"], [35, "Comedy"], [80, "Crime"], [18, "Drama"], [27, "Horror"], [9648, "Mystery"], [878, "Sci-Fi"], [53, "Thriller"]]
+          : (isTv
+            ? [[10759, "Action & Adventure"], [16, "Animation"], [35, "Comedy"], [80, "Crime"], [18, "Drama"], [9648, "Mystery"], [10765, "Sci-Fi & Fantasy"]]
+            : [[28, "Action"], [12, "Adventure"], [16, "Animation"], [35, "Comedy"], [80, "Crime"], [18, "Drama"], [27, "Horror"], [878, "Sci-Fi"], [53, "Thriller"]]);
         genreList.forEach(function (g) { options.push({ label: g[1], value: String(g[0]) }); });
       } else if (filterType === "length") {
         options.push({ label: "Any Length", value: "" });
@@ -845,6 +874,7 @@
       var currentVal = filterType === "seed" ? (discoverActiveSeed ? (discoverActiveSeed.type + ":" + discoverActiveSeed.id) : "")
         : filterType === "mode" ? discoverMode
         : filterType === "media" ? discoverMedia
+        : filterType === "style" ? discoverStyle
         : filterType === "finished" ? (discoverHideFinished ? "true" : "false")
         : filterType === "genre" ? (f.genre ? String(f.genre) : "")
         : filterType === "length" ? (f.length || "")
@@ -898,6 +928,10 @@
         }
         discoverData = null;
         rowCycleIndex = Object.create(null);
+        tabRowMemory["discover"] = Object.create(null);
+        tabLastContent["discover"] = null;
+        homeRowMemory = Object.create(null);
+        homeLastContent = null;
         updateFilterStripUI();
         loadDiscoverData(true);
         var originatingSeed = get("filter-btn-seed");
@@ -923,6 +957,17 @@
         loadDiscoverData(true);
         var originatingMedia = get("filter-btn-media");
         if (originatingMedia) focus(originatingMedia);
+        return;
+      }
+      if (filterType === "style") {
+        discoverStyle = value || "all";
+        discoverFilters.style = discoverStyle;
+        closeFilterMenu();
+        rowCycleIndex = Object.create(null);
+        updateFilterStripUI();
+        renderDiscoverRows(discoverData);
+        var originatingStyle = get("filter-btn-style");
+        if (originatingStyle) focus(originatingStyle);
         return;
       }
       if (filterType === "finished") {
@@ -961,10 +1006,15 @@
       } else if (state.watchTab === "movies") {
         movieFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
       } else if (state.watchTab === "discover") {
-        discoverFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
+        discoverFilters = { genre: null, style: "all", sort: "best" };
+        discoverStyle = "all";
         discoverMode = "all";
         discoverMedia = "same";
         discoverHideFinished = true;
+        tabRowMemory["discover"] = Object.create(null);
+        tabLastContent["discover"] = null;
+        homeRowMemory = Object.create(null);
+        homeLastContent = null;
       }
       closeFilterMenu();
       rowCycleIndex = Object.create(null);
@@ -1028,12 +1078,15 @@
         card.homeEntry = { row: candidate, group: group };
         var title = doc.createElement("strong"); title.textContent = candidate.title;
         card.appendChild(verticalPosterArt(candidate, true)); card.appendChild(title);
+        var reasonEl = doc.createElement("small");
+        reasonEl.className = "card-match-reason";
         if (candidate.matchReason) {
-          var reasonEl = doc.createElement("small");
-          reasonEl.className = "card-match-reason";
           reasonEl.textContent = candidate.matchReason;
-          card.appendChild(reasonEl);
+        } else {
+          reasonEl.textContent = "\u00A0";
+          reasonEl.style.visibility = "hidden";
         }
+        card.appendChild(reasonEl);
         card.setAttribute("aria-label", candidate.title + ", " + (candidate.type === "tv" ? "TV series" : "movie"));
         card.addEventListener("mouseenter", function () {
           if (state.view === "watch") showHomeHero(card.homeEntry);
@@ -1183,7 +1236,7 @@
         if (activeOrder.indexOf(group) < 0) {
           sec.hidden = true;
         } else if (group !== "continue" && group !== "recent" && group !== "filtered") {
-          sec.hidden = (homeCards[group] || []).length < 2;
+          sec.hidden = (homeCards[group] || []).length < (group.indexOf("discover-") === 0 ? 1 : 2);
         }
       });
       var first = false;
@@ -1375,6 +1428,11 @@
         backdrop: seedTitle.backdrop
       };
       discoverData = null;
+      tabRowMemory["discover"] = Object.create(null);
+      tabLastContent["discover"] = null;
+      homeRowMemory = Object.create(null);
+      homeLastContent = null;
+      rowCycleIndex = Object.create(null);
       if (state.view !== "watch") setView("watch");
       setWatchTab("discover");
     }
@@ -1480,6 +1538,7 @@
     }
     function renderDiscoverRows(data) {
       if (!data || !data.seed) return;
+      var previousDiscoverFocus = homeFocusIdentity(doc.activeElement);
       var rawSeed = data.seed;
       var seed = {
         type: rawSeed.type === "tv" ? "tv" : "movie",
@@ -1525,14 +1584,10 @@
       text("watch-discover-gems-heading", "Hidden Gems for Fans of " + seed.title);
 
       var emptySec = get("watch-filter-empty");
-      var anyResults = (discoverMode === "closest" ? closestList.length >= 2
-        : discoverMode === "vibe" ? vibeList.length >= 2
-        : discoverMode === "genre" ? genreList.length >= 2
-        : discoverMode === "gems" ? gemsList.length >= 2
-        : (closestList.length >= 2 || vibeList.length >= 2 || genreList.length >= 2 || gemsList.length >= 2));
+      var anyResults = (closestList.length > 0 || vibeList.length > 0 || genreList.length > 0 || gemsList.length > 0);
       if (emptySec) {
         if (!anyResults) {
-          var isFiltered = isFilterActive("discover") || discoverMode !== "all" || discoverMedia !== "same";
+          var isFiltered = isFilterActive("discover") || discoverMedia !== "same";
           var msg = isFiltered
             ? "No similar titles match the selected filters."
             : "No similar titles found for " + seed.title + ".";
@@ -1547,6 +1602,10 @@
       }
 
       updateHomeSections();
+      if (previousDiscoverFocus && previousDiscoverFocus.group.indexOf("discover-") === 0) {
+        var restored = resolveHomeSelection(previousDiscoverFocus);
+        if (restored) focus(restored);
+      }
     }
     function renderHomepage() {
       var rows = previewRows || core.readHistory(local);
@@ -2309,6 +2368,7 @@
           var optIdx = options.indexOf(current);
           if (key === "ArrowUp" && optIdx > 0) focus(options[optIdx - 1]);
           else if (key === "ArrowDown" && optIdx < options.length - 1) focus(options[optIdx + 1]);
+          else if (key === "ArrowLeft") closeFilterMenu();
           return;
         }
         if (current.id === "watch-filter-empty-clear") {

@@ -443,6 +443,38 @@ test("discover-similar: movie seed handles movie schema, director/cast credits, 
     "Cross-media query must translate movie genre 878 to TV genre 10765");
 });
 
+test("discover-similar: cross-media retrieval favors distinctive genre and avoids generic first keyword", async () => {
+  const calls = [];
+  const fetch = async url => {
+    const parsed = new URL(url); calls.push(parsed.pathname + parsed.search);
+    if (parsed.pathname === "/3/tv/95396") return new Response(JSON.stringify({
+      id: 95396, name: "Severance", genres: [{ id: 18, name: "Drama" },
+        { id: 9648, name: "Mystery" }, { id: 10765, name: "Sci-Fi & Fantasy" }],
+      keywords: { results: [{ id: 1438, name: "office" }, { id: 10937, name: "memory" }] }
+    }));
+    if (parsed.pathname === "/3/tv/2190") return new Response(JSON.stringify({
+      id: 2190, name: "South Park", genres: [{ id: 35, name: "Comedy" }, { id: 16, name: "Animation" }],
+      keywords: { results: [{ id: 1981, name: "colorado" },
+        { id: 8102, name: "elementary school" }, { id: 8201, name: "satire" }] }
+    }));
+    return new Response(JSON.stringify({ results: [] }));
+  };
+  const response = await api(req("/api/discover-similar?type=tv&id=95396&target=movie"), env, { fetch });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).candidates.length, 0);
+  const cross = calls.filter(path => path.startsWith("/3/discover/movie?"));
+  assert.equal(cross.length, 2, "request budget remains unchanged");
+  assert.ok(cross.every(path => path.includes("with_genres=878")));
+  assert.ok(cross.some(path => path.includes("with_keywords=10937")));
+  assert.ok(cross.every(path => !path.includes("with_keywords=1438")));
+  const southPark = await api(req("/api/discover-similar?type=tv&id=2190&target=movie"), env, { fetch });
+  assert.equal(southPark.status, 200);
+  const comedy = calls.filter(path => path.startsWith("/3/discover/movie?") && path.includes("with_genres=35"));
+  assert.equal(comedy.length, 2, "South Park targets story genre (Comedy 35), not Animation (16)");
+  assert.ok(comedy.some(path => path.includes("with_keywords=8201")));
+  assert.ok(calls.every(path => !path.includes("with_genres=16")), "Animation (16) does not dominate cross-media retrieval");
+});
+
 test("discover-similar: edge caching serves identical queries and distinguishes target/avoid parameter variations", async () => {
   const sReq = path => new Request("https://search.example" + path, { headers: { "cf-connecting-ip": "192.168.1.112" } });
   let fetchCount = 0;

@@ -246,7 +246,8 @@ test("Cross-media recommendation works bidirectionally", () => {
     hideFinished: false,
     targetMedia: "both"
   });
-  const movieInTv = scoredSev.closest.some(c => c.type === "movie");
+  const movieInTv = [scoredSev.closest, scoredSev.vibe, scoredSev.genre, scoredSev.gems]
+    .flat().some(c => c.type === "movie" && c.isRelevant);
   assert.ok(movieInTv, "TV seed (Severance) must surface relevant movie candidates in target=both");
 
   // 2. Movie seed (Dune) surfaces TV show (Arcane)
@@ -257,7 +258,8 @@ test("Cross-media recommendation works bidirectionally", () => {
     hideFinished: false,
     targetMedia: "both"
   });
-  const tvInMovie = scoredDune.closest.some(c => c.type === "tv");
+  const tvInMovie = [scoredDune.closest, scoredDune.vibe, scoredDune.genre, scoredDune.gems]
+    .flat().some(c => c.type === "tv" && c.isRelevant);
   assert.ok(tvInMovie, "Movie seed (Dune: Part Two) must surface relevant TV series candidates in target=both");
 });
 
@@ -302,9 +304,8 @@ test("Match reasons cite verifiable metadata without placeholder text", () => {
   });
 });
 
-test("Controlled Ranking Comparison: Hybrid scoring promotes relevant titles over noise on identical candidate pool", () => {
-  // Fair comparison methodology: evaluate both scoring approaches on the EXACT SAME candidate pool
-  // with independent ground-truth relevance labels for seed "Severance".
+test("Closest Matches omits weak titles rather than filling five slots on a labeled candidate pool", () => {
+  // These explicit title judgments are independent of the engine's score.
   const severanceSeed = SEED_BENCHMARKS.find(b => b.name === "Severance").seed;
 
   // 10 candidate pool representing mixed retrieval containing acclaimed relevant titles and noisy/unrelated titles
@@ -332,13 +333,6 @@ test("Controlled Ranking Comparison: Hybrid scoring promotes relevant titles ove
       keywords: [], overview: "Contestants answer pop culture trivia to win cash prizes.", source: "discovery", isRelevant: false }
   ];
 
-  // Baseline: Unweighted popularity ranking on this exact candidate pool
-  const popularityRanked = sharedCandidatePool.slice().sort((a, b) => b.popularity - a.popularity);
-  const baselineTop5 = popularityRanked.slice(0, 5);
-  const baselineRelevantInTop5 = baselineTop5.filter(c => c.isRelevant).length;
-  const baselinePrecisionAt5 = baselineRelevantInTop5 / 5;
-
-  // Horizon Hybrid Discovery engine on this exact candidate pool
   const hybridResult = engine.rankDiscoverCategories(severanceSeed, sharedCandidatePool, {
     feedback: { ratings: {} },
     history: [],
@@ -346,12 +340,9 @@ test("Controlled Ranking Comparison: Hybrid scoring promotes relevant titles ove
     targetMedia: "same"
   });
   const hybridTop5 = hybridResult.closest.slice(0, 5);
-  const hybridRelevantInTop5 = hybridTop5.filter(c => c.isRelevant).length;
-  const hybridPrecisionAt5 = hybridRelevantInTop5 / 5;
 
-  // Verify that on the SAME pool, hybrid scoring achieves strictly higher precision by penalizing
-  // off-genre noise and low-vote volatility
-  assert.ok(hybridPrecisionAt5 > baselinePrecisionAt5,
-    `Hybrid precision (${(hybridPrecisionAt5 * 100).toFixed(0)}%) must exceed popularity baseline (${(baselinePrecisionAt5 * 100).toFixed(0)}%) on the same candidate pool`);
-  assert.equal(hybridPrecisionAt5, 1.0, "All top 5 hybrid matches should be ground-truth relevant");
+  // Closest Matches may intentionally contain fewer than five titles. Do not
+  // count empty slots as irrelevant or force filler to improve a metric.
+  assert.ok(hybridTop5.length > 0);
+  assert.ok(hybridTop5.every(c => c.isRelevant), "Every displayed close match must be independently relevant");
 });

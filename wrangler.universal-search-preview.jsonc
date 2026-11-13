@@ -5,6 +5,8 @@
   "workers_dev": true,
   "keep_vars": true,
   "secrets": { "required": ["TMDB_TOKEN"] },
+  "vars": { "AI_RECOMMENDATIONS_MODE": "off" },
+  "ai": { "binding": "AI" },
   "assets": {
     "directory": "./universal-search",
     "binding": "ASSETS",

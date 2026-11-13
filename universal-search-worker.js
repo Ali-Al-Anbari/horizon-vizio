@@ -4,9 +4,283 @@ const buckets = new Map(); // Best-effort per-isolate guard; Cloudflare edge cac
 const searchCache = new Map();
 const recommendationCache = new Map();
 const discoverCache = new Map();
+const embeddingCache = new Map();
 const SEARCH_LIMIT = 18;
 const EXPANSIONS = "etaoinsh"; // Common next letters, including continuations such as t and h.
 const SEARCH_CACHE_MS = 5 * 60 * 1000;
+
+const GENRE_NAMES = {
+  12: "Adventure", 14: "Fantasy", 16: "Animation", 18: "Drama", 27: "Horror",
+  28: "Action", 35: "Comedy", 36: "History", 37: "Western", 53: "Thriller",
+  80: "Crime", 99: "Documentary", 878: "Sci-Fi", 9648: "Mystery", 10402: "Music",
+  10749: "Romance", 10751: "Family", 10752: "War", 10759: "Action & Adventure",
+  10762: "Kids", 10763: "News", 10764: "Reality", 10765: "Sci-Fi & Fantasy",
+  10766: "Soap", 10767: "Talk", 10768: "War & Politics", 10770: "TV Movie"
+};
+
+const aiCircuitBreaker = {
+  lockedUntil: 0,
+  reason: null,
+  code: null
+};
+
+function resetAiCircuitBreaker() {
+  aiCircuitBreaker.lockedUntil = 0;
+  aiCircuitBreaker.reason = null;
+  aiCircuitBreaker.code = null;
+}
+
+function nextUtcMidnightWithJitter() {
+  const d = new Date();
+  d.setUTCHours(24, 0, 0, 0);
+  return d.getTime() + Math.floor(Math.random() * 60000);
+}
+
+function cacheVector(key, vec) {
+  if (embeddingCache.size >= 250) {
+    embeddingCache.delete(embeddingCache.keys().next().value);
+  }
+  embeddingCache.set(key, vec);
+}
+
+function formatSemanticDoc(item) {
+  const name = String(item.title || item.name || "Untitled").trim();
+  const rawGenres = Array.isArray(item.genres) && item.genres.length
+    ? item.genres.map(g => (typeof g === "object" ? g.name : String(g)))
+    : Array.isArray(item.genreIds)
+      ? item.genreIds.map(id => GENRE_NAMES[id] || "")
+      : [];
+  // Animation (16) is a presentation style, not a thematic similarity genre.
+  const genres = rawGenres
+    .filter(g => g && g !== "Animation" && g !== "16")
+    .slice(0, 4)
+    .join(", ");
+  const keywords = Array.isArray(item.keywords) && item.keywords.length
+    ? item.keywords.map(k => typeof k === "object" ? k.name : String(k)).filter(Boolean).slice(0, 6).join(", ")
+    : "";
+  const plot = String(item.overview || "").trim();
+  const parts = [`Title: ${name}`];
+  if (genres) parts.push(`Genres: ${genres}`);
+  if (keywords) parts.push(`Themes: ${keywords}`);
+  if (plot) parts.push(`Plot: ${plot}`);
+  return parts.join(". ").slice(0, 800);
+}
+
+function vectorCosineSimilarity(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || a.length === 0) return 0;
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i], y = b[i];
+    dot += x * y;
+    normA += x * x;
+    normB += y * y;
+  }
+  if (normA <= 0 || normB <= 0) return 0;
+  const sim = dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  return Math.min(1, Math.max(0, sim));
+}
+
+function resolveAiMode(env, url, request, options = {}) {
+  const configured = String(env?.AI_RECOMMENDATIONS_MODE || "off").toLowerCase().trim();
+  const serverMode = ["on", "shadow", "off"].includes(configured) ? configured : "off";
+
+  // Programmatic internal option (e.g., test runner)
+  if (options && options.aiMode && ["on", "shadow", "off"].includes(options.aiMode)) {
+    return options.aiMode;
+  }
+
+  const queryAi = url ? url.searchParams.get("ai") : null;
+  if (!queryAi) return serverMode;
+
+  const requestedMode = queryAi.toLowerCase().trim();
+  if (!["on", "shadow", "off"].includes(requestedMode)) {
+    return null; // Malformed -> trigger 400 invalid_query
+  }
+
+  // Check if caller provides an authorized operator secret
+  const authHeader = request?.headers ? request.headers.get("x-horizon-ai-auth") : null;
+  const isAuthorized = Boolean(env?.AI_OVERRIDE_SECRET && authHeader && authHeader === env.AI_OVERRIDE_SECRET);
+
+  if (isAuthorized) return requestedMode;
+
+  // Unauthenticated public request:
+  // Can only de-escalate (e.g. "on" -> "off", "shadow" -> "off")
+  // Can NEVER escalate mode from "off" to "on"/"shadow", or "shadow" to "on"
+  if (serverMode === "off") {
+    return "off";
+  }
+  if (serverMode === "shadow" && requestedMode === "on") {
+    return "shadow";
+  }
+  return requestedMode;
+}
+
+async function applyAiEmbeddings(env, seed, candidates, effectiveAiMode) {
+  if (effectiveAiMode === "off" || !candidates || !candidates.length) {
+    return { mode: "off", status: "disabled" };
+  }
+
+  const now = Date.now();
+  if (now < aiCircuitBreaker.lockedUntil) {
+    return {
+      mode: effectiveAiMode,
+      status: "circuit_broken",
+      reason: aiCircuitBreaker.reason,
+      code: aiCircuitBreaker.code,
+      retryAfterMs: Math.max(0, aiCircuitBreaker.lockedUntil - now)
+    };
+  }
+
+  if (!env || !env.AI || typeof env.AI.run !== "function") {
+    return {
+      mode: effectiveAiMode,
+      status: "unavailable",
+      reason: "missing_ai_binding"
+    };
+  }
+
+  const startTime = Date.now();
+  const candidateLimit = 20; // Bounded batch for budget safety
+  const targetCandidates = candidates.slice(0, candidateLimit);
+
+  const seedKey = `v1:${seed.type}:${seed.id}:${(seed.overview || "").slice(0, 40)}`;
+  let seedVec = embeddingCache.get(seedKey);
+
+  const toFetch = [];
+  const textToIndex = new Map();
+  const fetchIndices = [];
+
+  if (!seedVec) {
+    const seedDoc = formatSemanticDoc(seed);
+    toFetch.push(seedDoc);
+    textToIndex.set(seedDoc, 0);
+    fetchIndices.push({ type: "seed", fetchIndex: 0 });
+  }
+
+  targetCandidates.forEach((cand, i) => {
+    const cKey = `v1:${cand.type}:${cand.id}:${(cand.overview || "").slice(0, 40)}`;
+    const cVec = embeddingCache.get(cKey);
+    if (cVec) {
+      cand._cachedVec = cVec;
+    } else {
+      const doc = formatSemanticDoc(cand);
+      let fIndex = textToIndex.get(doc);
+      if (fIndex === undefined) {
+        fIndex = toFetch.length;
+        toFetch.push(doc);
+        textToIndex.set(doc, fIndex);
+      }
+      fetchIndices.push({ type: "candidate", index: i, key: cKey, fetchIndex: fIndex });
+    }
+  });
+
+  if (toFetch.length > 0) {
+    let timer;
+    try {
+      const aiPromise = env.AI.run("@cf/baai/bge-small-en-v1.5", { text: toFetch });
+      const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("ai_inference_timeout")), 2500);
+      });
+      const res = await Promise.race([aiPromise, timeoutPromise]);
+      clearTimeout(timer);
+
+      let vectors = null;
+      if (Array.isArray(res?.data)) {
+        if (toFetch.length === 1 && typeof res.data[0] === "number") {
+          vectors = [res.data];
+        } else {
+          vectors = res.data;
+        }
+      }
+
+      if (!vectors || vectors.length !== toFetch.length) {
+        throw new Error("malformed_ai_response");
+      }
+
+      for (let k = 0; k < fetchIndices.length; k++) {
+        const item = fetchIndices[k];
+        const vec = vectors[item.fetchIndex];
+        if (!Array.isArray(vec) || !Number.isFinite(vec[0]) || vec.length !== 384) {
+          throw new Error("invalid_vector_dimensions");
+        }
+        if (item.type === "seed") {
+          seedVec = vec;
+          cacheVector(seedKey, vec);
+        } else {
+          targetCandidates[item.index]._cachedVec = vec;
+          cacheVector(item.key, vec);
+        }
+      }
+    } catch (err) {
+      if (timer) clearTimeout(timer);
+      const errMsg = String(err?.message || err);
+      const errCode = err?.code || (errMsg.includes("3036") ? 3036 : errMsg.includes("3040") ? 3040 : null);
+
+      let safeReason = "inference_error";
+      if (errCode === 3036 || errMsg.includes("allowance") || errMsg.includes("quota")) {
+        aiCircuitBreaker.lockedUntil = nextUtcMidnightWithJitter();
+        aiCircuitBreaker.reason = "quota_exhausted";
+        aiCircuitBreaker.code = 3036;
+        safeReason = "quota_exhausted";
+      } else if (errCode === 3040 || errMsg.includes("capacity") || errMsg.includes("429")) {
+        aiCircuitBreaker.lockedUntil = Date.now() + 60000;
+        aiCircuitBreaker.reason = "temporary_capacity";
+        aiCircuitBreaker.code = 3040;
+        safeReason = "temporary_capacity";
+      } else if (errMsg.includes("timeout")) {
+        aiCircuitBreaker.lockedUntil = Date.now() + 30000;
+        aiCircuitBreaker.reason = "timeout";
+        aiCircuitBreaker.code = "timeout";
+        safeReason = "timeout";
+      } else if (errMsg.includes("invalid_vector_dimensions") || errMsg.includes("malformed")) {
+        aiCircuitBreaker.lockedUntil = Date.now() + 30000;
+        aiCircuitBreaker.reason = "malformed_output";
+        aiCircuitBreaker.code = "malformed_output";
+        safeReason = "malformed_output";
+      } else {
+        aiCircuitBreaker.lockedUntil = Date.now() + 30000;
+        aiCircuitBreaker.reason = "inference_error";
+        aiCircuitBreaker.code = errCode || "inference_error";
+        safeReason = "inference_error";
+      }
+
+      targetCandidates.forEach(cand => { delete cand._cachedVec; });
+
+      return {
+        mode: effectiveAiMode,
+        status: "fallback_statistical",
+        reason: safeReason,
+        circuitLockedUntil: aiCircuitBreaker.lockedUntil
+      };
+    }
+  }
+
+  if (!seedVec) {
+    targetCandidates.forEach(cand => { delete cand._cachedVec; });
+    return { mode: effectiveAiMode, status: "fallback_statistical", reason: "missing_seed_vector" };
+  }
+
+  let scoredCount = 0;
+  targetCandidates.forEach(cand => {
+    const cVec = cand._cachedVec;
+    delete cand._cachedVec;
+    if (cVec) {
+      const sim = vectorCosineSimilarity(seedVec, cVec);
+      if (effectiveAiMode === "on") {
+        cand.semanticSim = Math.round(sim * 10000) / 10000;
+      }
+      scoredCount++;
+    }
+  });
+
+  return {
+    mode: effectiveAiMode,
+    status: "ok",
+    model: "@cf/baai/bge-small-en-v1.5",
+    candidatesScored: scoredCount,
+    latencyMs: Date.now() - startTime
+  };
+}
 
 function json(status, value, ttl = 0, retryAfter = 0) {
   return new Response(JSON.stringify(value), { status, headers: {
@@ -136,7 +410,10 @@ function mapWorkerGenres(sourceType, targetType, genreIds) {
   });
   return Array.from(mapped);
 }
-async function discoverSimilarTmdb(fetcher, env, type, id, target, avoids, signal) {
+const CROSS_MEDIA_GENRE_PRIORITY = [878, 10765, 9648, 14, 80, 27, 99, 53, 12, 10759, 28, 35, 18];
+const BROAD_CROSS_MEDIA_KEYWORDS = new Set(["office", "workplace", "office politics", "colorado",
+  "family", "friendship", "love", "school", "elementary school"]);
+async function discoverSimilarTmdb(fetcher, env, type, id, target, avoids, signal, aiMode = "off") {
   const seedRaw = await tmdbJson(fetcher, env,
     `/${type}/${id}?language=en-US&append_to_response=keywords,credits,${type === "tv" ? "content_ratings" : "release_dates"}`, signal);
   const seedDetail = detail(seedRaw, type);
@@ -150,28 +427,32 @@ async function discoverSimilarTmdb(fetcher, env, type, id, target, avoids, signa
   const oppType = type === "movie" ? "tv" : "movie";
   const includeOpposite = target === "both" || target === oppType;
 
+  const validKeywords = (seedDetail.keywords || []).filter(k => k && k.name && !BROAD_CROSS_MEDIA_KEYWORDS.has(String(k.name).toLowerCase())).slice(0, 5);
+  const kwIds = validKeywords.map(k => k.id);
+  const kwParam = kwIds.length ? `&with_keywords=${kwIds.join("|")}` : "";
+
   if (includeSame) {
     queries.push({ path: `/${type}/${id}/recommendations?language=en-US&page=1`, type, kind: "recommendation" });
     queries.push({ path: `/${type}/${id}/similar?language=en-US&page=1`, type, kind: "similar" });
     if (seedDetail.genreIds.length) {
-      const g = seedDetail.genreIds[0], k = seedDetail.keywordIds[0];
+      const g = seedDetail.genreIds[0];
       queries.push({
-        path: `/discover/${type}?language=en-US&sort_by=popularity.desc&include_adult=false&vote_count.gte=30&with_genres=${g}${k ? `&with_keywords=${k}` : ""}&page=1`,
-        type, kind: "discovery", keywordId: k || null
+        path: `/discover/${type}?language=en-US&sort_by=popularity.desc&include_adult=false&vote_count.gte=30&with_genres=${g}${kwParam}&page=1`,
+        type, kind: "discovery", keywordIds: kwIds
       });
     }
   }
 
   if (includeOpposite) {
     const mapped = mapWorkerGenres(type, oppType, seedDetail.genreIds);
-    const k = seedDetail.keywordIds[0];
+    const genre = CROSS_MEDIA_GENRE_PRIORITY.find(g => mapped.includes(g)) || mapped[0];
     if (mapped.length) {
       queries.push({
-        path: `/discover/${oppType}?language=en-US&sort_by=popularity.desc&include_adult=false&vote_count.gte=30&with_genres=${mapped[0]}${k ? `&with_keywords=${k}` : ""}&page=1`,
-        type: oppType, kind: "cross_media", keywordId: k || null
+        path: `/discover/${oppType}?language=en-US&sort_by=popularity.desc&include_adult=false&vote_count.gte=30&with_genres=${genre}${kwParam}&page=1`,
+        type: oppType, kind: "cross_media", keywordIds: kwIds
       });
       queries.push({
-        path: `/discover/${oppType}?language=en-US&sort_by=vote_average.desc&vote_count.gte=80&include_adult=false&with_genres=${mapped[0]}&page=1`,
+        path: `/discover/${oppType}?language=en-US&sort_by=vote_average.desc&vote_count.gte=80&include_adult=false&with_genres=${genre}&page=1`,
         type: oppType, kind: "cross_media"
       });
     }
@@ -194,15 +475,23 @@ async function discoverSimilarTmdb(fetcher, env, type, id, target, avoids, signa
         candidates.set(key, cand);
       }
       cand.sources.push({ kind: q.kind, rank });
-      if (q.keywordId && !cand.keywordIds.includes(q.keywordId)) {
+      if (Array.isArray(q.keywordIds)) {
+        q.keywordIds.forEach(kId => {
+          if (!cand.keywordIds.includes(kId)) cand.keywordIds.push(kId);
+        });
+      } else if (q.keywordId && !cand.keywordIds.includes(q.keywordId)) {
         cand.keywordIds.push(q.keywordId);
       }
     });
   });
 
+  const candidatesList = [...candidates.values()].slice(0, 180);
+  const aiDiagnostics = await applyAiEmbeddings(env, seedDetail, candidatesList, aiMode);
+
   return {
     seed: seedDetail,
-    candidates: [...candidates.values()].slice(0, 180)
+    candidates: candidatesList,
+    ai: aiDiagnostics
   };
 }
 function detail(row, type) {
@@ -340,18 +629,20 @@ export async function api(request, env, options = {}) {
       return json(400, { error: "invalid_query" });
     path = null; shape = null; ttl = 600;
   } else if (url.pathname === "/api/discover-similar") {
-    const allowed = new Set(["type", "id", "target", "avoid"]);
+    const allowed = new Set(["type", "id", "target", "avoid", "ai"]);
     if ([...url.searchParams.keys()].some(k => !allowed.has(k))) return json(400, { error: "invalid_query" });
     const type = url.searchParams.get("type");
     const id = positive(url.searchParams.get("id"));
     const target = url.searchParams.get("target") || "same";
     if (!TYPES.has(type) || !id || !["same", "movie", "tv", "both"].includes(target))
       return json(400, { error: "invalid_query" });
+    const effectiveAiMode = resolveAiMode(env, url, request, options);
+    if (!effectiveAiMode) return json(400, { error: "invalid_query" });
     const avoidParam = url.searchParams.get("avoid");
     const avoids = avoidParam ? recommendationSeeds(avoidParam) : [];
     if (avoidParam && !avoids) return json(400, { error: "invalid_query" });
     path = null; shape = null; ttl = 1200;
-    var discoverParams = { type, id, target, avoids: avoids || [] };
+    var discoverParams = { type, id, target, avoids: avoids || [], aiMode: effectiveAiMode };
   } else if (url.pathname === "/api/search") {
     const query = (url.searchParams.get("q") || "").trim();
     const type = url.searchParams.get("type") || "all";
@@ -475,12 +766,12 @@ export async function api(request, env, options = {}) {
       return json(200, value, ttl);
     }
     if (discoverParams) {
-      const cacheKey = `${discoverParams.type}:${discoverParams.id}:${discoverParams.target}|`
+      const cacheKey = `${discoverParams.type}:${discoverParams.id}:${discoverParams.target}:${discoverParams.aiMode}|`
         + (discoverParams.avoids || []).map(s => s.key).join(",");
       const cached = discoverCache.get(cacheKey);
       if (cached && Date.now() - cached.at < 15 * 60 * 1000) return json(200, cached.value, ttl);
       const value = await discoverSimilarTmdb(fetcher, env, discoverParams.type, discoverParams.id,
-        discoverParams.target, discoverParams.avoids, controller.signal);
+        discoverParams.target, discoverParams.avoids, controller.signal, discoverParams.aiMode);
       if (discoverCache.size >= 40) discoverCache.delete(discoverCache.keys().next().value);
       discoverCache.set(cacheKey, { at: Date.now(), value });
       return json(200, value, ttl);
@@ -514,6 +805,16 @@ export async function api(request, env, options = {}) {
   }
   finally { clearTimeout(timer); }
 }
+export {
+  aiCircuitBreaker,
+  resetAiCircuitBreaker,
+  resolveAiMode,
+  vectorCosineSimilarity,
+  formatSemanticDoc,
+  applyAiEmbeddings,
+  discoverCache,
+  embeddingCache
+};
 export default { fetch(request, env) {
   return new URL(request.url).pathname.startsWith("/api/") ? api(request, env) : env.ASSETS.fetch(request);
 } };

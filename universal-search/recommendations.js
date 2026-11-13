@@ -212,6 +212,11 @@
       var quality = Math.min(10, Math.log1p(Math.max(0, candidate.voteCount || 0)) * 1.4)
         + Math.min(6, Math.log1p(Math.max(0, candidate.popularity || 0)) * 1.1)
         + Math.min(4, Math.max(0, Number(candidate.voteAverage) || 0) * 0.4);
+      var relevance = similarity + genre + keyword;
+      // A single verified watch is useful evidence; Love It reaches full confidence sooner.
+      // Keep the full quality score at cold start and for strongly related candidates.
+      var confidence = Math.min(1, profile.confidence * 5);
+      var qualityShare = 1 - 0.65 * confidence * (1 - Math.min(1, relevance / 24));
       var source = (candidate.sources || []).find(function (s) { return s.kind === "discovery"; });
       var broadSource = (candidate.sources || []).some(function (s) {
         return s.kind === "trending" || s.kind === "discovery";
@@ -224,8 +229,8 @@
         : source && source.genreId && genreWeight[candidate.type + ":" + source.genreId]
           ? { code: "category", genreId: source.genreId }
           : { code: "popular" };
-      return { candidate: candidate, score: similarity + genre + keyword + quality - aversion,
-        reason: reason, leadingSeed: strongest && strongest.source.seed || null };
+      return { candidate: candidate, score: relevance + quality * qualityShare - aversion,
+        relevance: relevance, reason: reason, leadingSeed: strongest && strongest.source.seed || null };
     }).filter(Boolean);
     var output = [], used = {}, seedCounts = {}, genreCounts = {}, typeCounts = {};
     while (output.length < limit && output.length < scored.length) {
@@ -233,11 +238,15 @@
       scored.forEach(function (entry) {
         var identity = key(entry.candidate.type, entry.candidate.id);
         if (used[identity]) return;
-        var penalty = (entry.leadingSeed ? (seedCounts[entry.leadingSeed] || 0)
-          * (Number.isFinite(options.seedDiversityWeight) ? Math.max(0, options.seedDiversityWeight) : 9) : 0)
-          + (typeCounts[entry.candidate.type] || 0) * 1.5
-          + (entry.candidate.genreIds || []).reduce(function (sum, id) {
-            return sum + Math.min(3, genreCounts[id] || 0) * 2; }, 0);
+        var seedWeight = Number.isFinite(options.seedDiversityWeight)
+          ? Math.max(0, options.seedDiversityWeight) : 5;
+        var penalty = (entry.leadingSeed ? Math.min(1, seedCounts[entry.leadingSeed] || 0)
+          * seedWeight : 0)
+          + Math.min(2, typeCounts[entry.candidate.type] || 0)
+          + Math.min(6, (entry.candidate.genreIds || []).reduce(function (sum, id) {
+            return sum + Math.min(2, genreCounts[id] || 0) * 1.5; }, 0));
+        // Variety is a tie-breaker, not a reason to bury a clear seed/metadata match.
+        penalty *= 1 - Math.min(0.3, entry.relevance / 80);
         var score = entry.score - penalty;
         if (score > bestScore || score === bestScore && identity < key(best.candidate.type, best.candidate.id)) {
           best = entry; bestScore = score;

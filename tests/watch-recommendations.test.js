@@ -230,7 +230,9 @@ test("South Park preview fills a long related row from real TMDB identities with
   const history = mock.previewHistory("south-park"), payload = mock.recommendations();
   const selected = engine.selectRows(history, { ratings: {} }, payload, { now: Date.now() });
   assert.equal(selected.seed.title, "South Park");
-  assert.ok(selected.because.length >= 8 && selected.because.length <= 12);
+  // Top Picks now keeps more strong seed matches; the related row gets the
+  // remaining eligible, nonduplicate titles in this finite preview pool.
+  assert.ok(selected.because.length >= 2 && selected.because.length <= 12);
   const topIds = new Set(selected.top.map(item => item.type + ":" + item.id));
   assert.ok(selected.because.every(item => item.poster && item.score > 0
     && !topIds.has(item.type + ":" + item.id)
@@ -240,6 +242,82 @@ test("South Park preview fills a long related row from real TMDB identities with
   assert.equal([...disliked.top, ...disliked.because].some(item => item.id === 1433), false);
   assert.equal(new Set(selected.because.map(item => item.type + ":" + item.id)).size,
     selected.because.length);
+});
+
+test("frozen live TMDB pools keep clear seed matches above unrelated trending titles", () => {
+  const pools = JSON.parse(readFileSync(new URL("./fixtures/watch-ranking-phase3c1.json", import.meta.url), "utf8")).pools;
+  // Human judgments about these title pairs are independent of genre IDs and rank scores.
+  const judgments = {
+    southpark: ["Big Mouth", "Spider-Man: Brand New Day"],
+    severance: ["Emergence", "Spider-Man: Brand New Day"],
+    breakingbad: ["Better Call Saul", "Spider-Man: Brand New Day"],
+    interstellar: ["A.I. Artificial Intelligence", "One Piece"],
+    bladerunner2049: ["Blade Runner", "One Piece"],
+    spiritedaway: ["Mary and The Witch's Flower", "MobLand"]
+  };
+  for (const [name, payload] of Object.entries(pools)) {
+    const seed = payload.seeds[0];
+    const watched = [row(seed.type, seed.id, seed.title, now - 86400000)];
+    const result = engine.rank(watched, { ratings: {} }, payload, { now, limit: 10 });
+    assert.equal(result.length, 10, name);
+    assert.equal(new Set(result.map(item => item.type + ":" + item.id)).size, 10, name);
+    assert.ok(result.every(item => item.poster), name);
+    assert.deepEqual(engine.rank(watched, { ratings: {} }, payload, { now, limit: 10 })
+      .map(item => item.type + ":" + item.id), result.map(item => item.type + ":" + item.id), name);
+    if (judgments[name]) {
+      const [relevant, weak] = judgments[name];
+      const titles = result.map(item => item.title);
+      assert.ok(titles.includes(relevant), name + ": missing " + relevant);
+      assert.ok(!titles.includes(weak) || titles.indexOf(relevant) < titles.indexOf(weak), name);
+    }
+  }
+});
+
+test("profile confidence bounds generic quality while cold start retains popular fallback", () => {
+  const payload = { seeds: [{ type: "movie", id: 1, title: "Seed", genreIds: [878] }], candidates: [
+    candidate("movie", 2, "Relevant", [878], [source("recommendation", "movie:1")],
+      { popularity: 20, voteCount: 100 }),
+    candidate("tv", 3, "Broadly popular", [80], [{ kind: "trending" }],
+      { popularity: 10000, voteCount: 100000, voteAverage: 9 }) ] };
+  const cold = engine.rank([], { ratings: {} }, payload, { now });
+  const watched = engine.rank([row("movie", 1, "Seed", now - 1000)], { ratings: {} }, payload, { now });
+  const loved = engine.rank([], { ratings: { "movie:1": "liked" } }, payload, { now });
+  assert.equal(cold[0].id, 3);
+  assert.equal(watched[0].id, 2);
+  assert.equal(loved[0].id, 2);
+  assert.ok(watched.some(item => item.id === 3), "exploration candidate remains eligible");
+  assert.ok(loved.find(item => item.id === 3).score < cold[0].score);
+});
+
+test("diversity still acts within relevant results without burying a second seed match", () => {
+  const history = [row("tv", 1, "Watched", now - 1000)];
+  const payload = { seeds: [{ type: "tv", id: 1, title: "Watched", genreIds: [35] }], candidates: [
+    candidate("tv", 2, "Related A", [35], [source("recommendation", "tv:1")]),
+    candidate("tv", 3, "Related B", [35], [source("recommendation", "tv:1")]),
+    candidate("tv", 4, "Other related", [80], [source("recommendation", "tv:1")]),
+    candidate("movie", 5, "Trending", [28], [{ kind: "trending" }],
+      { popularity: 5000, voteCount: 20000 }) ] };
+  const result = engine.rank(history, { ratings: {} }, payload, { now });
+  assert.ok(result.findIndex(item => item.id === 3) < result.findIndex(item => item.id === 5));
+  assert.ok(result.some(item => item.id === 4));
+});
+
+test("mixed interests share the first ten across seeds and cold start stays populated", () => {
+  const pools = JSON.parse(readFileSync(new URL("./fixtures/watch-ranking-phase3c1.json", import.meta.url), "utf8")).pools;
+  const names = ["southpark", "severance", "interstellar"];
+  const payload = { seeds: names.flatMap(name => pools[name].seeds),
+    candidates: names.flatMap(name => pools[name].candidates) };
+  const watched = payload.seeds.map(seed => row(seed.type, seed.id, seed.title, now - 1000));
+  const ranked = engine.rank(watched, { ratings: {} }, payload, { now, limit: 10 });
+  const counts = new Map();
+  for (const item of ranked) if (item.reason.code === "watched")
+    counts.set(item.reason.title, (counts.get(item.reason.title) || 0) + 1);
+  assert.equal(ranked.length, 10);
+  assert.equal(counts.size, 3);
+  assert.ok(Math.max(...counts.values()) <= 5);
+  const cold = engine.rank([], { ratings: {} }, payload, { now, limit: 10 });
+  assert.equal(cold.length, 10);
+  assert.ok(cold.every(item => item.poster && item.reason.code === "popular"));
 });
 
 test("conflicting genre interests retain distinct types and diversify a single seed", () => {

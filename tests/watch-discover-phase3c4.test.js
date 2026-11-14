@@ -169,8 +169,9 @@ test("11. Stable title and explanation geometry in CSS", () => {
 
 test("12. First-card left alignment on initial load", () => {
   const searchSource = readFileSync(new URL("../universal-search/search.js", import.meta.url), "utf8");
-  // revealHomeWindow unconditionally resets attached[0] === cards[0] and scrollLeft = 0
-  assert.match(searchSource, /if \(element === cards\[0\]\) \{\s*if \(attached\[0\] !== cards\[0\] \|\| row\.scrollLeft > 2 \|\| track\.style\.transform !== ""\)/);
+  // The physical window begins at ordinal zero. Browser E2E checks its pixel gutter.
+  assert.match(searchSource, /start: 0, end: 0, selected: 0/);
+  assert.match(searchSource, /track\.replaceChildren\(\);\s*track\.style\.transform = "";\s*row\.classList\.add\("is-virtualized"\)/);
 });
 
 test("13. No stale transform or focus memory after seed changes", () => {

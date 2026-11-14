@@ -73,12 +73,12 @@ test("Phase 2C: Refinement controls on filter strip in Discover mode", () => {
   assert.match(html, /id="filter-btn-seed"/);
   assert.match(html, /id="filter-btn-mode"/);
   assert.match(html, /id="filter-btn-media"/);
-  assert.match(html, /id="filter-btn-finished"/);
+  assert.doesNotMatch(html, /id="filter-btn-finished"/);
 
   assert.match(searchSource, /filterType === "seed"/);
   assert.match(searchSource, /filterType === "mode"/);
   assert.match(searchSource, /filterType === "media"/);
-  assert.match(searchSource, /filterType === "finished"/);
+  assert.doesNotMatch(searchSource, /filterType === "finished"/);
 
   // Filter strip reuses genre, length, rating, year, sort
   assert.match(searchSource, /var isDiscover = state\.watchTab === "discover"/);

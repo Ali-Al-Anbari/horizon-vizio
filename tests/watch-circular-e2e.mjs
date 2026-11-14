@@ -74,13 +74,20 @@ try {
     const visible = () => evaluate("Array.from(document.querySelectorAll('#watch-continue-row .home-card')).map(x=>x.dataset.homeKey)");
     assert.equal(await title(), expected[0]);
     const initialScroll = await evaluate("document.querySelector('#watch-rows-scroll').scrollTop");
-    for (let cycle = 0; cycle < 3; cycle++) for (let index = 1; index <= expected.length; index++) {
+    // Phase 3C.8: Continue Watching is permanently non-looping regardless of title count.
+    // Traverse forward to the last title; further Right presses must stop at the last title.
+    for (let index = 1; index < expected.length; index++) {
       await key("ArrowRight");
-      assert.equal(await title(), expected[index % expected.length]);
+      assert.equal(await title(), expected[index]);
       const keys = await visible();
       assert.equal(new Set(keys).size, keys.length, "visible window has no duplicate identities");
-      assert.ok(keys.length <= expected.length && keys.length >= 1,
-        "row attaches bounded poster window without exceeding title count");
+    }
+    await key("ArrowRight");
+    assert.equal(await title(), expected[expected.length - 1], "Continue Watching stops at last title (non-looping)");
+    // Backward traversal back to first title
+    for (let index = expected.length - 2; index >= 0; index--) {
+      await key("ArrowLeft");
+      assert.equal(await title(), expected[index]);
     }
     // At the first title of the cycle, Left enters the left navigation rail with Home focused
     await key("ArrowLeft");
@@ -90,12 +97,13 @@ try {
     await key("ArrowRight");
     assert.equal(await title(), expected[0]);
     const gutterLeft = viewport.width === 1024 ? 145 : 182;
-    const cardRect = () => evaluate("Math.round(document.activeElement.getBoundingClientRect().left)");
+    const cardRect = async () => { await new Promise(resolve => setTimeout(resolve, 500)); return evaluate("Math.round(document.activeElement.getBoundingClientRect().left)"); };
     const rowScroll = () => evaluate("document.getElementById('watch-continue-row').scrollLeft");
     const visiblePreceding = () => evaluate("Array.from(document.querySelectorAll('#watch-continue-row .home-card')).filter(c => { const r = c.getBoundingClientRect(); return r.right > 0 && r.right <= " + (gutterLeft + 10) + "; }).length");
     assert.equal(await rowScroll(), 0, "scrollLeft is 0 at first title");
     assert.equal(await cardRect(), gutterLeft, `first title at original left gutter (${gutterLeft}px)`);
-    assert.equal(await visiblePreceding(), 0, "no preceding cards visible to the left of first title");
+    const precedingAtFirst = await visiblePreceding();
+    assert.equal(precedingAtFirst, 0, "no preceding cards visible to the left of first title");
 
     // Move within cycle, then move backward within cycle to first title
     await key("ArrowRight");
@@ -123,16 +131,14 @@ try {
     assert.equal(await cardRect(), gutterLeft);
     assert.equal(await visiblePreceding(), 0);
 
-    // Multi-cycle test: navigate 5 full cycles, then 2 cards into new cycle, then return backward
-    for (let c = 0; c < 5 * expected.length; c++) await key("ArrowRight");
-    await key("ArrowRight"); // Dark
-    await key("ArrowRight"); // Breaking Bad
-    await key("ArrowLeft");  // Dark
-    await key("ArrowLeft");  // South Park (boundary)
+    // Bounded traversal test: navigate forward to end (stops at Severance), then return backward
+    for (let c = 0; c < 15; c++) await key("ArrowRight");
+    assert.equal(await title(), expected[expected.length - 1], "stops at last title");
+    for (let c = 0; c < expected.length - 1; c++) await key("ArrowLeft");
     assert.equal(await title(), expected[0]);
-    assert.equal(await rowScroll(), 0, "scrollLeft is 0 after 5 cycles and backward return");
-    assert.equal(await cardRect(), gutterLeft, "title 0 settles at gutter after 5 cycles");
-    assert.equal(await visiblePreceding(), 0, "no previous cards visible after 5 cycles");
+    assert.equal(await rowScroll(), 0, "scrollLeft is 0 after backward return");
+    assert.equal(await cardRect(), gutterLeft, "title 0 settles at gutter");
+    assert.equal(await visiblePreceding(), 0, "no previous cards visible");
     assert.equal(await evaluate("document.querySelector('#watch-rows-scroll').scrollTop"), initialScroll);
     const layout = await evaluate(geometry);
     assert.ok(Math.abs(layout.gap - 42) < 1, `heading gap at ${viewport.width}`);
@@ -179,7 +185,11 @@ try {
       await key("ArrowRight");
       keys.push(await evaluate("document.activeElement.dataset.homeKey"));
     }
-    assert.equal(keys[keys.length - 1], first);
+    if (scenario === "one-show") {
+      assert.equal(keys[keys.length - 1], first, "one-show stops at single title");
+    } else {
+      assert.notEqual(keys[keys.length - 1], first, "two-show stops at second title without looping");
+    }
     assert.equal(new Set(await evaluate("Array.from(document.querySelectorAll('#watch-continue-row .home-card')).map(x=>x.dataset.homeKey)")).size,
       scenario === "one-show" ? 1 : 2);
   }
@@ -203,7 +213,9 @@ try {
 
   // Phase 2 Discover & Find Similar verification in Chrome
   // 1. Open Discover directly from the left rail
-  await key("ArrowLeft"); // Enter rail at Home
+  while (await evaluate("document.activeElement.id !== 'watch-toggle'")) {
+    await key("ArrowLeft");
+  }
   assert.equal(await evaluate("document.activeElement.id"), "watch-toggle");
   for (const id of ["tv-toggle", "movies-toggle", "discover-toggle"]) {
     await key("ArrowDown");

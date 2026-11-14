@@ -6,14 +6,14 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://image.tmdb.org data:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'" />
   <title>Horizon Watch</title>
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="search.css" />
+  <link rel="stylesheet" href="search.css?v=phase3c7-1" />
   <script src="core.js" defer></script>
   <script src="recommendations.js" defer></script>
   <script src="discover-engine.js" defer></script>
   <script src="player-adapter.js" defer></script>
   <script src="mock-data.js" defer></script>
-  <script src="watch-performance.js" defer></script>
-  <script src="search.js" defer></script>
+  <script src="watch-performance.js?v=hero-test-2" defer></script>
+  <script src="search.js?v=phase3c7-1" defer></script>
 </head>
 <body>
   <main class="shell">
@@ -38,7 +38,6 @@
           <button id="filter-btn-mode" class="filter-chip" data-filter-type="mode" data-focus type="button" hidden>Mode: All</button>
           <button id="filter-btn-media" class="filter-chip" data-filter-type="media" data-focus type="button" hidden>Type: Same</button>
           <button id="filter-btn-style" class="filter-chip" data-filter-type="style" data-focus type="button" hidden>Style: All</button>
-          <button id="filter-btn-finished" class="filter-chip" data-filter-type="finished" data-focus type="button" hidden>Hide Finished</button>
           <button id="filter-btn-genre" class="filter-chip" data-filter-type="genre" data-focus type="button">Genre</button>
           <button id="filter-btn-length" class="filter-chip" data-filter-type="length" data-focus type="button">Length</button>
           <button id="filter-btn-rating" class="filter-chip" data-filter-type="rating" data-focus type="button">Age Rating</button>
@@ -52,7 +51,7 @@
         <span class="watch-home-wordmark" aria-hidden="true" hidden>HORIZON<small>WATCH</small></span>
         <div id="watch-hero-art" class="watch-hero-art" aria-hidden="true"></div>
         <div class="watch-hero-shade" aria-hidden="true"></div>
-        <div class="watch-hero-copy">
+        <div id="watch-hero-copy" class="watch-hero-copy">
           <h1 id="watch-hero-title"></h1>
           <p id="watch-hero-context" class="watch-hero-context"></p>
           <p id="watch-hero-description" class="watch-hero-description"></p>
@@ -221,6 +220,13 @@
     </section>
     <section id="settings-view" class="view settings-view" aria-label="Watch Settings" hidden>
       <h1>Settings</h1>
+      <section class="settings-panel" aria-label="Hero display preferences">
+        <h2>Hero display</h2>
+        <div class="settings-list">
+          <div class="settings-entry"><span>Artwork update delay on this device</span><button id="settings-hero-delay" data-focus type="button"></button></div>
+          <div class="settings-entry"><span>Artwork transition on this device</span><button id="settings-hero-fade" data-focus type="button"></button></div>
+        </div>
+      </section>
       <section class="settings-panel" aria-label="Manage Continue Watching">
         <h2>Continue Watching</h2>
         <div id="settings-continue" class="settings-list"></div>

@@ -38,7 +38,8 @@ test("Watch home follows the reference layout and routes cards through the exist
   assert.match(source, /core\.homepageContinueCandidates\(rows, local\)/);
   assert.match(source, /core\.homepageFinished\(rows, local\)/);
   assert.match(source, /group === "continue" \? landscapeArt\(row, true\) : verticalPosterArt\(row, true\)/);
-  assert.match(source, /loadHomeWindowArt\(/);
+  assert.match(source, /function carouselSlot\(controller, ordinal\)/);
+  assert.match(source, /image\.src = image\.dataset\.pendingSrc/);
   assert.match(source, /if \(row\.type === "movie"\) \{ openDetails\(row\); return; \}/);
   assert.match(source, /openDetails\(row, target \|\| \{ season: row\.season, episode: row\.episode \}\)/);
   assert.match(source, /lookupNextEpisode\(row, detail\)/);
@@ -79,10 +80,10 @@ test("Continue Watching precedes recommendations in DOM and remote row order", (
   assert.match(source, /homeRowOrder = \["continue", "top", "because", "recent"\]/);
 });
 
-test("focused rail circle expands with adjacent controls spaced apart", () => {
-  assert.match(css, /body\.watch-active \.rail-action:focus,[\s\S]*?transform: scale\(1\.1\)/);
-  assert.match(css, /\.rail-action\.rail-neighbor-before \{ transform: translateY\(-5px\)/);
-  assert.match(css, /\.rail-action\.rail-neighbor-after \{ transform: translateY\(5px\)/);
+test("focused rail circle expands without moving its neighbors", () => {
+  assert.match(css, /body\.watch-active \.rail-action:focus,[\s\S]*?transform: scale\(1\.07\)/);
+  assert.doesNotMatch(css, /rail-neighbor-before|rail-neighbor-after/);
+  assert.doesNotMatch(source, /rail-neighbor-before|rail-neighbor-after/);
   assert.match(css, /prefers-reduced-motion: reduce/);
 });
 

@@ -164,7 +164,8 @@ test("Phase 1C: TV-friendly filtering strip markup and styles are complete", () 
 
   assert.match(css, /body\.watch-active \.watch-filter-strip\s*\{[^}]*position: absolute/);
   assert.match(css, /body\.watch-active \.filter-chip\s*\{[^}]*border-radius: 18px/);
-  assert.match(css, /body\.watch-active \.watch-filter-menu\s*\{[^}]*backdrop-filter: blur\(16px\)/);
+  assert.match(css, /body\.watch-active \.filter-menu-option\s*\{[^}]*min-height: 44px/);
+  assert.doesNotMatch(css, /body\.watch-active \.watch-filter-menu\s*\{[^}]*backdrop-filter:/);
 });
 
 test("Phase 1 Runtime: Bounded runtime row filtering excludes non-short and unknown metadata without genre proxies", () => {

@@ -10,8 +10,17 @@
       if (rows[next].length) return rows[next];
     return null;
   }
+  function nextHomeRowIndex(rows, index, direction) {
+    for (var next = index + direction; next >= 0 && next < rows.length; next += direction)
+      if (rows[next] && rows[next].length) return next;
+    return -1;
+  }
   function circularIndex(index, length, direction) {
     return length ? (index + direction + length) % length : -1;
+  }
+  function isRowShort(group, cards) {
+    var count = cards ? cards.length : 0;
+    return group === "continue" || count < 8;
   }
   function createApp(doc, nav, clock, options) {
     options = options || {};
@@ -45,8 +54,11 @@
       session.setItem("horizon-search-local-home", "1");
     }
     var get = function (id) { return doc.getElementById(id); };
-    var watchPerformance = root.HorizonWatchPerformance
+    var watchPerformance = useMock && new URLSearchParams(nav.search).get("watch-motion") === "1"
+      && root.HorizonWatchPerformance
       ? root.HorizonWatchPerformance.create(doc, clock) : null;
+    if (watchPerformance && (typeof watchPerformance.onModeChange !== "function"
+        || typeof watchPerformance.heroWork !== "function")) watchPerformance = null;
     var query = get("query"), results = get("results");
     var state = { view: "watch", previousView: "watch", detailSource: "watch", filter: "all", query: "", title: null, detail: null,
       season: null, episodes: [], subtitle: core.readSubtitlePref(local), continueMode: false,
@@ -95,8 +107,24 @@
     var activeFilterMenuType = null;
     var homeRowMemory = tabRowMemory["for-you"], homeLastContent = null;
     var rowCycleIndex = Object.create(null);
-    var homeCards = Object.create(null), homeWindowSizes = Object.create(null);
+    var homeCards = Object.create(null);
+    var homeCarousels = Object.create(null);
     var homeScrollFrame = 0, homeHeroTimer = 0;
+    var HERO_PREF_KEY = "horizon-watch-hero-preferences";
+    var HERO_DELAYS = [0, 110, 150, 250, 300, 400, 500];
+    function readHeroPreferences() {
+      try {
+        var saved = JSON.parse(local.getItem(HERO_PREF_KEY));
+        if (saved && saved.version === 1 && HERO_DELAYS.indexOf(saved.delay) >= 0
+            && typeof saved.fade === "boolean") return { delay: saved.delay, fade: saved.fade };
+      } catch (_error) { /* Unsupported or damaged data uses safe defaults. */ }
+      return { delay: 0, fade: false };
+    }
+    var heroPreferences = readHeroPreferences();
+    function saveHeroPreferences() {
+      local.setItem(HERO_PREF_KEY, JSON.stringify({ version: 1,
+        delay: heroPreferences.delay, fade: heroPreferences.fade }));
+    }
     var catalogRequests = Object.create(null);
     var homeRowOrder = ["continue", "top", "because", "recent"];
     var recommendationPayload = null, recommendationLoadedSignature = "", recommendationPending = null,
@@ -161,10 +189,10 @@
     function setView(name) {
       var changed = state.view !== name;
       if (changed && state.view === "watch") {
+        if (holdMotion) finishHoldMotion();
+        clearHoldOutline();
         if (watchPerformance) watchPerformance.close();
-        if (homeHeroTimer) clock.clearTimeout(homeHeroTimer);
-        homeHeroTimer = 0; ++homeHeroToken;
-        ++homeArtRequest; homeArtTargetSrc = "";
+        invalidatePendingHomeHero();
         if (homeScrollFrame) clock.cancelAnimationFrame(homeScrollFrame);
         homeScrollFrame = 0;
         homeOpenToken += 1; homeOpenPending = false;
@@ -271,29 +299,46 @@
         section.classList.add("is-active-home-section");
         var home = get("watch-view").getBoundingClientRect();
         heading.textContent = original.textContent;
-        heading.style.top = Math.max(original.getBoundingClientRect().top,
-          get("watch-rows-scroll").getBoundingClientRect().top) - home.top + "px";
+        var poster = element.querySelector(".poster-art");
+        var posterTop = poster ? poster.getBoundingClientRect().top : original.getBoundingClientRect().bottom + 42;
+        // The overlay lives outside the clipped row viewport. Position it from
+        // the artwork, preserving the 42px visual gap even when a short viewport
+        // places the heading in the hero's bottom fade.
+        heading.style.top = (posterTop - 42 - heading.getBoundingClientRect().height - home.top) + "px";
       }
     }
     function focus(element, skipHomeVertical, direction) { if (element) {
+      if (holdSettleRow && element.dataset.homeGroup !== holdSettleGroup) clearHoldOutline();
       var previous = doc.querySelector("[data-focus].is-focused");
       var previousHomeGroup = previous && previous.dataset.homeGroup || "";
       if (previous && previous !== element) previous.classList.remove("is-focused");
-      if (element.dataset.homeGroup) revealHomeWindow(element, direction);
+      if (element.dataset.homeGroup) element = revealHomeWindow(element, direction) || element;
       else if (previousHomeGroup && element.closest(".watch-rail")) {
-        var prevRowButtons = homeRowButtons(previousHomeGroup);
-        if (prevRowButtons.length && rowCycleIndex[previousHomeGroup] <= 0) {
-          revealHomeWindow(prevRowButtons[0]);
+        var prevController = homeCarousels[previousHomeGroup];
+        if (prevController) {
+          if (prevController.wrapTimer) clock.clearTimeout(prevController.wrapTimer);
+          prevController.wrapTimer = 0;
+          var pCycleStart = Math.floor(prevController.selected / prevController.cards.length) * prevController.cards.length;
+          prunePreviousCycleSlots(prevController, pCycleStart);
+        }
+      }
+      if (!element.isConnected && element.dataset.homeGroup) {
+        var ctrl = homeCarousels[element.dataset.homeGroup];
+        if (ctrl && ctrl.track) {
+          var attached = ctrl.track.querySelector('[data-home-index="' + element.dataset.homeIndex + '"]');
+          if (attached) element = attached;
+          else if (ctrl.track.firstElementChild) element = ctrl.track.firstElementChild;
         }
       }
       element.focus({ preventScroll: true }); element.classList.add("is-focused");
+      if (watchPerformance) watchPerformance.focusApplied();
       var seasonStrip = element.closest("#seasons");
       var episodeScroll = element.closest("#episode-list");
       var resultScroll = element.closest("#results, #history-list, #settings-view");
       var homeScroll = element.closest(".watch-home-row");
       if (seasonStrip) revealInScroller(element, seasonStrip, true, 14);
       else if (episodeScroll) revealInScroller(element, episodeScroll, false, 18);
-      else if (homeScroll) {
+      else if (homeScroll && !homeScroll.classList.contains("is-virtualized")) {
         var railEdge = get("watch-toggle").getBoundingClientRect().right;
         revealInScroller(element, homeScroll, true, 18,
           Math.max(18, railEdge - homeScroll.getBoundingClientRect().left + 22));
@@ -356,7 +401,7 @@
       var url = core.imageUrl(path, defer && kind === "poster" && artWindowExperiment ? "poster-small" : kind);
       if (!url) return null;
       var img = doc.createElement("img");
-      if (defer && artWindowExperiment) img.dataset.pendingSrc = url; else img.src = url;
+      if (defer) img.dataset.pendingSrc = url; else img.src = url;
       img.loading = "lazy"; img.alt = "";
       return img;
     }
@@ -402,132 +447,550 @@
       if (!element || !element.closest || !element.closest("#watch-view")) return null;
       var row = element.closest(".watch-home-row");
       return { id: element.id || "", group: element.dataset.homeGroup || "",
-        key: element.dataset.homeKey || "", index: row ? (homeCards[element.dataset.homeGroup] || []).indexOf(element) : -1 };
+        key: element.dataset.homeKey || "", index: row ? Number(element.dataset.homeIndex) : -1 };
     }
     function homeRowButtons(group) {
       var host = get("watch-" + group + "-row");
       return host && !host.closest("[hidden]") ? homeCards[group] || [] : [];
     }
     function recordHomeCards(group) {
-      homeCards[group] = Array.from(get("watch-" + group + "-row").querySelectorAll(".home-card"));
-      delete homeWindowSizes[group];
+      var row = get("watch-" + group + "-row"), track = row.querySelector(".watch-home-track");
+      homeCards[group] = Array.from(track.querySelectorAll(".home-card"));
+      homeCards[group].forEach(function (card, index) { card.dataset.homeIndex = String(index); });
+      if (homeCarousels[group] && homeCarousels[group].trimTimer)
+        clock.clearTimeout(homeCarousels[group].trimTimer);
+      if (homeCarousels[group] && homeCarousels[group].wrapTimer)
+        clock.clearTimeout(homeCarousels[group].wrapTimer);
+      delete homeCarousels[group];
+      track.replaceChildren();
+      track.style.transform = "";
+      row.classList.add("is-virtualized"); track.classList.add("is-virtualized");
     }
-    function loadHomeWindowArt(cards) {
-      if (!artWindowExperiment) return;
-      cards.forEach(function (card) {
-        card.querySelectorAll("img[data-pending-src]").forEach(function (image) {
-          image.src = image.dataset.pendingSrc;
-          delete image.dataset.pendingSrc;
+    function prunePreviousCycleSlots(controller, cycleStart) {
+      var track = controller.track;
+      var first = track.firstElementChild;
+      while (first && Number(first.dataset.homeOrdinal) < cycleStart) {
+        var ord = first.dataset.homeOrdinal;
+        delete controller.slots[ord];
+        track.removeChild(first);
+        first.classList.remove("is-focused");
+        controller.pool.push(first);
+        if (controller.pool.length > controller.capacity) controller.pool.shift();
+        first = track.firstElementChild;
+      }
+      controller.start = first ? Number(first.dataset.homeOrdinal) : cycleStart;
+    }
+    function carouselSlot(controller, ordinal) {
+      var source = controller.cards[ordinal % controller.cards.length];
+      var pool = controller.pool || [];
+      var reused = pool.findIndex(function (card) { return card.dataset.homeKey === source.dataset.homeKey; });
+      var slot = reused >= 0 ? pool.splice(reused, 1)[0] : source.cloneNode(true);
+      if (reused >= 0) slot.classList.remove("is-focused");
+      slot.removeAttribute("id");
+      slot.dataset.homeIndex = source.dataset.homeIndex;
+      slot.dataset.homeOrdinal = String(ordinal);
+      slot.style.left = ((controller.step || 0) * ordinal) + "px";
+      slot.homeEntry = source.homeEntry;
+      if (reused < 0) {
+        slot.addEventListener("click", function () { source.click(); });
+        slot.addEventListener("mouseenter", function () {
+          if (state.view === "watch") showHomeHero(slot.homeEntry);
         });
-      });
+        slot.querySelectorAll("img").forEach(function (image) {
+          var art = image.closest(".poster-art");
+          image.addEventListener("load", function () { if (art) art.classList.add("is-loaded"); });
+          image.addEventListener("error", function () {
+            if (art) {
+              image.remove(); art.classList.remove("is-loaded");
+              if (!art.querySelector(".art-fallback")) {
+                var fallback = doc.createElement("span");
+                fallback.className = "art-fallback";
+                fallback.textContent = source.homeEntry.row.title;
+                art.appendChild(fallback);
+              }
+            }
+          });
+          if (image.dataset.pendingSrc) {
+            image.src = image.dataset.pendingSrc;
+            delete image.dataset.pendingSrc;
+          }
+          if (image.complete && image.naturalWidth && art) art.classList.add("is-loaded");
+        });
+      }
+      return slot;
+    }
+    var homeMotion = null, holdRepeatCount = 0, holdSettleTimer = 0,
+      holdSettleRow = null, holdSettleGroup = "";
+    function isRowShort(group, cards) {
+      var count = cards ? cards.length : 0;
+      return group === "continue" || count < 8;
+    }
+    function doesRowFit(controller) {
+      if (!controller || !controller.row) return false;
+      var available = controller.row.clientWidth - (controller.gutter || 0);
+      var total = (controller.cards ? controller.cards.length : 0) * (controller.step || 0);
+      return total <= available;
+    }
+    function clearHoldOutline() {
+      if (holdSettleTimer) clock.clearTimeout(holdSettleTimer);
+      holdSettleTimer = 0;
+      if (holdSettleRow) holdSettleRow.classList.remove("is-hold-scrolling");
+      holdSettleRow = null; holdSettleGroup = "";
+    }
+    function ensureHoldSlots(controller, first, last) {
+      var minimum = Math.max(0, first), maximum = Math.max(minimum, last);
+      while (controller.start > minimum) {
+        if (controller.track.childElementCount >= controller.capacity) {
+          var oldLast = controller.track.lastElementChild;
+          if (oldLast && oldLast !== doc.activeElement) {
+            delete controller.slots[oldLast.dataset.homeOrdinal];
+            oldLast.remove();
+            controller.pool.push(oldLast);
+            controller.end = controller.track.lastElementChild ? Number(controller.track.lastElementChild.dataset.homeOrdinal) : controller.end - 1;
+          }
+        }
+        controller.start -= 1;
+        var before = carouselSlot(controller, controller.start);
+        controller.slots[controller.start] = before;
+        controller.track.insertBefore(before, controller.track.firstElementChild);
+      }
+      while (controller.end < maximum) {
+        if (controller.track.childElementCount >= controller.capacity) {
+          var oldFirst = controller.track.firstElementChild;
+          if (oldFirst && oldFirst !== doc.activeElement) {
+            delete controller.slots[oldFirst.dataset.homeOrdinal];
+            oldFirst.remove();
+            controller.pool.push(oldFirst);
+            controller.start = controller.track.firstElementChild ? Number(controller.track.firstElementChild.dataset.homeOrdinal) : controller.start + 1;
+          }
+        }
+        controller.end += 1;
+        var after = carouselSlot(controller, controller.end);
+        controller.slots[controller.end] = after;
+        controller.track.appendChild(after);
+      }
+    }
+    function trimHoldSlots(controller, position) {
+      var minimum = Math.max(0, Math.floor(position) - 2);
+      var maximum = Math.ceil(position) + controller.visible + 3;
+      while (controller.start < minimum && controller.track.firstElementChild) {
+        var first = controller.track.firstElementChild;
+        delete controller.slots[controller.start++]; first.remove();
+        controller.pool.push(first);
+      }
+      while (controller.end > maximum && controller.track.lastElementChild) {
+        var last = controller.track.lastElementChild;
+        delete controller.slots[controller.end--]; last.remove();
+        controller.pool.push(last);
+      }
+      while (controller.pool.length > controller.capacity) controller.pool.shift();
+    }
+    function motionFrame(timestamp) {
+      var motion = homeMotion;
+      if (!motion) return;
+      var elapsed = Math.min(40, Math.max(0, timestamp - motion.lastFrame));
+      motion.lastFrame = timestamp;
+      var controller = motion.controller, track = controller.track;
+
+      if (motion.mode === "hold") {
+        var next = motion.position + motion.direction * elapsed * 0.0048;
+        if (motion.direction < 0) next = Math.max(motion.minTarget, next);
+        if (motion.direction > 0 && motion.isShort) next = Math.min(motion.maxTarget, next);
+        motion.position = next;
+
+        if (!motion.isShort) {
+          ensureHoldSlots(controller, Math.max(motion.cycleStart, Math.floor(next) - 2),
+            Math.ceil(next) + controller.visible + 3);
+          trimHoldSlots(controller, next);
+        }
+        track.style.transform = "translate3d(" + (-next * controller.step) + "px,0,0)";
+
+        if (motion.direction < 0 && next <= motion.minTarget) {
+          finishHorizontalMotion(); return;
+        }
+        if (motion.direction > 0 && motion.isShort && next >= motion.maxTarget) {
+          finishHorizontalMotion(); return;
+        }
+      } else {
+        var diff = motion.target - motion.position;
+        if (Math.abs(diff) < 0.005) {
+          motion.position = motion.target;
+          track.style.transform = "translate3d(" + (-motion.target * controller.step) + "px,0,0)";
+          finishHorizontalMotion();
+          return;
+        }
+        var distance = Math.abs(diff);
+        var speed = Math.max(0.018, distance * 0.22);
+        var delta = Math.min(distance, speed * (elapsed / 16.7));
+        var nextPos = motion.position + Math.sign(diff) * delta;
+        motion.position = nextPos;
+
+        if (!motion.isShort) {
+          ensureHoldSlots(controller, Math.max(motion.cycleStart, Math.floor(nextPos) - 2),
+            Math.ceil(nextPos) + controller.visible + 3);
+          trimHoldSlots(controller, nextPos);
+        }
+        track.style.transform = "translate3d(" + (-nextPos * controller.step) + "px,0,0)";
+      }
+
+      motion.frame = clock.requestAnimationFrame(motionFrame);
+    }
+    function finishHorizontalMotion() {
+      var motion = homeMotion;
+      if (!motion) return;
+      homeMotion = null; holdMotion = null; holdRepeatCount = 0;
+      clock.cancelAnimationFrame(motion.frame);
+      clock.clearTimeout(motion.inactivityTimer);
+
+      var controller = motion.controller, track = controller.track;
+      var isShort = motion.isShort;
+      var target;
+      if (motion.mode === "hold") {
+        target = Math.round(motion.position);
+        target = motion.direction > 0 ? Math.max(target, motion.committedOrdinal)
+          : Math.min(target, motion.committedOrdinal);
+        target = Math.max(motion.minTarget, Math.min(motion.maxTarget, target));
+      } else {
+        target = motion.target;
+      }
+
+      controller.selected = target;
+      track.style.transform = "translate3d(" + (-target * controller.step) + "px,0,0)";
+
+      if (!isShort) {
+        var cycleStart = Math.floor(target / controller.cards.length) * controller.cards.length;
+        prunePreviousCycleSlots(controller, cycleStart);
+        ensureHoldSlots(controller, Math.max(cycleStart, target - 2), target + controller.visible + 3);
+        rowCycleIndex[motion.group] = target % controller.cards.length;
+      } else {
+        rowCycleIndex[motion.group] = target;
+      }
+
+      var slot = controller.slots[target];
+      if (!slot && isShort) slot = controller.cards[target];
+      if (slot) {
+        var previous = doc.querySelector("[data-focus].is-focused");
+        if (previous && previous !== slot) previous.classList.remove("is-focused");
+        slot.focus({ preventScroll: true });
+        slot.classList.add("is-focused");
+        if (watchPerformance) watchPerformance.focusApplied();
+        var identity = homeFocusIdentity(slot);
+        if (identity) {
+          homeRowMemory[identity.group] = identity;
+          homeLastContent = identity;
+          if (tabRowMemory[state.watchTab]) tabRowMemory[state.watchTab][identity.group] = identity;
+          tabLastContent[state.watchTab] = identity;
+        }
+        syncActiveHomeHeading(slot);
+        showHomeHero(slot.homeEntry);
+      }
+
+      if (holdSettleTimer) clock.clearTimeout(holdSettleTimer);
+      holdSettleRow = controller.row; holdSettleGroup = motion.group;
+      holdSettleTimer = clock.setTimeout(clearHoldOutline, 170);
+    }
+    function renewMotionInactivity() {
+      if (!homeMotion) return;
+      clock.clearTimeout(homeMotion.inactivityTimer);
+      holdMotion = homeMotion;
+      holdMotion.inactivityTimer = clock.setTimeout(finishHoldMotion, 240);
+    }
+    function stepHorizontalMotion(groupName, direction, isHold) {
+      var controller = homeCarousels[groupName];
+      if (!controller || controller.cards.length < 1 || state.view !== "watch") return false;
+      var row = controller.row, track = controller.track;
+      var isShort = isRowShort(groupName, controller.cards);
+      var minTarget = isShort ? 0 : Math.floor(controller.selected / controller.cards.length) * controller.cards.length;
+      var maxTarget = isShort ? controller.cards.length - 1 : Infinity;
+
+      if (controller.isShort && controller.fits) return false;
+      if (direction < 0 && (controller.selected <= minTarget || (homeMotion && homeMotion.target <= minTarget))) {
+        if (homeMotion) finishHorizontalMotion();
+        return false;
+      }
+      if (direction > 0 && isShort && (controller.selected >= maxTarget || (homeMotion && homeMotion.target >= maxTarget))) return true;
+
+      if (holdSettleTimer) clock.clearTimeout(holdSettleTimer);
+      holdSettleTimer = 0;
+      if (controller.trimTimer) clock.clearTimeout(controller.trimTimer);
+
+      var currentX = carouselX(track);
+      var currentPos = Math.max(0, -currentX / controller.step);
+
+      row.style.setProperty("--hold-outline-width", controller.width + "px");
+      var focused = doc.activeElement;
+      var poster = focused && focused.querySelector ? focused.querySelector(".poster-art") : null;
+      var posterHeight = poster ? poster.getBoundingClientRect().height : (controller.width * 1.5);
+      row.style.setProperty("--hold-outline-height", posterHeight + "px");
+      row.classList.add("is-hold-scrolling");
+
+      track.style.transition = "none";
+      invalidatePendingHomeHero();
+
+      if (homeMotion && homeMotion.group === groupName) {
+        if (isHold) {
+          homeMotion.mode = "hold";
+          homeMotion.direction = direction;
+        } else {
+          homeMotion.mode = "target";
+          var nextTarget = homeMotion.target + direction;
+          nextTarget = Math.max(minTarget, Math.min(maxTarget, nextTarget));
+          homeMotion.target = nextTarget;
+          homeMotion.direction = direction;
+          homeMotion.committedOrdinal = nextTarget;
+          controller.selected = nextTarget;
+          if (!isShort) {
+            ensureHoldSlots(controller, Math.max(minTarget, nextTarget - 2), nextTarget + controller.visible + 3);
+          }
+          var targetSlot = controller.slots[nextTarget] || (isShort ? controller.cards[nextTarget] : null);
+          if (targetSlot) {
+            var prev = doc.querySelector("[data-focus].is-focused");
+            if (prev && prev !== targetSlot) prev.classList.remove("is-focused");
+            targetSlot.focus({ preventScroll: true });
+            targetSlot.classList.add("is-focused");
+            if (watchPerformance) watchPerformance.focusApplied();
+            var id = homeFocusIdentity(targetSlot);
+            if (id) {
+              homeRowMemory[id.group] = id; homeLastContent = id;
+              if (tabRowMemory[state.watchTab]) tabRowMemory[state.watchTab][id.group] = id;
+              tabLastContent[state.watchTab] = id;
+            }
+            syncActiveHomeHeading(targetSlot);
+            showHomeHero(targetSlot.homeEntry);
+          }
+        }
+        renewMotionInactivity();
+        return true;
+      }
+
+      var initialTarget = controller.selected + direction;
+      initialTarget = Math.max(minTarget, Math.min(maxTarget, initialTarget));
+      if (!isHold && initialTarget === controller.selected && Math.abs(currentPos - initialTarget) < 0.005) {
+        return false;
+      }
+
+      if (!isHold) {
+        controller.selected = initialTarget;
+        if (!isShort) {
+          ensureHoldSlots(controller, Math.max(minTarget, initialTarget - 2), initialTarget + controller.visible + 3);
+        }
+        var initSlot = controller.slots[initialTarget] || (isShort ? controller.cards[initialTarget] : null);
+        if (initSlot) {
+          var prevInit = doc.querySelector("[data-focus].is-focused");
+          if (prevInit && prevInit !== initSlot) prevInit.classList.remove("is-focused");
+          initSlot.focus({ preventScroll: true });
+          initSlot.classList.add("is-focused");
+          if (watchPerformance) watchPerformance.focusApplied();
+          var initId = homeFocusIdentity(initSlot);
+          if (initId) {
+            homeRowMemory[initId.group] = initId; homeLastContent = initId;
+            if (tabRowMemory[state.watchTab]) tabRowMemory[state.watchTab][initId.group] = initId;
+            tabLastContent[state.watchTab] = initId;
+          }
+          syncActiveHomeHeading(initSlot);
+          showHomeHero(initSlot.homeEntry);
+        }
+      }
+
+      var now = clock.performance && clock.performance.now ? clock.performance.now() : Date.now();
+      homeMotion = {
+        controller: controller,
+        group: groupName,
+        mode: isHold ? "hold" : "target",
+        direction: direction,
+        position: currentPos,
+        target: initialTarget,
+        committedOrdinal: initialTarget,
+        minTarget: minTarget,
+        maxTarget: maxTarget,
+        isShort: isShort,
+        cycleStart: minTarget,
+        lastFrame: now,
+        frame: 0,
+        inactivityTimer: 0
+      };
+      renewMotionInactivity();
+      homeMotion.frame = clock.requestAnimationFrame(motionFrame);
+      return true;
+    }
+    // Backwards-compatible aliases
+    var holdMotion = null;
+    function holdFrame(timestamp) { return motionFrame(timestamp); }
+    function finishHoldMotion() { return finishHorizontalMotion(); }
+    function startHoldMotion(key) {
+      var focused = doc.activeElement, group = focused && focused.dataset.homeGroup;
+      return stepHorizontalMotion(group, key === "ArrowRight" ? 1 : -1, true);
+    }
+    function renewHoldInactivity() { return renewMotionInactivity(); }
+    function carouselX(track) {
+      var value = clock.getComputedStyle(track).transform;
+      if (!value || value === "none") return 0;
+      var parts = value.match(/^matrix(?:3d)?\((.*)\)$/);
+      if (!parts) return 0;
+      var numbers = parts[1].split(",").map(Number);
+      return numbers.length === 16 ? numbers[12] : numbers[4];
+    }
+    function trimHomeCarousel(controller, inFlight) {
+      var row = controller.row, track = controller.track;
+      if (!track.isConnected || !track.firstElementChild) return true;
+      if (row.closest("[hidden]")) return true;
+      var expectedX = -controller.selected * controller.step;
+      var x = carouselX(track);
+      if (!inFlight && Math.abs(x - expectedX) > .75) return false;
+      var cycleStart = Math.floor(controller.selected / controller.cards.length) * controller.cards.length;
+      var first = track.firstElementChild;
+      // Absolute slots do not reflow their neighbors when an offscreen node leaves.
+      while (first && first !== doc.activeElement
+          && (Number(first.dataset.homeOrdinal) < cycleStart
+            || (track.childElementCount > controller.capacity
+              && controller.gutter + Number(first.dataset.homeOrdinal) * controller.step
+                + x + controller.width < -controller.step))) {
+        delete controller.slots[first.dataset.homeOrdinal];
+        track.removeChild(first);
+        first.classList.remove("is-focused");
+        controller.pool.push(first);
+        if (controller.pool.length > controller.capacity) controller.pool.shift();
+        first = track.firstElementChild;
+      }
+      controller.start = first ? Number(first.dataset.homeOrdinal) : cycleStart;
+      var last = track.lastElementChild;
+      while (track.childElementCount > controller.capacity
+          && last && last !== doc.activeElement
+          && controller.gutter + Number(last.dataset.homeOrdinal) * controller.step
+            + x > row.clientWidth + controller.step) {
+        delete controller.slots[last.dataset.homeOrdinal];
+        track.removeChild(last);
+        last.classList.remove("is-focused");
+        controller.pool.push(last);
+        if (controller.pool.length > controller.capacity) controller.pool.shift();
+        last = track.lastElementChild;
+      }
+      controller.end = last ? Number(last.dataset.homeOrdinal) : controller.start;
+      return true;
     }
     function revealHomeWindow(element, direction) {
       var group = element.dataset.homeGroup, cards = homeCards[group];
-      if (!cards || !cards.length) return;
+      if (!cards || !cards.length) return element;
       var row = get("watch-" + group + "-row"), track = row.querySelector(".watch-home-track");
-      if (!row || !track) return;
-
-      var first = track.firstElementChild || cards[0];
-      var width = first.offsetWidth || 280;
-      var nextEl = first.nextElementSibling;
-      var cardStep = (nextEl && first && (nextEl.offsetLeft - first.offsetLeft))
-        || (width + 16);
-      if (cardStep <= 0) cardStep = width + 16;
-      var rowWidth = row.clientWidth || (clock.innerWidth ? clock.innerWidth - 180 : 1735);
-      var visibleSlots = Math.max(1, Math.ceil(rowWidth / cardStep));
-      var overscan = 3;
-
-      // Short rows: avoid duplicate titles, keep all cards in natural order
-      if (cards.length <= visibleSlots) {
-        if (track.childElementCount !== cards.length) {
-          track.replaceChildren.apply(track, cards);
-        }
-        track.style.transform = "";
-        row.scrollLeft = 0;
-        loadHomeWindowArt(cards);
-        return;
-      }
-
-      var windowSize = Math.min(cards.length, visibleSlots + overscan * 2);
-      var attached = Array.from(track.children);
-      var pos = attached.indexOf(element);
-
-      // If element is not currently in track (e.g. restoring focus from memory or large jump)
-      if (pos < 0) {
-        var cardIndex = cards.indexOf(element);
-        if (cardIndex < 0) return;
-        var start = (cardIndex === 0 && row.scrollLeft <= 2) ? 0 : Math.max(0, cardIndex - overscan);
-        var selected = [];
-        for (var s = 0; s < windowSize; s++) {
-          selected.push(cards[(start + s) % cards.length]);
-        }
-        track.replaceChildren.apply(track, selected);
-        attached = Array.from(track.children);
-        pos = attached.indexOf(element);
-      }
-
-      // On entering or returning to the first title: first poster at left gutter, nothing to the left
-      if (element === cards[0]) {
-        if (attached[0] !== cards[0] || row.scrollLeft > 2 || track.style.transform !== "") {
-          var selected0 = [];
-          for (var s0 = 0; s0 < windowSize; s0++) {
-            selected0.push(cards[s0 % cards.length]);
+      var controller = homeCarousels[group];
+      var isShort = isRowShort(group, cards);
+      if (!controller) {
+        var firstSlot = carouselSlot({ cards: cards }, 0);
+        track.appendChild(firstSlot);
+        var rowStyle = clock.getComputedStyle(row);
+        var gap = parseFloat(rowStyle.columnGap);
+        if (!Number.isFinite(gap)) gap = parseFloat(rowStyle.gap) || 0;
+        var firstRect = firstSlot.getBoundingClientRect();
+        var gutter = parseFloat(rowStyle.paddingLeft) || 0;
+        var step = firstRect.width + gap;
+        var available = row.clientWidth - gutter;
+        var visible = Math.max(1, Math.ceil(available / step));
+        track.style.height = firstRect.height + "px";
+        if (isShort) {
+          controller = homeCarousels[group] = { isShort: true, cards: cards, row: row, track: track,
+            start: 0, end: cards.length - 1, selected: 0, step: step, width: firstRect.width,
+            gutter: gutter, visible: visible, capacity: cards.length, pool: [], slots: Object.create(null) };
+          controller.slots[0] = firstSlot;
+          for (var i = 1; i < cards.length; i++) {
+            var s = carouselSlot(controller, i);
+            controller.slots[i] = s;
+            track.appendChild(s);
           }
-          track.replaceChildren.apply(track, selected0);
-          attached = Array.from(track.children);
-          pos = attached.indexOf(element);
-          row.scrollLeft = 0;
-          track.style.transform = "";
-        }
-        loadHomeWindowArt(attached);
-        return;
-      }
-
-      var behindCount = pos;
-      var aheadCount = attached.length - 1 - pos;
-
-      // Approaching the end (moving right): recycle cards from front to back
-      if (aheadCount < visibleSlots + overscan && behindCount > overscan) {
-        var toMoveAhead = Math.min((visibleSlots + overscan) - aheadCount, behindCount - overscan);
-        for (var ma = 0; ma < toMoveAhead; ma++) {
-          var frontCard = track.firstElementChild;
-          if (frontCard && frontCard !== element) {
-            track.removeChild(frontCard);
-            var lastAttached = track.lastElementChild;
-            var lastIdx = cards.indexOf(lastAttached);
-            var nextCardToAdd = cards[(lastIdx + 1) % cards.length];
-            track.appendChild(nextCardToAdd);
-            row.scrollLeft -= cardStep;
-            behindCount--;
-            aheadCount++;
+          var totalW = cards.length * step - gap;
+          controller.fits = (totalW <= available);
+        } else {
+          controller = homeCarousels[group] = { isShort: false, cards: cards, row: row, track: track,
+            start: 0, end: 0, selected: 0, step: step, width: firstRect.width,
+            gutter: gutter, visible: visible, capacity: cards.length,
+            wrapTimer: 0, pool: [], slots: Object.create(null) };
+          controller.slots[0] = firstSlot;
+          var initialEnd = Math.min(cards.length - 1, visible + 2);
+          while (controller.end < initialEnd) {
+            controller.end += 1;
+            var initialSlot = carouselSlot(controller, controller.end);
+            controller.slots[controller.end] = initialSlot;
+            track.appendChild(initialSlot);
           }
         }
-        attached = Array.from(track.children);
-        pos = attached.indexOf(element);
+      }
+      var index = Number(element.dataset.homeIndex);
+      if (!Number.isInteger(index) || index < 0 || index >= cards.length) index = cards.indexOf(element);
+      if (index < 0) return element;
+
+      if (controller.isShort) {
+        var target = Math.max(0, Math.min(cards.length - 1, index));
+        var slot = controller.slots[target] || cards[target];
+        controller.selected = target;
+        if (controller.fits) {
+          track.style.transform = "translate3d(0px,0,0)";
+        } else {
+          track.style.transform = "translate3d(" + (-target * controller.step) + "px,0,0)";
+        }
+        return slot;
       }
 
-      // Approaching the start (moving left): recycle cards from back to front
-      // Never prepend before cards[0] in the current cycle
-      if (behindCount < overscan && aheadCount > visibleSlots + overscan && attached[0] !== cards[0] && row.scrollLeft > 2) {
-        var toMoveBehind = Math.min(overscan - behindCount, aheadCount - (visibleSlots + overscan));
-        for (var mb = 0; mb < toMoveBehind; mb++) {
-          var backCard = track.lastElementChild;
-          if (backCard && backCard !== element) {
-            track.removeChild(backCard);
-            var firstAttached = track.firstElementChild;
-            var firstIdx = cards.indexOf(firstAttached);
-            var prevCardToAdd = cards[(firstIdx - 1 + cards.length) % cards.length];
-            track.insertBefore(prevCardToAdd, track.firstElementChild);
-            row.scrollLeft += cardStep;
-            behindCount++;
-            aheadCount--;
+      if (controller.track.childElementCount > controller.capacity + 2)
+        trimHomeCarousel(controller, true);
+      var target = direction === 1 ? controller.selected + 1
+        : direction === -1 ? Math.max(0, controller.selected - 1)
+          : controller.selected % cards.length === index ? controller.selected : index;
+      if (cards.length === 1) target = 0;
+      if (target % cards.length !== index) target = index;
+      var neededEnd = target + (cards.length > controller.visible ? controller.visible + 2 : 1);
+      while (controller.start > target) {
+        if (track.childElementCount >= controller.capacity) {
+          var oldLast = track.lastElementChild;
+          if (oldLast && oldLast !== doc.activeElement) {
+            delete controller.slots[oldLast.dataset.homeOrdinal];
+            track.removeChild(oldLast);
+            oldLast.classList.remove("is-focused");
+            controller.pool.push(oldLast);
+            controller.end = track.lastElementChild ? Number(track.lastElementChild.dataset.homeOrdinal) : controller.end - 1;
           }
         }
-        attached = Array.from(track.children);
-        pos = attached.indexOf(element);
+        controller.start -= 1;
+        var restoredSlot = carouselSlot(controller, controller.start);
+        controller.slots[controller.start] = restoredSlot;
+        track.insertBefore(restoredSlot, track.firstElementChild);
       }
-
-      loadHomeWindowArt(attached);
+      while (cards.length > 1 && controller.end < neededEnd) {
+        if (track.childElementCount >= controller.capacity) {
+          var oldFirst = track.firstElementChild;
+          if (oldFirst && oldFirst !== doc.activeElement) {
+            delete controller.slots[oldFirst.dataset.homeOrdinal];
+            track.removeChild(oldFirst);
+            oldFirst.classList.remove("is-focused");
+            controller.pool.push(oldFirst);
+            controller.start = track.firstElementChild ? Number(track.firstElementChild.dataset.homeOrdinal) : controller.start + 1;
+          }
+        }
+        controller.end += 1;
+        var addedSlot = carouselSlot(controller, controller.end);
+        controller.slots[controller.end] = addedSlot;
+        track.appendChild(addedSlot);
+      }
+      var slot = controller.slots[target];
+      if (!slot) return element;
+      var cycleStart = Math.floor(target / cards.length) * cards.length;
+      if (direction === undefined && target % cards.length === 0) {
+        prunePreviousCycleSlots(controller, cycleStart);
+      }
+      controller.selected = target;
+      var now = clock.performance && clock.performance.now ? clock.performance.now() : Date.now();
+      track.style.transitionDuration = direction ? (now - (controller.lastMoveAt || 0) < 90 ? "55ms" : "140ms") : "0s";
+      controller.lastMoveAt = now;
+      track.style.transform = "translate3d(" + (-target * controller.step) + "px,0,0)";
+      if (controller.trimTimer) clock.clearTimeout(controller.trimTimer);
+      if (track.childElementCount > controller.capacity || target % cards.length === 0) {
+        var attemptTrim = function () {
+          controller.trimTimer = 0;
+          if (homeCarousels[group] !== controller) return;
+          if (!trimHomeCarousel(controller))
+            controller.trimTimer = clock.setTimeout(attemptTrim, 40);
+        };
+        controller.trimTimer = clock.setTimeout(attemptTrim, 160);
+      }
+      return slot;
     }
     function resolveHomeSelection(saved) {
       if (!saved) return null;
@@ -577,98 +1040,181 @@
         api("/api/title/" + row.type + "/" + row.id).then(function (detail) { return detail; }, function () { return null; }));
       return homeDetailCache.get(key);
     }
-    var homeArtRequest = 0, homeArtTargetSrc = "";
-    function setHomeArtwork(backdropPath, posterPath) {
+    var homeArtRequest = 0, homeArtPendingImage = null, homeArtFadeTimer = 0;
+    var homeHeroRequestedEntry = null;
+    function cancelHomeArtwork() {
+      ++homeArtRequest;
+      if (homeArtFadeTimer) clock.clearTimeout(homeArtFadeTimer);
+      homeArtFadeTimer = 0;
+      get("watch-hero-art").classList.remove("is-fading-out");
+      get("watch-hero-copy").classList.remove("is-fading-out");
+      if (!homeArtPendingImage) return;
+      var pending = homeArtPendingImage;
+      homeArtPendingImage = null;
+      if (pending.decodeTimer) clock.clearTimeout(pending.decodeTimer);
+      pending.image.removeEventListener("load", pending.onLoad);
+      pending.image.removeEventListener("error", pending.onError);
+      pending.image.removeAttribute("src");
+    }
+    function invalidatePendingHomeHero() {
+      if (homeHeroTimer) clock.clearTimeout(homeHeroTimer);
+      homeHeroTimer = 0; ++homeHeroToken;
+      homeHeroRequestedEntry = homeHeroEntry;
+      cancelHomeArtwork();
+    }
+    function setHomeArtwork(backdropPath, posterPath, onReady) {
       var art = get("watch-hero-art");
       var paths = backdropPath ? [[backdropPath, "hero", false]] : [];
       if (posterPath) paths.push([posterPath, "poster", true]);
-      if (!paths.length) { ++homeArtRequest; homeArtTargetSrc = ""; art.replaceChildren(); return; }
+      if (!paths.length) { cancelHomeArtwork(); art.replaceChildren(); onReady(); return; }
       var requestedSrc = core.imageUrl(paths[0][0], paths[0][1]);
       var visible = art.querySelector("img.is-visible");
       if (visible && visible.src === requestedSrc) {
-        if (homeArtTargetSrc !== requestedSrc) ++homeArtRequest;
-        homeArtTargetSrc = requestedSrc;
-        return;
+        cancelHomeArtwork();
+        onReady(); return;
       }
-      if (homeArtTargetSrc === requestedSrc) return;
-      homeArtTargetSrc = requestedSrc;
-      var request = ++homeArtRequest;
+      cancelHomeArtwork();
+      var request = homeArtRequest;
       function tryPath(index) {
         if (request !== homeArtRequest) return;
-        if (index >= paths.length) { homeArtTargetSrc = ""; return; }
+        if (index >= paths.length) {
+          art.replaceChildren(); onReady(); return;
+        }
         var path = paths[index], src = core.imageUrl(path[0], path[1]);
         var current = art.querySelector("img.is-visible");
-        if (current && current.src === src) { homeArtTargetSrc = src; return; }
+        if (current && current.src === src) { onReady(); return; }
         var image = doc.createElement("img");
         image.alt = ""; image.className = "home-art-layer";
         var artStarted = watchPerformance && watchPerformance.heroStart();
-        image.addEventListener("error", function () {
+        function apply() {
+          if (request !== homeArtRequest || state.view !== "watch") return;
+          homeArtPendingImage = null;
+          function commitImage() {
+            if (request !== homeArtRequest || state.view !== "watch") return;
+            homeArtFadeTimer = 0;
+            image.classList.add("is-visible");
+            art.classList.toggle("is-poster", path[2]);
+            // Artwork and text are swapped together while hidden during a fade.
+            art.replaceChildren(image);
+            if (watchPerformance) watchPerformance.heroSwap();
+            onReady();
+            art.classList.remove("is-fading-out");
+            get("watch-hero-copy").classList.remove("is-fading-out");
+          }
+          if (heroPreferences.fade && art.querySelector("img.is-visible")) {
+            art.classList.add("is-fading-out");
+            get("watch-hero-copy").classList.add("is-fading-out");
+            homeArtFadeTimer = clock.setTimeout(commitImage, 65);
+          } else commitImage();
+        }
+        function onError() {
           if (watchPerformance) watchPerformance.heroEnd(artStarted, true);
+          homeArtPendingImage = null;
           tryPath(index + 1);
-        });
-        image.addEventListener("load", function () {
+        }
+        function onLoad() {
           if (watchPerformance) watchPerformance.heroEnd(artStarted, false);
           if (request !== homeArtRequest || state.view !== "watch") return;
-          homeArtTargetSrc = src;
-          Array.from(art.querySelectorAll("img:not(.is-visible)")).forEach(function (old) { old.remove(); });
-          current = art.querySelector("img.is-visible");
-          art.classList.toggle("is-poster", path[2]);
-          art.appendChild(image);
-          if (!current || clock.matchMedia && clock.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-            if (current) current.remove();
-            image.classList.add("is-visible"); return;
+          if (typeof image.decode === "function") {
+            var decodeAt = watchPerformance && watchPerformance.decodeStart();
+            var finished = false;
+            function finishDecode(failed) {
+              if (finished) return;
+              finished = true;
+              if (homeArtPendingImage && homeArtPendingImage.image === image) {
+                clock.clearTimeout(homeArtPendingImage.decodeTimer);
+                homeArtPendingImage.decodeTimer = 0;
+              }
+              if (request !== homeArtRequest) return;
+              if (watchPerformance) watchPerformance.decodeEnd(decodeAt, failed);
+              apply();
+            }
+            try {
+              var decoding = image.decode();
+              homeArtPendingImage.decodeTimer = clock.setTimeout(function () { finishDecode(true); }, 800);
+              decoding.then(function () { finishDecode(false); }, function () { finishDecode(true); });
+              return;
+            } catch (_error) {
+              finishDecode(true); return;
+            }
           }
-          clock.requestAnimationFrame(function () { clock.requestAnimationFrame(function () {
-            if (request !== homeArtRequest) return;
-            image.classList.add("is-visible"); current.classList.remove("is-visible");
-            clock.setTimeout(function () { if (current.parentNode === art) current.remove(); }, 480);
-          }); });
-        });
+          apply();
+        }
+        homeArtPendingImage = { image: image, onLoad: onLoad, onError: onError };
+        image.addEventListener("error", onError);
+        image.addEventListener("load", onLoad);
         image.src = src;
       }
       tryPath(0);
     }
-    function paintHomeHero(entry, detail) {
-      homeHeroEntry = entry;
-      if (entry) {
-        var row = entry.row, backdropPath = detail && detail.backdrop || row.backdrop,
-          posterPath = detail && detail.poster || row.poster;
-        setHomeArtwork(backdropPath, posterPath);
-        text("watch-hero-title", detail && detail.title || row.title);
-        var meta = [];
-        if (detail && detail.date || row.date) meta.push((detail && detail.date || row.date).slice(0, 4));
-        meta.push(row.type === "tv" ? "TV Series" : "Movie");
-        if (detail && detail.rating || row.rating) meta.push(detail && detail.rating || row.rating);
-        else if (Number.isFinite(row.voteAverage) && row.voteAverage > 0) meta.push(row.voteAverage.toFixed(1) + "/10");
-        if (detail && detail.runtime) meta.push(detail.runtime + " min");
-        else if (detail && detail.episodeRuntime && row.type === "tv") meta.push(detail.episodeRuntime + " min episodes");
-        if (row.type === "tv" && row.season && row.episode) meta.push("S" + row.season + " E" + row.episode);
-        if (row.matchReason) meta.push(row.matchReason);
-        text("watch-hero-context", meta.join("  ·  "));
-        text("watch-hero-description", detail && detail.overview || row.overview || "");
-      } else {
-        ++homeArtRequest; get("watch-hero-art").replaceChildren();
-        text("watch-hero-title", "Find your next watch");
-        text("watch-hero-context", "Your viewing history will appear here.");
-        text("watch-hero-description", "Use Search to find a movie or show.");
+    function paintHomeHero(entry, detail, token, afterCommit) {
+      function commit() {
+        if (disposed || state.view !== "watch" || token !== homeHeroToken) return;
+        homeHeroEntry = entry;
+        if (entry) {
+          var row = entry.row;
+          text("watch-hero-title", detail && detail.title || row.title);
+          var meta = [];
+          if (detail && detail.date || row.date) meta.push((detail && detail.date || row.date).slice(0, 4));
+          meta.push(row.type === "tv" ? "TV Series" : "Movie");
+          if (detail && detail.rating || row.rating) meta.push(detail && detail.rating || row.rating);
+          else if (Number.isFinite(row.voteAverage) && row.voteAverage > 0) meta.push(row.voteAverage.toFixed(1) + "/10");
+          if (detail && detail.runtime) meta.push(detail.runtime + " min");
+          else if (detail && detail.episodeRuntime && row.type === "tv") meta.push(detail.episodeRuntime + " min episodes");
+          if (row.type === "tv" && row.season && row.episode) meta.push("S" + row.season + " E" + row.episode);
+          if (row.matchReason) meta.push(row.matchReason);
+          text("watch-hero-context", meta.join("  ·  "));
+          text("watch-hero-description", detail && detail.overview || row.overview || "");
+        } else {
+          text("watch-hero-title", "Find your next watch");
+          text("watch-hero-context", "Your viewing history will appear here.");
+          text("watch-hero-description", "Use Search to find a movie or show.");
+        }
+        if (afterCommit) afterCommit();
       }
+      if (!entry) { setHomeArtwork(null, null, commit); return; }
+      var row = entry.row;
+      setHomeArtwork(detail && detail.backdrop || row.backdrop,
+        detail && detail.poster || row.poster, commit);
     }
-    function showHomeHero(entry) {
+    function showHomeHero(entry, force) {
+      if (!force && entry === homeHeroRequestedEntry && (homeHeroTimer || homeArtPendingImage)) return;
       if (homeHeroTimer) clock.clearTimeout(homeHeroTimer);
       homeHeroTimer = 0;
-      if (entry && entry === homeHeroEntry) return;
+      var previousRequest = homeHeroRequestedEntry;
+      homeHeroRequestedEntry = entry;
       var token = ++homeHeroToken;
+      cancelHomeArtwork();
+      var mode = watchPerformance ? watchPerformance.mode() : heroPreferences;
+      if (mode.fixed && homeHeroEntry) return;
+      if (!force && entry && entry === homeHeroEntry) return;
       function settle() {
         homeHeroTimer = 0;
         if (disposed || state.view !== "watch" || token !== homeHeroToken) return;
-        paintHomeHero(entry, null);
-        if (entry && entry.group !== "top" && entry.group !== "because") homeDetail(entry.row).then(function (detail) {
-          if (!disposed && state.view === "watch" && token === homeHeroToken && detail) paintHomeHero(entry, detail);
+        var heroStarted = watchPerformance && watchPerformance.heroAttempt();
+        paintHomeHero(entry, null, token, function () {
+          if (watchPerformance) watchPerformance.heroSettled(heroStarted);
+          if (entry && entry.group !== "top" && entry.group !== "because") homeDetail(entry.row).then(function (detail) {
+            if (!disposed && state.view === "watch" && token === homeHeroToken && detail)
+              paintHomeHero(entry, detail, token);
+          });
         });
+        if (watchPerformance) watchPerformance.heroWork(heroStarted);
       }
-      if (entry && homeHeroEntry) homeHeroTimer = clock.setTimeout(settle, 110);
+      if (entry && previousRequest && !force && mode.delay > 0)
+        homeHeroTimer = clock.setTimeout(settle, mode.delay);
       else settle();
     }
+    if (watchPerformance) watchPerformance.onModeChange(function (mode) {
+      if (state.view !== "watch") return;
+      if (mode.fixed && homeHeroEntry) {
+        if (homeHeroTimer) clock.clearTimeout(homeHeroTimer);
+        homeHeroTimer = 0; ++homeHeroToken; cancelHomeArtwork(); return;
+      }
+      var remembered = resolveHomeSelection(tabLastContent[state.watchTab] || homeLastContent);
+      showHomeHero(doc.activeElement.homeEntry || remembered && remembered.homeEntry
+        || homeHeroRequestedEntry || homeDefaultEntry, true);
+    });
     function openHomeEntry(entry) {
       if (!entry || homeOpenPending || state.view !== "watch") return;
       var row = entry.row;
@@ -704,7 +1250,6 @@
       var modeBtn = get("filter-btn-mode");
       var mediaBtn = get("filter-btn-media");
       var styleBtn = get("filter-btn-style");
-      var finishedBtn = get("filter-btn-finished");
 
       if (seedBtn) {
         seedBtn.hidden = !isDiscover;
@@ -731,13 +1276,6 @@
           var styleLabels = { all: "Style: All", animated: "Style: Animated", live_action: "Style: Live Action" };
           styleBtn.textContent = styleLabels[discoverStyle] || "Style: All";
           styleBtn.classList.toggle("is-active", discoverStyle !== "all");
-        }
-      }
-      if (finishedBtn) {
-        finishedBtn.hidden = !isDiscover;
-        if (isDiscover) {
-          finishedBtn.textContent = discoverHideFinished ? "Hide Finished" : "Show Finished";
-          finishedBtn.classList.toggle("is-active", discoverHideFinished);
         }
       }
 
@@ -832,9 +1370,6 @@
         options.push({ label: "All (Animated & Live Action)", value: "all" });
         options.push({ label: "Animated", value: "animated" });
         options.push({ label: "Live Action", value: "live_action" });
-      } else if (filterType === "finished") {
-        options.push({ label: "Hide Finished Titles", value: "true" });
-        options.push({ label: "Show Finished Titles", value: "false" });
       } else if (filterType === "genre") {
         options.push({ label: "All Genres", value: "" });
         var genreList = state.watchTab === "discover"
@@ -875,7 +1410,6 @@
         : filterType === "mode" ? discoverMode
         : filterType === "media" ? discoverMedia
         : filterType === "style" ? discoverStyle
-        : filterType === "finished" ? (discoverHideFinished ? "true" : "false")
         : filterType === "genre" ? (f.genre ? String(f.genre) : "")
         : filterType === "length" ? (f.length || "")
         : filterType === "rating" ? (f.rating || "")
@@ -893,6 +1427,15 @@
       });
 
       menu.hidden = false;
+      var triggerBtn = get("filter-btn-" + filterType);
+      if (triggerBtn) {
+        var btnRect = triggerBtn.getBoundingClientRect();
+        var menuWidth = Math.min(360, Math.max(250, btnRect.width + 40));
+        var winWidth = clock.innerWidth || 1920;
+        var left = Math.min(btnRect.left, winWidth - menuWidth - 24);
+        menu.style.left = Math.max(16, left) + "px";
+        menu.style.top = (btnRect.bottom + 8) + "px";
+      }
       var selectedEl = host.querySelector(".is-selected") || host.querySelector(".filter-menu-option");
       if (selectedEl) focus(selectedEl);
     }
@@ -907,6 +1450,7 @@
       }
     }
     function selectFilterOption(filterType, value) {
+      if (state.view === "watch") invalidatePendingHomeHero();
       if (filterType === "seed") {
         closeFilterMenu();
         if (value === "__search__") {
@@ -970,16 +1514,6 @@
         if (originatingStyle) focus(originatingStyle);
         return;
       }
-      if (filterType === "finished") {
-        discoverHideFinished = (value === "true");
-        closeFilterMenu();
-        rowCycleIndex = Object.create(null);
-        updateFilterStripUI();
-        renderDiscoverRows(discoverData);
-        var originatingFinished = get("filter-btn-finished");
-        if (originatingFinished) focus(originatingFinished);
-        return;
-      }
       var isTv = state.watchTab === "tv";
       var f = isTv ? tvFilters : (state.watchTab === "movies" ? movieFilters : discoverFilters);
       if (filterType === "genre") f.genre = value ? Number(value) : null;
@@ -1031,6 +1565,7 @@
     }
     function setWatchTab(tabName) {
       if (["for-you", "tv", "movies", "discover"].indexOf(tabName) < 0) return;
+      if (state.view === "watch") invalidatePendingHomeHero();
       if (activeFilterMenuType) closeFilterMenu();
       var scroller = get("watch-rows-scroll");
       if (scroller) tabScrollTop[state.watchTab] = scroller.scrollTop;
@@ -1067,6 +1602,8 @@
       if (!host) return;
       var track = host.querySelector(".watch-home-track");
       if (!track) return;
+      var focused = homeFocusIdentity(doc.activeElement);
+      if (!focused || focused.group !== group) focused = null;
       host.scrollLeft = 0;
       track.style.transform = "";
       rowCycleIndex[group] = 0;
@@ -1097,9 +1634,10 @@
       if (sec) sec.hidden = group === "filtered" ? (candidateList || []).length === 0 : (candidateList || []).length < 2;
       recordHomeCards(group);
       var cards = homeRowButtons(group);
-      if (artWindowExperiment && cards.length) {
-        var active = homeFocusIdentity(doc.activeElement);
-        revealHomeWindow(resolveHomeSelection(active && active.group === group ? active : null) || cards[0]);
+      if (cards.length) {
+        var selected = resolveHomeSelection(focused) || cards[0];
+        revealHomeWindow(selected);
+        if (focused) rowCycleIndex[group] = Number(selected.dataset.homeIndex) || 0;
       }
     }
     var filterFetchToken = 0;
@@ -1213,7 +1751,7 @@
         homeCards["continue"] = [];
         homeCards["recent"] = [];
       }
-      if (artWindowExperiment && state.watchTab === "for-you") ["continue", "recent"].forEach(function (group) {
+      if (state.watchTab === "for-you") ["continue", "recent"].forEach(function (group) {
         var cards = homeRowButtons(group);
         if (cards.length) revealHomeWindow(resolveHomeSelection(previous && previous.group === group ? previous : null) || cards[0]);
       });
@@ -1247,6 +1785,15 @@
         if (!section.hidden) first = true;
       });
       get("watch-view").classList.toggle("is-empty", !first);
+      // Recommendation rows are often built while their destination is hidden.
+      // Measure and attach the complete visible window only after revealing it,
+      // before the browser paints or the first D-pad input can reach the row.
+      activeOrder.forEach(function (group) {
+        var section = get("watch-" + group + "-section");
+        if (!section || section.hidden || homeCarousels[group] || !homeCards[group]
+            || !homeCards[group].length) return;
+        revealHomeWindow(homeCards[group][0]);
+      });
     }
     function paintRecommendationRows(rows) {
       recommendationRows = rows;
@@ -1758,6 +2305,9 @@
       focus(results.querySelector("button") || query);
     }
     function renderSettings() {
+      var delayButton = get("settings-hero-delay"), fadeButton = get("settings-hero-fade");
+      delayButton.textContent = heroPreferences.delay ? heroPreferences.delay + "ms" : "Immediate";
+      fadeButton.textContent = heroPreferences.fade ? "Fade On" : "Fade Off";
       var rows = core.readHistory(local), visible = core.homepageContinueCandidates(rows, local);
       var continueHost = get("settings-continue"), historyHost = get("settings-history");
       continueHost.replaceChildren(); historyHost.replaceChildren();
@@ -2308,7 +2858,15 @@
       });
     }
     function move(key) {
-      var current = doc.activeElement, rect = current && current.getBoundingClientRect();
+      var current = doc.activeElement;
+      if (!current || current === doc.body || (!current.dataset.homeGroup && !current.hasAttribute("data-focus"))) {
+        if (state.view === "watch") {
+          var remembered = tabLastContent[state.watchTab] || homeLastContent;
+          var rescue = resolveHomeSelection(remembered) || firstHomeButton() || get("watch-toggle");
+          if (rescue) { focus(rescue); return; }
+        }
+      }
+      var rect = current && current.getBoundingClientRect();
       if (!rect) { focus(query); return; }
       var railButtons = [get("search-toggle"), get("watch-toggle"), get("tv-toggle"), get("movies-toggle"), get("discover-toggle"), get("history-toggle"), get("settings-toggle")];
       var railPosition = railButtons.indexOf(current);
@@ -2382,34 +2940,53 @@
           }
           return;
         }
-        var groupIndex = watchRows.findIndex(function (row) { return row.indexOf(current) >= 0; });
+        var groupIndex = currentTabRowOrder().indexOf(current.dataset.homeGroup);
         var group = groupIndex >= 0 ? watchRows[groupIndex] : null;
         if (group) {
           var groupName = currentTabRowOrder()[groupIndex];
-          var index = group.indexOf(current);
+          var index = Number(current.dataset.homeIndex);
           var down = adjacentHomeRow(watchRows, groupIndex, 1);
           var up = adjacentHomeRow(watchRows, groupIndex, -1);
+          var downIdx = nextHomeRowIndex(watchRows, groupIndex, 1);
+          var upIdx = nextHomeRowIndex(watchRows, groupIndex, -1);
+          var isShort = isRowShort(groupName, group);
           if (rowCycleIndex[groupName] === undefined) {
             rowCycleIndex[groupName] = Math.max(0, index);
           }
           if (key === "ArrowLeft") {
-            if (rowCycleIndex[groupName] <= 0) {
-              focus(get("watch-toggle"));
+            if (isShort) {
+              if (index <= 0) {
+                focus(get("watch-toggle"));
+              } else {
+                focus(group[index - 1], true, -1);
+              }
             } else {
-              rowCycleIndex[groupName] -= 1;
-              focus(group[circularIndex(index, group.length, -1)], true, -1);
+              if (rowCycleIndex[groupName] <= 0) {
+                focus(get("watch-toggle"));
+              } else {
+                rowCycleIndex[groupName] -= 1;
+                focus(group[circularIndex(index, group.length, -1)], true, -1);
+              }
             }
           } else if (key === "ArrowRight") {
-            if (index === group.length - 1) rowCycleIndex[groupName] = 0;
-            else rowCycleIndex[groupName] += 1;
-            focus(group[circularIndex(index, group.length, 1)], true, 1);
+            if (isShort) {
+              if (index < group.length - 1) {
+                focus(group[index + 1], true, 1);
+              }
+            } else {
+              if (index === group.length - 1) rowCycleIndex[groupName] = 0;
+              else rowCycleIndex[groupName] += 1;
+              focus(group[circularIndex(index, group.length, 1)], true, 1);
+            }
           } else if (key === "ArrowDown") {
-            if (down) { var downGroup = currentTabRowOrder()[watchRows.indexOf(down)];
-              focus(resolveHomeSelection(homeRowMemory[downGroup]) || down[0]); }
+            if (down) { var downGroup = currentTabRowOrder()[downIdx >= 0 ? downIdx : watchRows.indexOf(down)];
+              var downTarget = resolveHomeSelection(homeRowMemory[downGroup]) || down[0];
+              if (downTarget) focus(downTarget); }
           } else if (key === "ArrowUp") {
-            var upGroup = currentTabRowOrder()[watchRows.indexOf(up)];
+            var upGroup = currentTabRowOrder()[upIdx >= 0 ? upIdx : watchRows.indexOf(up)];
             if (up) {
-              focus(resolveHomeSelection(homeRowMemory[upGroup]) || up[0]);
+              var upTarget = resolveHomeSelection(homeRowMemory[upGroup]) || up[0];
+              if (upTarget) focus(upTarget);
             } else if (state.watchTab === "tv" || state.watchTab === "movies" || state.watchTab === "discover") {
               var firstChip = get("filter-btn-seed");
               focus((state.watchTab === "discover" && firstChip && !firstChip.hidden) ? firstChip : get("filter-btn-genre"));
@@ -2535,13 +3112,29 @@
       if (code >= 37 && code <= 40) return ["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown"][code - 37];
       return key || "Unknown";
     }
-    function onKey(event) {
+    function handleKey(event) {
       if (disposed || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
       var key = keyName(event);
-      if (watchPerformance && watchPerformance.handle(key, state.view, doc.activeElement)) {
+      if (watchPerformance && watchPerformance.handle(key, state.view, doc.activeElement, event.repeat)) {
         event.preventDefault(); return;
       }
-      if (watchPerformance && key.indexOf("Arrow") === 0) watchPerformance.input();
+      if (holdMotion) {
+        if (key === "ArrowDown" || key === "ArrowUp" || key === "OK" || key === "Back") {
+          finishHoldMotion();
+        } else if (event.repeat && key === (holdMotion.direction > 0 ? "ArrowRight" : "ArrowLeft")) {
+          event.preventDefault(); renewHoldInactivity(); return;
+        }
+      }
+      if (key === "ArrowLeft" || key === "ArrowRight") {
+        var active = doc.activeElement, group = active && active.dataset.homeGroup;
+        if (state.view === "watch" && group) {
+          var dir = key === "ArrowRight" ? 1 : -1;
+          var isHold = !!event.repeat;
+          if (stepHorizontalMotion(group, dir, isHold)) {
+            event.preventDefault(); return;
+          }
+        }
+      }
       var editing = doc.activeElement === query || !!(doc.activeElement && doc.activeElement.isContentEditable);
       if (nativeEditingKey(event, editing, finePointer)) return;
       if (finePointer && event.key === "Backspace" && !editing) return;
@@ -2599,6 +3192,11 @@
       }
       if (key && key.indexOf("Arrow") === 0) { event.preventDefault(); move(key); return; }
     }
+    function onKey(event) {
+      var began = watchPerformance ? watchPerformance.keyStart(keyName(event)) : 0;
+      try { handleKey(event); }
+      finally { if (watchPerformance) watchPerformance.keyEnd(began); }
+    }
     get("watch-toggle").addEventListener("click", function () {
       if (state.view !== "watch") setView("watch");
       setWatchTab("for-you");
@@ -2621,6 +3219,19 @@
     get("keyboard-toggle").addEventListener("click", toggleKeyboard);
     get("history-toggle").addEventListener("click", showHistory);
     get("settings-toggle").addEventListener("click", showSettings);
+    get("settings-hero-delay").addEventListener("click", function () {
+      var current = HERO_DELAYS.indexOf(heroPreferences.delay);
+      heroPreferences.delay = HERO_DELAYS[(current + 1) % HERO_DELAYS.length];
+      saveHeroPreferences();
+      this.textContent = heroPreferences.delay ? heroPreferences.delay + "ms" : "Immediate";
+      focus(this);
+    });
+    get("settings-hero-fade").addEventListener("click", function () {
+      heroPreferences.fade = !heroPreferences.fade;
+      saveHeroPreferences();
+      this.textContent = heroPreferences.fade ? "Fade On" : "Fade Off";
+      focus(this);
+    });
     get("history-back").addEventListener("click", function () { returnWithinWatch(leaveHistory); });
     get("history-clear").addEventListener("click", function () {
       if (!clearPending) { clearPending = true; this.textContent = "Confirm clear history"; return; }
@@ -2629,7 +3240,7 @@
     });
     get("details-back").addEventListener("click", function () { returnWithinWatch(backToResults); });
     get("episodes-back").addEventListener("click", function () { returnWithinWatch(backToDetails); });
-    ["seed", "mode", "media", "finished", "genre", "length", "rating", "year", "sort"].forEach(function (t) {
+    ["seed", "mode", "media", "style", "genre", "length", "rating", "year", "sort"].forEach(function (t) {
       var b = get("filter-btn-" + t);
       if (b) b.addEventListener("click", function () { openFilterMenu(t); });
     });
@@ -2666,14 +3277,6 @@
     doc.addEventListener("focusin", function (event) {
       if (event.target && event.target.matches && event.target.matches("[data-focus]")) {
         event.target.classList.add("is-focused");
-        var railActions = Array.from(doc.querySelectorAll(".watch-rail .rail-action"));
-        railActions.forEach(function (action) {
-          action.classList.remove("rail-neighbor-before", "rail-neighbor-after");
-        });
-        var railIndex = railActions.indexOf(event.target);
-        if (railIndex > 0) railActions[railIndex - 1].classList.add("rail-neighbor-before");
-        if (railIndex >= 0 && railIndex < railActions.length - 1)
-          railActions[railIndex + 1].classList.add("rail-neighbor-after");
         if (state.view === "watch" && event.target.homeEntry) showHomeHero(event.target.homeEntry);
       }
     });
@@ -2683,21 +3286,51 @@
         syncActiveHomeHeading(doc.activeElement, true);
     });
     clock.addEventListener("resize", function () {
-      homeWindowSizes = Object.create(null);
-      if (state.view === "watch" && doc.activeElement && doc.activeElement.dataset.homeGroup) {
-        revealHomeWindow(doc.activeElement);
-        revealHomeSection(doc.activeElement);
-        syncActiveHomeHeading(doc.activeElement, true);
+      if (state.view !== "watch") return;
+      var active = homeFocusIdentity(doc.activeElement), restored = null;
+      Object.keys(homeCarousels).forEach(function (group) {
+        var old = homeCarousels[group], row = old.row, track = old.track;
+        if (old.trimTimer) clock.clearTimeout(old.trimTimer);
+        if (row.closest("[hidden]")) {
+          track.replaceChildren(); track.style.transform = "";
+          delete homeCarousels[group]; return;
+        }
+        var index = active && active.group === group ? active.index : old.selected % old.cards.length;
+        track.style.transition = "none";
+        track.style.transform = "";
+        track.replaceChildren();
+        delete homeCarousels[group];
+        var slot = revealHomeWindow(old.cards[index] || old.cards[0]);
+        track.offsetWidth;
+        track.style.transition = "";
+        if (active && active.group === group) restored = slot;
+      });
+      if (restored) {
+        restored.focus({ preventScroll: true }); restored.classList.add("is-focused");
+        revealHomeSection(restored);
+        syncActiveHomeHeading(restored, true);
       }
     });
     doc.addEventListener("focusout", function (event) {
       if (event.target && event.target.classList) event.target.classList.remove("is-focused");
     });
     doc.addEventListener("keydown", onKey);
+    doc.addEventListener("keyup", function (event) {
+      var key = keyName(event);
+      if (key === "ArrowLeft" || key === "ArrowRight") {
+        holdRepeatCount = 0;
+        if (holdMotion) finishHoldMotion();
+      }
+    });
+    clock.addEventListener("blur", function () { if (holdMotion) finishHoldMotion(); });
+    doc.addEventListener("visibilitychange", function () {
+      if (doc.hidden && holdMotion) finishHoldMotion();
+    });
     if (finePointer && root.history && root.history.replaceState && clock.addEventListener) {
       clock.addEventListener("popstate", restoreBrowserView);
     }
-    clock.addEventListener("pagehide", function () { disposed = true; if (searchTimer !== null) clock.clearTimeout(searchTimer);
+    clock.addEventListener("pagehide", function () { if (holdMotion) finishHoldMotion();
+      disposed = true; if (searchTimer !== null) clock.clearTimeout(searchTimer);
       if (activeAbort) activeAbort.abort(); });
     try {
       if ((nav.hash || "").indexOf("#watch-import=") === 0 && nav.hash.length < 7000) {
@@ -2822,6 +3455,7 @@
       launchEpisode: launchEpisode, onKey: onKey, showContinue: showContinue };
   }
   root.HorizonUniversalSearch = { createApp: createApp, nativeEditingKey: nativeEditingKey,
-    adjacentHomeRow: adjacentHomeRow, circularIndex: circularIndex };
+    adjacentHomeRow: adjacentHomeRow, nextHomeRowIndex: nextHomeRowIndex, circularIndex: circularIndex,
+    isRowShort: isRowShort };
   if (typeof document !== "undefined") createApp(document, location, root);
 })(typeof window !== "undefined" ? window : globalThis);

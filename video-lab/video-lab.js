@@ -37,6 +37,7 @@
     },
     hls: {
       name: "HLS · Apple Bip Bop",
+      mediaKind: "hls", // Registered public control source; no third-party resolver runs here.
       url: "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8",
     },
   };
@@ -191,7 +192,11 @@
       // canPlayType is only a hint; the media element still reports actual errors.
       return native ? "native" : "unsupported";
     }
-    function chooseHls(request) {
+    // Adapter boundary: a future authorized HLS source must be explicitly
+    // registered in SOURCES and permitted by the page CSP before it can reach
+    // this existing video-element path. Never resolve private site URLs here.
+    function chooseHls(request, sourceKey) {
+      var source = SOURCES[sourceKey];
       var path = hlsCapability();
       hlsReport("HLS path: " + path + ".");
       if (path === "unsupported") {
@@ -200,18 +205,18 @@
         return;
       }
       if (path === "native") {
-        video.src = SOURCES.hls.url; video.load(); disableNativeSubtitles();
+        video.src = source.url; video.load(); disableNativeSubtitles();
         say("Native HLS loading. Press Play after metadata loads; confirm picture and sound.");
         return;
       }
       say("Loading the local HLS adapter. Press Play after media is ready.");
       loadHlsLibrary().then(function (Hls) {
-        if (disposed || selected !== "hls" || request !== hlsRequest) return;
+        if (disposed || selected !== sourceKey || request !== hlsRequest) return;
         if (!Hls.isSupported()) {
           if (video.canPlayType && (video.canPlayType("application/vnd.apple.mpegurl")
             || video.canPlayType("application/x-mpegURL"))) {
             hlsReport("HLS adapter unavailable; using native HLS hint.");
-            video.src = SOURCES.hls.url; video.load(); disableNativeSubtitles();
+            video.src = source.url; video.load(); disableNativeSubtitles();
             say("Native HLS loading. Press Play after metadata loads; confirm picture and sound.");
             return;
           }
@@ -222,7 +227,7 @@
         hls = new Hls({ enableWorker: false, maxBufferLength: 20, backBufferLength: 10,
           renderTextTracksNatively: false });
         hls.on(Hls.Events.MEDIA_ATTACHED, function () {
-          if (request === hlsRequest) hls.loadSource(SOURCES.hls.url);
+          if (request === hlsRequest) hls.loadSource(source.url);
         });
         hls.on(Hls.Events.MANIFEST_PARSED, function (_event, data) {
           if (request !== hlsRequest) return;
@@ -251,22 +256,22 @@
         });
         hls.attachMedia(video);
       }).catch(function () {
-        if (disposed || selected !== "hls" || request !== hlsRequest) return;
+        if (disposed || selected !== sourceKey || request !== hlsRequest) return;
         hlsFailure = true;
         say("Local HLS adapter failed to load. Select HLS again to retry.");
       });
     }
     function choose(name) {
-      if (disposed || !SOURCES[name] || selected === name && !(name === "hls" && hlsFailure)) return;
+      if (disposed || !SOURCES[name] || selected === name && !(SOURCES[name].mediaKind === "hls" && hlsFailure)) return;
       if (selected !== null) video.pause();
       destroyHls();
       selected = name;
       checkpointIndex = 0;
-      video.loop = name !== "long" && name !== "hls";
+      video.loop = name !== "long" && SOURCES[name].mediaKind !== "hls";
       say("Loading " + SOURCES[name].name + ". Press Play when ready.");
-      if (name === "hls") {
+      if (SOURCES[name].mediaKind === "hls") {
         video.removeAttribute("src"); video.load();
-        chooseHls(hlsRequest);
+        chooseHls(hlsRequest, name);
       } else { video.src = SOURCES[name].url; video.load(); }
       SOURCE_KEYS.forEach(function (key) {
         get("source-" + key).setAttribute("aria-pressed", String(name === key));
@@ -386,7 +391,7 @@
     doc.addEventListener("keydown", onKey);
     video.addEventListener("loadstart", function () { record("loadstart"); });
     video.addEventListener("loadedmetadata", function () { record("loadedmetadata"); updateTime();
-      if (selected === "hls") disableNativeSubtitles();
+      if (selected && SOURCES[selected].mediaKind === "hls") disableNativeSubtitles();
       say("Metadata loaded. Press Play and check picture and sound."); });
     video.addEventListener("canplay", function () { record("canplay"); say("Can play event received. Press Play and check the TV."); });
     video.addEventListener("playing", function () { record("playing"); updatePlay(); say("Playing reported. Confirm picture and audible sound on the TV."); });

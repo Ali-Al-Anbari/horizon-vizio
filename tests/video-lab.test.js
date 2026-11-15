@@ -253,6 +253,9 @@ test("experimental HLS reuses the video element, gates MSE codecs, and never aut
   }
   const mse = { isTypeSupported(type) { return type.includes("avc1.4d401e"); } };
   const app = setup("?diagnostics=1", undefined, undefined, { MediaSource: mse, Hls: FakeHls });
+  assert.equal(app.window.HorizonVideoLab.sources.hls.mediaKind, "hls");
+  assert.deepEqual(Object.keys(app.window.HorizonVideoLab.sources).filter(key =>
+    app.window.HorizonVideoLab.sources[key].mediaKind === "hls"), ["hls"]);
   const video = app.video;
   app.get("source-hls").click();
   await Promise.resolve();

@@ -25,9 +25,11 @@
     var position = Number(value.position), duration = Number(value.duration), updatedAt = Number(value.updatedAt);
     if (!Number.isFinite(position) || position <= 0 || !Number.isFinite(duration) || duration <= 0 || duration > 10000000
         || position > duration + 2 || !Number.isFinite(updatedAt) || updatedAt <= 0
-        || updatedAt > 8640000000000000 || value.provider !== "vidbolt") return null;
+        || updatedAt > 8640000000000000
+        || ["vidbolt", "vidy", "stellar"].indexOf(value.provider) < 0
+        || value.provider !== "vidbolt" && duration < 600) return null;
     return { position: Math.min(position, duration), duration: duration, updatedAt: updatedAt,
-      provider: "vidbolt", completed: value.completed === true };
+      provider: value.provider, completed: value.completed === true };
   }
   function validHandoff(saved, returned, type, now) {
     return !!(saved && returned && /^[A-Za-z0-9_-]{8,80}$/.test(saved.token || "")
@@ -182,7 +184,8 @@
   }
   function lastWatchedEpisode(rows, showId) {
     var episodes = rows.filter(function (row) { return row.type === "tv" && row.id === showId; });
-    var confirmed = episodes.filter(function (row) { return row.progress && row.progress.provider === "vidbolt"; });
+    var confirmed = episodes.filter(function (row) { return row.progress
+      && ["vidbolt", "vidy", "stellar"].indexOf(row.progress.provider) >= 0; });
     var candidates = confirmed.length ? confirmed : episodes;
     return candidates.sort(function (a, b) { return (b.progress ? b.progress.updatedAt : b.at)
       - (a.progress ? a.progress.updatedAt : a.at) || b.at - a.at; })[0] || null;

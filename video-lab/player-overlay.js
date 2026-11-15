@@ -162,9 +162,10 @@
         if (!record || !Number.isFinite(record.position) || record.position <= 0
             || !Number.isFinite(record.duration) || record.duration <= 0 || record.duration > 10000000
             || record.position > record.duration + 2
-            || !Number.isFinite(record.updatedAt) || record.provider !== "vidbolt") return null;
+            || !Number.isFinite(record.updatedAt) || ["vidbolt", "vidy", "stellar"].indexOf(record.provider) < 0
+            || record.provider !== "vidbolt" && record.duration < (isMovie ? 1200 : 600)) return null;
         return { position: Math.min(record.position, record.duration), duration: record.duration,
-          updatedAt: record.updatedAt, provider: "vidbolt", completed: record.completed === true };
+          updatedAt: record.updatedAt, provider: record.provider, completed: record.completed === true };
       } catch (_error) { return null; }
     }
     function clearPlayerProgress(identity) {
@@ -177,13 +178,13 @@
       } catch (_error) {}
     }
     function storePlayerProgress(position, duration, completed, force, allowRegression) {
-      if (provider !== providers.VIDBOLT || !playerProgressStorage || !Number.isFinite(position)
+      if ([providers.VIDBOLT, "vidy", "stellar"].indexOf(provider) < 0 || !playerProgressStorage || !Number.isFinite(position)
           || !Number.isFinite(duration) || duration <= 0 || duration > 10000000
           || position <= 0 || position > duration + 2) return null;
       var stamp = Date.now();
       if (!force && stamp - progressLastWriteAt < 5000) return null;
       var record = { identity: boltIdentity(), position: Math.min(position, duration), duration: duration,
-        updatedAt: stamp, provider: "vidbolt", completed: completed === true };
+        updatedAt: stamp, provider: provider, completed: completed === true };
       try {
         var parsed = JSON.parse(playerProgressStorage.getItem(PLAYER_PROGRESS_KEY) || "null");
         var items = parsed && parsed.version === 1 && Array.isArray(parsed.items) ? parsed.items : [];
@@ -316,6 +317,14 @@
     var diagnosticsTimer = null;
     var labStatus = "No experimental provider selected.";
     var labFirstEvent = null;
+    var labPosition = null;
+    var labDuration = null;
+    var labPositionAt = 0;
+    var labPaused = false;
+    var labRestoreTarget = null;
+    var providerOptions = [];
+    var providerMenuSelected = 0;
+    var providerMenuOpen = false;
     var providerReady = false;
     var providerPlaying = false;
     var providerFailed = false;
@@ -343,11 +352,10 @@
     function renderProviderChoice() {
       if (playbackOnly()) playerShell.classList.add("lab-playback");
       else playerShell.classList.remove("lab-playback");
-      var next = providers.next(provider);
       var choice = get("provider-choice");
       var text = "Provider: " + providerLabel();
       choice.setAttribute("aria-label", "Playback provider: " + providerLabel()
-        + ". Press OK to switch to " + providers.label(next));
+        + ". Press OK to choose a provider");
       choice.title = "Switch provider · current " + providerLabel();
       var label = choice.querySelector ? choice.querySelector(".action-label") : null;
       if (label) label.textContent = text;
@@ -359,15 +367,17 @@
         unloadBtn.hidden = provider === providers.PRIMARY || provider === providers.VIDBOLT;
       }
       var recoverBtn = get("recover-provider");
-      recoverBtn.hidden = provider !== providers.VIDBOLT && provider !== providers.YAPGRID;
-      var recoverText = provider === providers.YAPGRID ? "Reload Player" : "Recover Player";
+      recoverBtn.hidden = false;
+      var recoverText = "Reload Player";
       var recoverLabel = recoverBtn.querySelector ? recoverBtn.querySelector(".action-label") : null;
       if (recoverLabel) recoverLabel.textContent = recoverText;
       else recoverBtn.textContent = recoverText;
       recoverBtn.title = recoverText;
       recoverBtn.setAttribute("aria-label", recoverText);
       desktopFullscreenButton.hidden = !desktopWatch;
-      get("watch-exit").hidden = !route.fromSearch;
+      get("watch-exit").hidden = false;
+      get("watch-exit").title = route.fromSearch ? "Exit to Watch" : "Exit to Video Lab";
+      get("watch-exit").setAttribute("aria-label", get("watch-exit").title);
       get("experimental-controls").hidden = !usesExperimentalRow();
       get("experiment-pause").hidden = false;
       get("experiment-volume").hidden = false;
@@ -375,14 +385,20 @@
       get("experiment-focus").hidden = provider !== providers.VIDRIFT;
       get("experiment-skip").hidden = provider !== providers.VIDRIFT;
       ["rewind", "play-pause", "forward"].forEach(function (id) {
-        get(id).hidden = usesExperimentalRow() || playbackOnly();
+        get(id).hidden = usesExperimentalRow();
+        get(id).disabled = playbackOnly();
       });
       get("subtitle-mode").textContent = provider === providers.VIDBOLT
         ? independentSubtitles.state().enabled ? "EN" : "OFF" : subtitleMode.toUpperCase();
-      get("subtitles").hidden = playbackOnly() || isMovie && provider !== providers.VIDBOLT;
-      get("subtitles").title = provider === providers.VIDBOLT ? "Horizon subtitles" : "YapGrid subtitles";
+      get("subtitles").hidden = false;
+      get("subtitles").disabled = playbackOnly() || isMovie && provider !== providers.VIDBOLT;
+      get("subtitles").title = get("subtitles").disabled ? "Horizon subtitle selection unavailable for this provider"
+        : provider === providers.VIDBOLT ? "Horizon subtitles" : "YapGrid subtitles";
       var audioLangBtn = get("audio-language");
-      if (audioLangBtn) audioLangBtn.hidden = provider !== providers.VIDBOLT;
+      if (audioLangBtn) audioLangBtn.hidden = false;
+      get("audio-language-status").textContent = provider === providers.VIDBOLT
+        ? "Spoken audio preference for VidBolt. Actual track availability depends on provider."
+        : "Horizon language preference only. Select audio tracks inside this provider's player when available.";
       updateAudioLanguageUI();
       renderBoltPlayPause();
       renderSeekLabels();
@@ -699,6 +715,7 @@
       boltRecoveryDecision = reason === "manual" ? "manual recovery requested" : "active iframe error; automatic recovery used";
       get("command-status").textContent = "VidBolt recovery " + boltRecoveryAttempts + ": " + boltLastRecoveryReason
         + ". New iframe loading; TV result unverified.";
+      if (reason === "manual" && state === STATES.CONTROLS_VISIBLE) focusControl(11);
       if (state === STATES.DIAGNOSTICS_OPEN) renderDiagnostics();
     }
     function markPause(stage) { if (pauseTrace) pauseTrace[stage] = now(); }
@@ -841,7 +858,7 @@
       controls.forEach(function (button, index) {
         if (button) button.tabIndex = visible && !button.hidden
           && !button.disabled
-          && (index < 12 || usesExperimentalRow() || index === 20 && route.fromSearch
+            && (index < 12 || usesExperimentalRow() || index === 20
             || index === 21 && desktopWatch || index === 22) ? 0 : -1;
       });
     }
@@ -873,10 +890,11 @@
       get("command-status").classList.remove("is-seek-help");
       get("command-status").textContent = provider === providers.VIDBOLT ? "" : isCommandProvider()
         ? "Experimental commands use the provider iframe; TV effect remains unverified."
+        : playbackOnly() ? "Provider playback controls are inside the player. Horizon can reload or switch providers."
         : adapter && typeof adapter.send === "function"
         ? "Preparing secure player connection…"
         : "Playback commands unavailable until the secure Pico bridge is connected.";
-      if (!isCommandProvider() && adapter && typeof adapter.open === "function") {
+      if (!isCommandProvider() && !playbackOnly() && adapter && typeof adapter.open === "function") {
         var connectionTimer = clock.setTimeout(function () {
           if (!disposed && state === STATES.CONTROLS_VISIBLE
               && get("command-status").textContent === "Preparing secure player connection…") {
@@ -1110,6 +1128,7 @@
     }
     function closeMenu() {
       if (state !== STATES.SUBMENU_OPEN) return;
+      if (providerMenuOpen) { closeProviderMenu(); return; }
       if (audioLanguageMenuOpen) {
         closeAudioLanguageMenu();
         return;
@@ -1229,6 +1248,47 @@
         if (button) button.tabIndex = 0;
       });
       focus(audioMenuButtons[audioLanguageSelected]);
+    }
+    function openProviderMenu() {
+      if (state !== STATES.CONTROLS_VISIBLE) return;
+      clearIdle();
+      providerOptions = providers.compatible(currentEpisode);
+      providerMenuSelected = Math.max(0, providerOptions.indexOf(provider));
+      var list = get("provider-options");
+      if (list && typeof doc.createElement === "function" && typeof list.replaceChildren === "function") {
+        var buttons = providerOptions.map(function (value, index) {
+          var button = doc.createElement("button");
+          button.type = "button";
+          button.textContent = providers.label(value) + (value === provider ? "  ✓" : "");
+          button.setAttribute("aria-current", value === provider ? "true" : "false");
+          button.addEventListener("click", function () { providerMenuSelected = index; chooseProvider(); });
+          return button;
+        });
+        list.replaceChildren.apply(list, buttons);
+      }
+      get("provider-menu").hidden = false;
+      providerMenuOpen = true;
+      state = STATES.SUBMENU_OPEN;
+      focusProviderOption();
+    }
+    function focusProviderOption() {
+      var list = get("provider-options");
+      var button = list && list.children && list.children[providerMenuSelected];
+      if (button) focus(button);
+    }
+    function closeProviderMenu() {
+      if (!providerMenuOpen) return;
+      get("provider-menu").hidden = true;
+      providerMenuOpen = false;
+      state = STATES.CONTROLS_VISIBLE;
+      focusControl(8);
+      resetIdle();
+    }
+    function chooseProvider() {
+      var chosen = providerOptions[providerMenuSelected];
+      if (!chosen) return;
+      closeProviderMenu();
+      if (chosen !== provider) switchProvider(chosen);
     }
     function closeAudioLanguageMenu() {
       if (!audioLanguageMenuOpen) return;
@@ -1596,21 +1656,25 @@
       if (!isMovie && route.showTitle) query += "&showTitle=" + encodeURIComponent(String(route.showTitle).slice(0, 120));
       if (!isMovie && route.episodeTrail) query += "&episodeTrail=" + encodeURIComponent(route.episodeTrail);
       if (route.handoff) query += "&handoff=" + encodeURIComponent(route.handoff);
+      if (playbackOnly() && labPosition !== null && labDuration !== null)
+        storePlayerProgress(labPosition, labDuration, false, true);
       var confirmed = confirmedProgressRecord();
       var prior = readPlayerProgress(boltIdentity());
       var flushed = confirmed && boltSession && boltSession.advancedAt !== null
         ? storePlayerProgress(confirmed.position, confirmed.duration,
           confirmed.completed || !!(prior && prior.completed), true) : null;
       var saved = flushed || readPlayerProgress(boltIdentity()) || confirmed;
-      if (saved && saved.provider === "vidbolt") query += "&position=" + encodeURIComponent(saved.position)
+      if (saved && ["vidbolt", "vidy", "stellar"].indexOf(saved.provider) >= 0)
+        query += "&position=" + encodeURIComponent(saved.position)
         + "&duration=" + encodeURIComponent(saved.duration) + "&updated=" + encodeURIComponent(saved.updatedAt)
-        + "&progressProvider=vidbolt" + (saved.completed ? "&completed=1" : "");
+        + "&progressProvider=" + encodeURIComponent(saved.provider) + (saved.completed ? "&completed=1" : "");
       if (!isMovie && route.handoff && playerProgressStorage) {
         try { var store = JSON.parse(playerProgressStorage.getItem(PLAYER_PROGRESS_KEY) || "null");
           var prefix = "tv:" + currentEpisode.showId + ":";
           var batch = store && store.version === 1 && Array.isArray(store.items) ? store.items
             .filter(function (entry) { return entry && typeof entry.identity === "string"
-              && entry.identity.indexOf(prefix) === 0 && entry.provider === "vidbolt"
+              && entry.identity.indexOf(prefix) === 0
+              && ["vidbolt", "vidy", "stellar"].indexOf(entry.provider) >= 0
               && route.handoffAt > 0 && entry.updatedAt >= route.handoffAt; })
             .slice(0, 16).map(function (entry) { var parts = entry.identity.slice(prefix.length).split(":");
               return { season: Number(parts[0]), episode: Number(parts[1]), progress: {
@@ -1751,7 +1815,10 @@
     }
     function renderTimeline() {
       var timeline = get("playback-timeline");
-      var usable = provider === providers.VIDBOLT && boltSession
+      var labUsable = (provider === "vidy" || provider === "stellar")
+        && labPosition !== null && labDuration !== null && labDuration > 0
+        && (labPaused || now() - labPositionAt <= 15000);
+      var usable = labUsable || provider === providers.VIDBOLT && boltSession
         && boltSession.identity === boltIdentity() && frame.src !== "about:blank"
         && boltPosition !== null && isFinite(boltPosition) && boltPosition >= 0
         && boltDuration !== null && isFinite(boltDuration) && boltDuration > 0
@@ -1763,29 +1830,22 @@
       if (!usable) {
         if (fillEl) {
           if (fillEl.style) fillEl.style.width = "0%";
-          fillEl.setAttribute("style", "width:0%");
         }
         if (playheadEl) {
           if (playheadEl.style) playheadEl.style.left = "0%";
-          playheadEl.setAttribute("style", "left:0%");
         }
         return;
       }
-      get("timeline-current").textContent = boltClock(boltPosition);
-      get("timeline-duration").textContent = boltClock(boltDuration);
-      var progress = Math.max(0, Math.min(100, boltPosition / boltDuration * 100));
+      get("timeline-current").textContent = boltClock(labUsable ? labPosition : boltPosition);
+      get("timeline-duration").textContent = boltClock(labUsable ? labDuration : boltDuration);
+      var progress = Math.max(0, Math.min(100,
+        (labUsable ? labPosition / labDuration : boltPosition / boltDuration) * 100));
       var widthPct = progress.toFixed(2) + "%";
-      var width = "width:" + widthPct;
-      var left = "left:" + widthPct;
       if (fillEl) {
         if (fillEl.style) fillEl.style.width = widthPct;
-        if (fillEl.getAttribute("style") !== width)
-          fillEl.setAttribute("style", width);
       }
       if (playheadEl) {
         if (playheadEl.style) playheadEl.style.left = widthPct;
-        if (playheadEl.getAttribute("style") !== left)
-          playheadEl.setAttribute("style", left);
       }
     }
     function sendBoltSeek(delta) {
@@ -1950,14 +2010,15 @@
         return;
       }
       if (id === "diagnostics-open") { openDiagnostics(); return; }
-      if (id === "provider-choice") { switchProvider(); return; }
+      if (id === "provider-choice") { openProviderMenu(); return; }
       if (id === "unload-provider") { stopAndUnloadProvider(); return; }
       if (id === "recover-provider") {
         if (provider === providers.YAPGRID) reloadYapGrid();
         else if (provider === providers.VIDBOLT) recoverBolt("manual");
+        else reloadProvider();
         return;
       }
-      if (id === "watch-exit" && route.fromSearch) { exitPlayer(); return; }
+      if (id === "watch-exit") { exitPlayer(); return; }
       if (id === "watch-fullscreen" && desktopWatch) { toggleDesktopFullscreen(); return; }
       if (id === "subtitles" && provider === providers.VIDBOLT) { openMenu(); return; }
       if (id === "audio-language") { openAudioLanguageMenu(); return; }
@@ -2047,6 +2108,15 @@
         return;
       }
       if (state === STATES.SUBMENU_OPEN) {
+        if (providerMenuOpen) {
+          if (key === "Back") closeProviderMenu();
+          else if (key === "ArrowUp" || key === "ArrowDown") {
+            providerMenuSelected = Math.max(0, Math.min(providerOptions.length - 1,
+              providerMenuSelected + (key === "ArrowDown" ? 1 : -1)));
+            focusProviderOption();
+          } else if (key === "OK" && !event.repeat) chooseProvider();
+          return;
+        }
         if (audioLanguageMenuOpen) {
           if (!event.repeat || key.indexOf("Arrow") === 0) audioLanguageMenuKey(key);
         }
@@ -2296,6 +2366,12 @@
     }
     function unloadFrame() {
       independentSubtitles.clear();
+      if (playbackOnly() && labPosition !== null && labDuration !== null)
+        storePlayerProgress(labPosition, labDuration, false, true);
+      labPosition = null;
+      labDuration = null;
+      labPositionAt = 0;
+      labPaused = false;
       if (provider === providers.VIDBOLT) {
         var unloadedProgress = confirmedProgressRecord();
         if (unloadedProgress) storePlayerProgress(unloadedProgress.position, unloadedProgress.duration,
@@ -2343,6 +2419,19 @@
       focusControl(11);
       get("command-status").textContent = "YapGrid player reloaded for the same title. Previous position is unavailable; playback starts again.";
     }
+    function reloadProvider() {
+      if (disposed || route.invalid || activeBatch) return;
+      var checkpoint = labPosition !== null && labDuration !== null ? labPosition
+        : readPlayerProgress(boltIdentity()) && readPlayerProgress(boltIdentity()).position;
+      unloadFrame();
+      loadProviderFrame(checkpoint, true);
+      if (state === STATES.PLAYBACK_HIDDEN) showControls();
+      focusControl(11);
+      get("command-status").textContent = providerLabel() + " reloaded for the same title. "
+        + ((provider === "vidy" || provider === "stellar") && checkpoint > 0
+          ? "Saved start position requested; awaiting provider progress confirmation."
+          : "Playback may restart from the beginning.");
+    }
     function loadProviderFrame(resumeAt, recovering) {
       independentSubtitles.clear();
       independentTimelineEnded = false;
@@ -2374,11 +2463,17 @@
       providerReady = false;
       providerPlaying = false;
       providerFailed = false;
+      var savedLabProgress = readPlayerProgress(boltIdentity()) || selectedProgress;
+      var labStart = resumeAt !== undefined && resumeAt !== null ? resumeAt
+        : playbackOnly() && !route.startOver && savedLabProgress && !savedLabProgress.completed
+          ? savedLabProgress.position : null;
       var url = route.invalid ? null : providers.embedUrl(currentEpisode, provider, subtitleMode,
         nav.origin, catalog, provider === providers.VIDFAST ? vidFastMode
           : provider === providers.VIDLINK ? vidLinkMode
           : provider === providers.VIDBOLT ? (vidBoltAutoplay ? "autoPlayTrue" : "autoPlayOff")
-          : compatibilityMode, null, currentAudioLanguage);
+          : compatibilityMode, labStart, currentAudioLanguage);
+      labRestoreTarget = playbackOnly() && (provider === "vidy" || provider === "stellar")
+        ? labStart : null;
       if (!url) {
         loading(playbackOnly() ? providerLabel() + " does not document a safe exact-episode embed for this selection. Choose another provider."
           : isMovie ? "Invalid movie ID. Press Back to return to Horizon Watch."
@@ -2472,6 +2567,32 @@
             + (message.currentTime !== null ? " at " + Math.floor(message.currentTime) + "s" : "")
             + (message.duration !== null ? " / " + Math.floor(message.duration) + "s" : "")
             + "; visible frames and sound unverified.";
+        }
+        if (message.type === "lab:play") { providerPlaying = true; labPaused = false; }
+        if (message.type === "lab:pause") { providerPlaying = false; labPaused = true; }
+        if (message.type === "lab:ended") { providerPlaying = false; labPaused = true; }
+        if (message.identityVerified && message.currentTime !== null && message.duration !== null
+            && message.duration >= (isMovie ? 1200 : 600)
+            && message.currentTime <= message.duration + 2) {
+          labPosition = message.currentTime;
+          labDuration = message.duration;
+          labPositionAt = now();
+          if (message.currentTime > 0) {
+            var completed = message.type === "lab:ended"
+              && message.currentTime / message.duration >= 0.95;
+            storePlayerProgress(message.currentTime, message.duration, completed,
+              completed || message.type === "lab:pause" || message.type === "lab:seeked");
+          }
+          if (labRestoreTarget !== null) {
+            labStatus += Math.abs(message.currentTime - labRestoreTarget) <= 12
+              ? " Saved position confirmed." : " Saved position not yet confirmed.";
+            if (Math.abs(message.currentTime - labRestoreTarget) <= 12) labRestoreTarget = null;
+          }
+          renderTimeline();
+        }
+        if (message.type === "lab:play" || message.type === "lab:timeupdate") {
+          if (movieLoadTimer !== null) { clock.clearTimeout(movieLoadTimer); movieLoadTimer = null; }
+          get("player-loading").hidden = true;
         }
         if (state === STATES.DIAGNOSTICS_OPEN) renderDiagnostics();
         return;
@@ -2680,11 +2801,12 @@
         exitPlayer();
       }
     }
-    function switchProvider() {
+    function switchProvider(chosen) {
       if (disposed || state !== STATES.CONTROLS_VISIBLE || activeBatch || route.invalid) return;
-      hideControls(true);
+      if (providers.compatible(currentEpisode).indexOf(chosen) < 0 || chosen === provider) return;
+      if (labPosition !== null && labDuration !== null) storePlayerProgress(labPosition, labDuration, false, true);
       unloadFrame();
-      provider = providers.next(provider);
+      provider = chosen;
       labStatus = "New experimental selection; iframe pending.";
       labFirstEvent = null;
       compatibilityMode = providers.BASELINE;
@@ -2720,7 +2842,8 @@
       get("screen-reader-status").textContent = "Switching to " + providerLabel()
         + ". Playback is unverified. Press an arrow to show Horizon controls.";
       loadProviderFrame();
-      if (desktopWatch) showControls();
+      setOverlayVisible(true);
+      focusControl(8);
     }
     function bindFrameEvents(activeFrame) {
     activeFrame.addEventListener("load", function () {
@@ -2918,6 +3041,29 @@
       syncDesktopFullscreen();
     }
     playerShell.addEventListener("click", function (event) {
+      if (state === STATES.SUBMENU_OPEN) {
+        var target = event.target;
+        var menu = providerMenuOpen ? get("provider-menu")
+          : audioLanguageMenuOpen ? get("audio-language-menu")
+          : provider === providers.VIDBOLT ? get("independent-subtitle-menu") : get("subtitle-menu");
+        if (menu && (target === menu || menu.contains && menu.contains(target))) return;
+        var control = target && target.closest ? target.closest("button") : target;
+        var id = control && control.id;
+        closeMenu();
+        if (id === "provider-choice") openProviderMenu();
+        else if (id === "audio-language") openAudioLanguageMenu();
+        else if (id === "subtitles" && !get("subtitles").disabled) openMenu();
+        return;
+      }
+      if (desktopWatch && provider === providers.VIDBOLT && boltSession
+          && typeof boltSession.paused === "boolean" && frameLoaded
+          && (event.target === playerShell || event.target === overlay
+            || event.target && event.target.classList
+              && event.target.classList.contains("overlay-content"))) {
+        if (state === STATES.PLAYBACK_HIDDEN) showControls();
+        if (state === STATES.CONTROLS_VISIBLE) toggleBoltPlayPause();
+        return;
+      }
       if (route.fromSearch && state === STATES.PLAYBACK_HIDDEN
           && event.target === playerShell) showControls();
     });

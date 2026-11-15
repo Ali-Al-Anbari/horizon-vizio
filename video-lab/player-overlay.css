@@ -42,6 +42,10 @@ h1 { margin: 0; font-size: clamp(22px, 1.8vw, 34px); line-height: 1.12; }
 .secondary { margin-top: .5rem; }
 .secondary button { min-width: 0; min-height: 2.55rem; padding: .35rem clamp(.55rem, .95vw, .9rem); font-size: clamp(12px, .84vw, 16px); white-space: nowrap; }
 button[aria-disabled="true"] { opacity: .5; }
+button:disabled { opacity: .4; cursor: not-allowed; }
+.provider-menu { z-index: 5; max-height: 70vh; overflow-y: auto; }
+.provider-menu button { display: block; width: 100%; min-height: 2.8rem; margin-top: .35rem; padding: .45rem .8rem; border: 1px solid rgba(255,255,255,.2); border-radius: .5rem; background: rgba(25,28,31,.9); color: #fff; font: inherit; text-align: left; }
+.provider-menu button:focus { outline: 2px solid #fff; outline-offset: 2px; border-color: #8abaff; background: #263d58; }
 .test-row { margin-top: .45rem; }
 .player-shell.watch-desktop .test-row { flex-wrap: wrap; }
 .test-row button { min-height: 2rem; padding: .2rem .55rem; font-size: clamp(11px, .72vw, 13px); border-color: transparent; background: transparent; color: #d5d9dd; }

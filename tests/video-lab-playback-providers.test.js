@@ -64,8 +64,8 @@ test("five lab providers use documented movie routes and preserve exact TV ident
   const url = (target, provider) => providers.embedUrl(target, provider, "off", "https://example.test", catalog);
   assert.equal(url(movie, "vidy"), "https://www.vidy.st/movie/155?autoplay=true&nextEpisode=false&episodeSelector=false&autoplayNextEpisode=false");
   assert.equal(url(episode, "vidy"), "https://www.vidy.st/tv/2190/16/10?autoplay=true&nextEpisode=false&episodeSelector=false&autoplayNextEpisode=false");
-  assert.equal(url(movie, "stellar"), "https://stellar.rip/en/watch/embed/movie/155?autoPlay=true&startAt=0&nextButton=false&autoNext=false");
-  assert.equal(url(episode, "stellar"), "https://stellar.rip/en/watch/embed/tv/2190-16-10?autoPlay=true&startAt=0&nextButton=false&autoNext=false");
+  assert.equal(url(movie, "stellar"), "https://stellar.rip/en/watch/embed/movie/155?autoPlay=true&nextButton=false&autoNext=false");
+  assert.equal(url(episode, "stellar"), "https://stellar.rip/en/watch/embed/tv/2190-16-10?autoPlay=true&nextButton=false&autoNext=false");
   assert.equal(url(movie, "embedwave"), "https://embedwave.cc/embed/movie/155?autoplay=1");
   assert.equal(url(episode, "embedwave"), "https://embedwave.cc/embed/tv/2190/16/10?autoplay=1");
   assert.equal(url(movie, "apiplayer"), "https://apiplayer.ru/embed/movie/155?autoplay=1&resume=0");

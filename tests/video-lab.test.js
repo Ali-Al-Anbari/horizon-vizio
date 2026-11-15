@@ -57,6 +57,7 @@ function setup(search = "", canPlayType, fetchImpl, support = {}) {
   const player = nodes.get("player");
   const nav = { search, replace(url) { navigation.push(url); } };
   const window = { fetch: fetchImpl, MediaSource: support.MediaSource, Hls: support.Hls,
+    matchMedia: support.matchMedia,
     addEventListener(name, callback) { (windowListeners[name] ||= []).push(callback); } };
   runInNewContext(source, { window, document, location: nav });
   const key = (name, repeat = false, keyCode = 0) => {
@@ -300,6 +301,17 @@ test("native HLS remains a guarded fallback and switching sources invalidates pe
   await Promise.resolve();
   assert.equal(pending.video.src, SINTEL_UPSTREAM);
   assert.doesNotMatch(pending.get("status").textContent, /adapter reports/);
+});
+
+test("fine pointer clicks toggle only the native video", () => {
+  const app = setup("", undefined, undefined, { matchMedia: () => ({ matches: true }) });
+  app.video.dispatch("click");
+  assert.equal(app.video.playCount, 1);
+  app.video.dispatch("click");
+  assert.equal(app.video.pauseCount, 1);
+  const remote = setup();
+  remote.video.dispatch("click");
+  assert.equal(remote.video.playCount, 0);
 });
 
 test("remote arrows reach sources and controls; OK plays and pauses once", () => {

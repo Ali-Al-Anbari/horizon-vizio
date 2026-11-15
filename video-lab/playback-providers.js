@@ -50,6 +50,10 @@
     var index = VISIBLE.indexOf(value);
     return VISIBLE[(index + 1) % VISIBLE.length];
   }
+  function compatible(target) {
+    var tv = target && positive(target.showId);
+    return VISIBLE.filter(function (value) { return !tv || value !== "apiplayer" && value !== "vidzen"; });
+  }
   function label(value) {
     var s = select(value);
     if (LAB_LABELS[s]) return LAB_LABELS[s] + " · experimental";
@@ -80,10 +84,12 @@
       var id = movie ? target.movieId : target.showId;
       var suffix = tv ? "/" + target.season + "/" + target.episode : "";
       if (provider === "vidy") return LAB_ORIGINS.vidy + (movie ? "/movie/" : "/tv/")
-        + id + suffix + "?autoplay=true&nextEpisode=false&episodeSelector=false&autoplayNextEpisode=false";
+        + id + suffix + "?autoplay=true&nextEpisode=false&episodeSelector=false&autoplayNextEpisode=false"
+        + (finiteNonnegative(startAt) && startAt > 0 ? "&progress=" + Math.floor(startAt) : "");
       if (provider === "stellar") return LAB_ORIGINS.stellar + "/en/watch/embed/"
         + (movie ? "movie/" + id : "tv/" + id + "-" + target.season + "-" + target.episode)
-        + "?autoPlay=true&startAt=0&nextButton=false&autoNext=false";
+        + "?autoPlay=true&nextButton=false&autoNext=false"
+        + (finiteNonnegative(startAt) && startAt > 0 ? "&startAt=" + Math.floor(startAt) : "");
       if (provider === "embedwave") return LAB_ORIGINS.embedwave + "/embed/"
         + (movie ? "movie/" : "tv/") + id + suffix + "?autoplay=1";
       if (provider === "apiplayer") return LAB_ORIGINS.apiplayer
@@ -225,11 +231,12 @@
         if (chosen === "vidy" && lab.type !== "PLAYER_EVENT" && !name) return null;
         if (["play", "pause", "timeupdate", "ended", "seeked"].indexOf(name) < 0) return null;
         if (chosen === "stellar" && lab.type !== "PLAYER_EVENT") return null;
-        // Passive diagnostics only: no provider has a documented host transport
-        // bridge, and these events cannot establish content vs advertisement.
+        var identityIssue = riftIdentityIssue(payload, target, chosen === "vidy");
+        if (identityIssue) return null;
         return { type: "lab:" + name,
           currentTime: finiteNonnegative(payload.currentTime) ? payload.currentTime : null,
-          duration: finiteNonnegative(payload.duration) ? payload.duration : null };
+          duration: finiteNonnegative(payload.duration) ? payload.duration : null,
+          identityVerified: !riftIdentityIssue(payload, target, false) };
       }
 
       if (chosen === VIDRIFT) {
@@ -548,6 +555,7 @@
     initializeLabFrame: initializeLabFrame,
     select: select,
     next: next,
+    compatible: compatible,
     label: label,
     compatibilityMode: compatibilityMode,
     vidFastMode: vidFastMode,

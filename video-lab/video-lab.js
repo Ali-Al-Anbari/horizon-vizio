@@ -396,6 +396,10 @@
     video.addEventListener("canplay", function () { record("canplay"); say("Can play event received. Press Play and check the TV."); });
     video.addEventListener("playing", function () { record("playing"); updatePlay(); say("Playing reported. Confirm picture and audible sound on the TV."); });
     video.addEventListener("pause", updatePlay);
+    video.addEventListener("click", function () {
+      if (root.matchMedia && root.matchMedia("(hover: hover) and (pointer: fine)").matches)
+        togglePlay();
+    });
     video.addEventListener("timeupdate", updateTime);
     video.addEventListener("waiting", function () { record("waiting"); say("Buffering…"); });
     video.addEventListener("stalled", function () { record("stalled"); say("Media download stalled."); });

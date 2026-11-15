@@ -314,6 +314,10 @@ test("Playback integrity: short ads, provider uncertainty, and progress persiste
   // 1. Short ad duration (e.g. 22 seconds) with non-vidbolt or bad progress cannot establish completion
   const badProgress = core.progressRecord({ position: 22, duration: 22, updatedAt: 1000, provider: "yapgrid", completed: true });
   assert.equal(badProgress, null, "yapgrid provider cannot write verified progress");
+  assert.equal(core.progressRecord({ position: 22, duration: 22, updatedAt: 1000,
+    provider: "stellar", completed: true }), null, "a short Stellar timeline is not title progress");
+  assert.equal(core.progressRecord({ position: 450, duration: 1800, updatedAt: 1000,
+    provider: "stellar", completed: false }).provider, "stellar");
 
   // VidBolt with duration 0 or negative
   assert.equal(core.progressRecord({ position: 10, duration: 0, updatedAt: 1000, provider: "vidbolt" }), null);
@@ -323,4 +327,14 @@ test("Playback integrity: short ads, provider uncertainty, and progress persiste
   const validProgress = core.item("tv", 999, "Show", 1, 1, "off", 1000, { progress: progress(450, 1000, 1000, false) });
   core.writeHistory(store, validProgress);
   assert.equal(core.readHistory(store)[0].progress.position, 450);
+});
+
+test("recent episode pointer can follow a verified Stellar checkpoint", () => {
+  const rows = [
+    { type: "tv", id: 2190, season: 1, episode: 1, at: 1000,
+      progress: { provider: "vidbolt", updatedAt: 1000 } },
+    { type: "tv", id: 2190, season: 16, episode: 10, at: 2000,
+      progress: { provider: "stellar", updatedAt: 3000 } },
+  ];
+  assert.equal(core.lastWatchedEpisode(rows, 2190).episode, 10);
 });

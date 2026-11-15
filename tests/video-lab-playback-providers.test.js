@@ -17,10 +17,11 @@ test("YapGrid remains fallback and visible selector cycles through VidBolt", () 
   assert.equal(providers.PRIMARY, "yapgrid");
   assert.equal(providers.FALLBACK, "yapgrid");
   assert.equal(providers.next("yapgrid"), "vidbolt");
-  assert.equal(providers.next("vidrift"), "yapgrid");
+  assert.equal(providers.next("vidrift"), "vidbolt");
   assert.equal(providers.next("vidbolt"), "vidy");
+  assert.equal(providers.next("vidy"), "vidzen");
   assert.equal(providers.next("vidzen"), "yapgrid");
-  assert.equal(providers.next("vidlink"), "yapgrid");
+  assert.equal(providers.next("vidlink"), "vidbolt");
   assert.equal(providers.select("vidlink"), "vidlink");
   assert.equal(providers.select("unknown"), "yapgrid");
   assert.equal(providers.select("vidfast"), "vidfast");
@@ -137,7 +138,7 @@ test("Vidy nested playback events require exact iframe, origin, and media identi
 
 test("VidZen server URLs use only verified choices and preserve exact episode routes", () => {
   assert.deepEqual(Array.from(providers.compatible({ showId: 1399 })),
-    ["yapgrid", "vidbolt", "vidy", "stellar", "vidzen"]);
+    ["vidbolt", "vidy", "vidzen", "yapgrid"]);
   assert.deepEqual(Array.from(providers.vidzenServers()),
     ["auto", "hyperion", "proxima", "mars", "jupiter"]);
   const url = (target, server) => providers.embedUrl(target, "vidzen", "off",

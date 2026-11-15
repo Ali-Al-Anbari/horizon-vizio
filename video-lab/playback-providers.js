@@ -31,7 +31,7 @@
   var CINESRC = "cinesrc"; // Preserved for reference; excluded during VidFast testing.
   var PRIMARY = YAPGRID;
   var FALLBACK = YAPGRID;
-  var VISIBLE = [YAPGRID, VIDBOLT, "vidy", "stellar", "vidzen"];
+  var VISIBLE = [VIDBOLT, "vidy", "vidzen", YAPGRID];
   var VIDZEN_SERVERS = ["auto", "hyperion", "proxima", "mars", "jupiter"];
   var BASELINE = "baseline";
 

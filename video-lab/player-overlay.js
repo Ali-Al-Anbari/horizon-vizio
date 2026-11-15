@@ -263,7 +263,7 @@
       pairFetch: options && options.sessionFetch || (typeof clock.fetch === "function" ? clock.fetch.bind(clock) : null),
       status: function (value) {
         var status = get("independent-subtitle-status");
-        status.textContent = value.loading ? "Checking English subtitles…"
+        var statusText = value.loading ? "Checking English subtitles…"
           : value.available ? "English available" + (value.release ? " · " + value.release : "")
           : value.error === "subdl_unconfigured" ? "SubDL is not configured on this server."
           : value.error === "not_authorized" ? "Video Lab needs its own pairing. Select Connect Video Lab."
@@ -276,6 +276,10 @@
           : value.error === "subtitle_unavailable" ? "No English subtitles available."
           : value.error ? "Subtitle service could not be reached."
           : "Select English to check availability.";
+        if (provider === providers.YAPGRID && !value.loading) {
+          statusText += " · YapGrid cannot report playback time for subtitle sync.";
+        }
+        status.textContent = statusText;
         get("independent-subtitle-english").setAttribute("aria-disabled", value.available ? "false" : "true");
         get("independent-subtitle-setup").hidden = value.error !== "not_authorized";
         get("independent-subtitle-setup").tabIndex = value.error === "not_authorized" ? 0 : -1;
@@ -283,7 +287,7 @@
         get("independent-subtitle-off").setAttribute("aria-pressed", value.enabled ? "false" : "true");
         get("independent-subtitle-offset").textContent = "Timing: "
           + (value.offset > 0 ? "+" : "") + value.offset.toFixed(1) + "s · Left / Right to adjust";
-        get("subtitle-mode").textContent = provider === providers.VIDBOLT
+        get("subtitle-mode").textContent = usesHorizonSubtitles()
           ? value.enabled ? "EN" : "OFF" : subtitleMode.toUpperCase();
       },
     });
@@ -363,6 +367,10 @@
 
     function providerLabel() { return providers.label(provider); }
     function playbackOnly() { return providers.isPlaybackOnly(provider); }
+    function usesHorizonSubtitles() {
+      return provider === providers.VIDBOLT || provider === "vidy"
+        || provider === "vidzen" || provider === providers.YAPGRID;
+    }
     function isCommandProvider() { return provider === providers.VIDRIFT || provider === providers.VIDBOLT
       || provider === "vidzen"; }
     function transportMode() {
@@ -415,12 +423,12 @@
         get(id).hidden = usesExperimentalRow();
         get(id).disabled = playbackOnly() && transportMode() === "unsupported";
       });
-      get("subtitle-mode").textContent = provider === providers.VIDBOLT
+      get("subtitle-mode").textContent = usesHorizonSubtitles()
         ? independentSubtitles.state().enabled ? "EN" : "OFF" : subtitleMode.toUpperCase();
       get("subtitles").hidden = false;
-      get("subtitles").disabled = playbackOnly() || isMovie && provider !== providers.VIDBOLT;
+      get("subtitles").disabled = !usesHorizonSubtitles();
       get("subtitles").title = get("subtitles").disabled ? "Horizon subtitle selection unavailable for this provider"
-        : provider === providers.VIDBOLT ? "Horizon subtitles" : "YapGrid subtitles";
+        : provider === providers.YAPGRID ? "Horizon subtitles (sync unavailable on YapGrid)" : "Horizon subtitles";
       var audioLangBtn = get("audio-language");
       if (audioLangBtn) audioLangBtn.hidden = false;
       get("audio-language-status").textContent = provider === providers.VIDBOLT
@@ -1350,7 +1358,7 @@
         closeAudioLanguageMenu();
         return;
       }
-      if (provider === providers.VIDBOLT) {
+      if (usesHorizonSubtitles()) {
         get("independent-subtitle-menu").hidden = true;
         playerShell.classList.remove("subtitle-settings-open");
         independentButtons.forEach(function (button) { button.tabIndex = -1; });
@@ -1368,12 +1376,13 @@
     }
     function openMenu() {
       if (state !== STATES.CONTROLS_VISIBLE) return;
-      if (provider === providers.VIDBOLT) {
+      if (usesHorizonSubtitles()) {
         clearIdle();
         state = STATES.SUBMENU_OPEN;
         playerShell.classList.add("subtitle-settings-open");
         independentMenuIndex = independentSubtitles.state().enabled ? 1 : 0;
         get("independent-subtitle-menu").hidden = false;
+        if (provider === providers.YAPGRID) independentSubtitles.clear();
         independentButtons.forEach(function (button) { button.tabIndex = button.hidden ? -1 : 0; });
         focus(independentButtons[independentMenuIndex]);
         independentSubtitles.load().then(function (value) {
@@ -1895,7 +1904,7 @@
     }
     function transitionTo(url) {
       if (disposed || transitionStarted || !url) return;
-      if (provider === providers.VIDBOLT && clock.sessionStorage) {
+      if (usesHorizonSubtitles() && clock.sessionStorage) {
         try {
           var destination = new URL(url, nav.origin);
           var sameOrigin = destination.origin === nav.origin;
@@ -2013,13 +2022,15 @@
       if (isMovie || disposed || transitionStarted || upNextLookupPending || upNextDismissed || upNextTarget) return;
       upNextLookupPending = true;
       var lookup = ++upNextLookup;
-      var generation = boltSession && boltSession.generation;
-      var identity = boltSession && boltSession.identity;
+      var activeProvider = provider;
+      var generation = activeProvider === providers.VIDBOLT ? (boltSession && boltSession.generation) : labGeneration;
+      var identity = boltIdentity();
       Promise.resolve().then(function () { return resolver.resolve(currentEpisode, 1); }).then(function (result) {
         if (lookup !== upNextLookup) return;
         upNextLookupPending = false;
-        if (disposed || provider !== providers.VIDBOLT || isMovie || !boltSession
-            || boltSession.generation !== generation || boltSession.identity !== identity) return;
+        if (disposed || provider !== activeProvider || isMovie || identity !== boltIdentity()) return;
+        if (activeProvider === providers.VIDBOLT && (!boltSession || boltSession.generation !== generation)) return;
+        if (activeProvider !== providers.VIDBOLT && playbackOnly() && labGeneration !== generation) return;
         if (!result || result.kind !== "catalogued") return;
         beginUpNext(result.target);
       }, function () { if (lookup === upNextLookup) upNextLookupPending = false; });
@@ -2031,7 +2042,10 @@
           || typeof next.episode !== "number" || !isFinite(next.episode) || next.episode < 1
           || Math.floor(next.episode) !== next.episode) return;
       var activeSeekInteraction = state === STATES.CONTROLS_VISIBLE
-        && (selected === 0 || selected === 2 || boltSeekPending || !get("seek-preview").hidden);
+        && (selected === 0 || selected === 2 || boltSeekPending
+          || (labPending && labPending.kind === "seek")
+          || (vidzenPending && vidzenPending.command === "seek")
+          || !get("seek-preview").hidden);
       upNextTarget = next;
       get("up-next-identity").textContent = "S" + next.season + " E" + next.episode;
       get("up-next-name").textContent = next.title || "";
@@ -2304,7 +2318,7 @@
       }
       if (id === "watch-exit") { exitPlayer(); return; }
       if (id === "watch-fullscreen" && desktopWatch) { toggleDesktopFullscreen(); return; }
-      if (id === "subtitles" && provider === providers.VIDBOLT) { openMenu(); return; }
+      if (id === "subtitles" && usesHorizonSubtitles()) { openMenu(); return; }
       if (id === "audio-language") { openAudioLanguageMenu(); return; }
       if (isMovie && !COMMANDS[id]) return;
       if (activeBatch) {
@@ -2412,7 +2426,7 @@
         if (audioLanguageMenuOpen) {
           if (!event.repeat || key.indexOf("Arrow") === 0) audioLanguageMenuKey(key);
         }
-        else if (provider === providers.VIDBOLT) {
+        else if (usesHorizonSubtitles()) {
           if (!event.repeat || key.indexOf("Arrow") === 0) independentMenuKey(key);
         }
         else if (key === "Back") { if (!event.repeat) closeMenu(); }
@@ -2946,6 +2960,23 @@
             if (vp.command === "seek") storePlayerProgress(message.currentTime, message.duration, false, true, true);
           }
         }
+        if (message.type === "lab:ended") {
+          independentTimelineEnded = true;
+          independentSubtitles.clear();
+          if (!isMovie && (credible || (message.identityVerified && labDuration >= 600
+              && labPosition !== null && labPosition >= 60))) {
+            var endDur = credible ? message.duration : labDuration;
+            var endPos = credible ? message.currentTime : labPosition;
+            if (endDur >= 600) storePlayerProgress(endPos, endDur, true, true);
+            startUpNext();
+          }
+        } else if (labPending || (provider === "vidzen" && vidzenPending && vidzenPending.command === "seek")) {
+          independentSubtitles.clear();
+        } else if (credible && !independentTimelineEnded) {
+          independentSubtitles.update(message.currentTime, true);
+        } else {
+          independentSubtitles.update(0, false);
+        }
         if (credible) {
           labPosition = message.currentTime;
           labDuration = message.duration;
@@ -2955,6 +2986,10 @@
               && message.currentTime / message.duration >= 0.95;
             if (!vidzenPending || vidzenPending.command !== "seek") storePlayerProgress(message.currentTime, message.duration, completed,
               completed || message.type === "lab:pause" || message.type === "lab:seeked");
+          }
+          if (!isMovie && !independentTimelineEnded && !(labPending || (provider === "vidzen" && vidzenPending && vidzenPending.command === "seek"))
+              && message.currentTime / message.duration >= 0.95) {
+            startUpNext();
           }
           if (labRestoreTarget !== null) {
             labStatus += Math.abs(message.currentTime - labRestoreTarget) <= 12
@@ -3430,7 +3465,7 @@
         var menu = vidzenServerMenuOpen ? get("vidzen-server-menu")
           : providerMenuOpen ? get("provider-menu")
           : audioLanguageMenuOpen ? get("audio-language-menu")
-          : provider === providers.VIDBOLT ? get("independent-subtitle-menu") : get("subtitle-menu");
+          : usesHorizonSubtitles() ? get("independent-subtitle-menu") : get("subtitle-menu");
         if (menu && (target === menu || menu.contains && menu.contains(target))) return;
         var control = target && target.closest ? target.closest("button") : target;
         var id = control && control.id;

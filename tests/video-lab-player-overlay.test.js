@@ -26,13 +26,13 @@ const baseUrl = "https://yapgrid.com/embed/tv/2190/13/2";
 const previewOrigin = "https://horizon-video-lab-preview.ali-al-anbari.workers.dev";
 
 test("provider menu lists compatible sources and closes without reloading current selection", () => {
-  const app = setup({ search: "?type=movie&id=155&provider=stellar&from=search", desktop: true });
+  const app = setup({ search: "?type=movie&id=155&provider=vidzen&from=search", desktop: true });
   const frame = app.get("player-frame");
   const oldSrc = frame.src;
   app.get("provider-choice").click();
   assert.equal(app.get("provider-menu").hidden, false);
-  assert.equal(app.get("provider-options").children.length, 5);
-  assert.match(app.get("provider-options").children[3].textContent, /Stellar.*✓/);
+  assert.equal(app.get("provider-options").children.length, 4);
+  assert.match(app.get("provider-options").children[2].textContent, /VidZen.*✓/);
   app.key("Enter");
   assert.equal(app.get("provider-menu").hidden, true);
   assert.equal(frame.src, oldSrc);
@@ -44,13 +44,17 @@ test("provider menu lists compatible sources and closes without reloading curren
   assert.match(app.get("player-frame").src, /vidy\.st\/movie\/155/);
 });
 test("TV provider menu omits sources without exact episode routes", () => {
-  const app = setup({ search: "?showId=2190&season=16&episode=10&provider=stellar&from=search", desktop: true });
+  const app = setup({ search: "?showId=2190&season=16&episode=10&provider=vidzen&from=search", desktop: true });
   app.get("provider-choice").click();
   const labels = app.get("provider-options").children.map(button => button.textContent);
-  assert.equal(labels.length, 5);
+  assert.equal(labels.length, 4);
+  assert.equal(labels.some(label => /Stellar/.test(label)), false);
   assert.equal(labels.some(label => /APIPlayer/.test(label)), false);
   assert.equal(labels.some(label => /EmbedWave/.test(label)), false);
+  assert.equal(labels.some(label => /VidBolt/.test(label)), true);
+  assert.equal(labels.some(label => /Vidy/.test(label)), true);
   assert.equal(labels.some(label => /VidZen/.test(label)), true);
+  assert.equal(labels.some(label => /YapGrid/.test(label)), true);
   app.key("Backspace");
   assert.equal(app.get("provider-menu").hidden, true);
   assert.equal(app.document.activeElement.id, "provider-choice");
@@ -573,18 +577,16 @@ test("repeated seeks run sequentially when the adapter acknowledges delivery", a
   assert.equal(app.get("player-frame").sourceChanges, 1);
 });
 
-test("subtitle ON/OFF URLs match existing launch modes and switching requires confirmation", () => {
+test("subtitle ON/OFF URLs match existing launch modes and YapGrid uses Horizon subtitle menu", () => {
   const on = setup();
   assert.equal(on.get("player-frame").src, baseUrl + "?lang=en");
   on.key("ArrowUp");
   on.get("subtitles").focus();
   on.key("Enter");
   assert.equal(on.state(), "SUBMENU_OPEN");
+  assert.equal(on.get("independent-subtitle-menu").hidden, false);
   on.advance(20000); // Menu suspends auto-hide.
   assert.equal(on.state(), "SUBMENU_OPEN");
-  on.key("ArrowRight");
-  on.key("Enter");
-  assert.match(on.get("menu-title").textContent, /Reload video from the beginning/);
   assert.equal(on.get("player-frame").sourceChanges, 1);
   assert.deepEqual(on.navigation, []);
   on.key("Backspace");
@@ -595,14 +597,6 @@ test("subtitle ON/OFF URLs match existing launch modes and switching requires co
   assert.equal(off.get("player-frame").src, baseUrl + "?sub_url="
     + encodeURIComponent(previewOrigin + "/empty.vtt") + "&sub_lang=en&sub_label=Off");
   assert.equal(off.get("subtitle-mode").textContent, "OFF");
-  off.key("ArrowUp");
-  off.get("subtitles").focus();
-  off.key("Enter");
-  off.key("ArrowRight");
-  off.key("Enter");
-  off.key("ArrowRight");
-  off.key("Enter");
-  assert.deepEqual(off.navigation, ["player-overlay.html?season=13&episode=2&sub=on"]);
 });
 
 test("mock adapter waits for a focus turn, reports acceptance without claiming playback, and restores", async () => {
@@ -1109,7 +1103,7 @@ test("movie uses the same player shell with a TMDB movie URL and returns to Watc
   assert.equal(app.get("player-loading").textContent, "Opening movie…");
   for (const id of ["previous-episode", "episodes", "next-episode"])
     assert.equal(app.get(id).hidden, true);
-  assert.equal(app.get("subtitles").disabled, true);
+  assert.equal(app.get("subtitles").disabled, false);
   app.key("ArrowDown");
   assert.equal(app.document.activeElement.id, "play-pause");
   app.key("ArrowDown");
@@ -1457,7 +1451,7 @@ test("desktop Watch auto-hides Horizon controls and blocks native iframe clicks"
   assert.equal(app.state(), "CONTROLS_VISIBLE", "pointer movement restores controls");
   app.get("provider-choice").click();
   assert.equal(app.state(), "SUBMENU_OPEN", "provider list opens over the visible control row");
-  app.get("provider-options").children[2].click();
+  app.get("provider-options").children[1].click();
   assert.equal(app.state(), "CONTROLS_VISIBLE", "selection closes the list");
   assert.equal(app.get("player-frame").src, "https://www.vidy.st/movie/550?autoplay=true&nextEpisode=false&episodeSelector=false&autoplayNextEpisode=false");
 });
@@ -3575,12 +3569,14 @@ test("Episode List preserves a manually chosen VidFast provider", () => {
     "player-overlay.html?season=13&episode=3&sub=off&provider=vidfast");
 });
 
-test("subtitle reload keeps the selected episode while switching mode", () => {
+test("Horizon subtitle menu keeps the selected episode without reloading YapGrid", () => {
   const app = setup({ search: "?season=13&episode=3&sub=off" });
   app.key("ArrowUp"); app.get("subtitles").focus(); app.key("Enter");
-  app.key("ArrowRight"); app.key("Enter");
-  app.key("ArrowRight"); app.key("Enter");
-  assert.deepEqual(app.navigation, ["player-overlay.html?season=13&episode=3&sub=on"]);
+  assert.equal(app.get("independent-subtitle-menu").hidden, false);
+  assert.equal(app.get("player-frame").sourceChanges, 1);
+  assert.deepEqual(app.navigation, []);
+  app.key("Backspace");
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
 });
 
 test("timeline track anchors playhead with relative positioning context and negative margins", () => {
@@ -3761,4 +3757,140 @@ test("Audio language selection preserves movie identity and timestamp on relaunc
   app.key("Backspace");
   assert.equal(app.state(), "CONTROLS_VISIBLE");
   assert.equal(app.get("audio-language-mode").textContent, "German");
+});
+
+test("Phase 5H: VidZen uses a stacked-server icon distinct from Language and lineup is VidBolt, Vidy, VidZen, YapGrid", () => {
+  const serverBtn = html.match(/id="vidzen-server"[\s\S]*?<\/button>/)[0];
+  const langBtn = html.match(/id="audio-language"[\s\S]*?<\/button>/)[0];
+  assert.match(serverBtn, /<rect[^>]*y="3"[\s\S]*<rect[^>]*y="10"[\s\S]*<rect[^>]*y="17"/);
+  assert.doesNotMatch(serverBtn, /<circle cx="12" cy="12" r="9"/);
+  assert.match(langBtn, /<circle cx="12" cy="12" r="10"/);
+
+  const app = setup({ search: "?type=movie&id=550&from=search&provider=vidbolt" });
+  app.key("ArrowDown");
+  app.get("provider-choice").click();
+  const labels = app.get("provider-options").children.map(button => button.textContent);
+  assert.equal(labels.length, 4);
+  assert.match(labels[0], /VidBolt/);
+  assert.match(labels[1], /Vidy/);
+  assert.match(labels[2], /VidZen/);
+  assert.match(labels[3], /YapGrid/);
+});
+
+test("Phase 5H: Horizon subtitles work on Vidy and VidZen and report YapGrid sync limitation", async () => {
+  const subtitleFetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      release: "Fight.Club.1999",
+      text: "1\n00:01:00,000 --> 00:01:05,000\nFirst rule.\n",
+    }),
+  });
+
+  for (const provider of ["vidy", "vidzen"]) {
+    const app = setup({
+      search: `?type=movie&id=550&from=search&provider=${provider}`,
+      subtitleFetch,
+    });
+    assert.equal(app.get("subtitles").disabled, false, provider);
+    assert.equal(app.get("subtitle-mode").textContent, "OFF", provider);
+    app.key("ArrowDown");
+    app.get("subtitles").focus();
+    app.key("Enter");
+    assert.equal(app.get("independent-subtitle-menu").hidden, false, provider);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(app.get("independent-subtitle-status").textContent, /English available/, provider);
+    app.key("ArrowDown");
+    app.key("Enter");
+    assert.equal(app.get("subtitle-mode").textContent, "EN", provider);
+
+    if (provider === "vidy") {
+      app.message(JSON.stringify({
+        type: "PLAYER_EVENT",
+        data: { event: "timeupdate", currentTime: 62, duration: 7200, id: "550", mediaType: "movie" },
+      }), "https://www.vidy.st");
+    } else {
+      app.message({ type: "vidzen:status", currentTime: 62, duration: 7200, paused: false }, "https://vidzen.fun");
+    }
+    assert.equal(app.get("horizon-caption-text").textContent, "First rule.", provider);
+
+    if (provider === "vidy") {
+      app.message(JSON.stringify({
+        type: "PLAYER_EVENT",
+        data: { event: "timeupdate", currentTime: 10, duration: 7200, id: "550", mediaType: "movie" },
+      }), "https://www.vidy.st");
+    } else {
+      app.message({ type: "vidzen:status", currentTime: 10, duration: 7200, paused: true }, "https://vidzen.fun");
+    }
+    assert.equal(app.get("horizon-caption-text").textContent, "", provider);
+  }
+
+  const yap = setup({ search: "?type=movie&id=550&from=search&provider=yapgrid", subtitleFetch });
+  assert.equal(yap.get("subtitles").disabled, false);
+  yap.key("ArrowDown");
+  yap.get("subtitles").click();
+  assert.equal(yap.get("independent-subtitle-menu").hidden, false);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(yap.get("independent-subtitle-status").textContent, /YapGrid cannot report playback time for subtitle sync/);
+  assert.equal(yap.get("horizon-caption-text").textContent, "");
+});
+
+test("Phase 5H: manual Next Episode works across Vidy, VidZen, and YapGrid without autoplay", async () => {
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const savedVidy = progressStorage();
+  const vidy = setup({
+    search: "?showId=2190&season=13&episode=1&provider=vidy",
+    progressStorage: savedVidy,
+  });
+  const oldVidyFrame = vidy.get("player-frame");
+  // Short ad must not trigger Up Next
+  vidy.message(JSON.stringify({
+    type: "PLAYER_EVENT",
+    data: { event: "timeupdate", currentTime: 19, duration: 20, id: "2190", mediaType: "tv", season: 13, episode: 1 },
+  }), "https://www.vidy.st");
+  await flush();
+  assert.equal(vidy.get("up-next").hidden, true);
+  // Verified >= 95% episode timeupdate triggers manual Next Episode
+  vidy.message(JSON.stringify({
+    type: "PLAYER_EVENT",
+    data: { event: "timeupdate", currentTime: 1150, duration: 1200, id: "2190", mediaType: "tv", season: 13, episode: 1 },
+  }), "https://www.vidy.st");
+  await flush();
+  assert.equal(vidy.get("up-next").hidden, false);
+  assert.equal(vidy.get("up-next-identity").textContent, "S13 E2");
+  assert.deepEqual(vidy.navigation, [], "never auto-advances");
+  vidy.key("Enter");
+  assert.deepEqual(vidy.navigation, ["player-overlay.html?season=13&episode=2&sub=off&provider=vidy&episodeTrail=13%3A1"]);
+  // Stale old frame ignored
+  vidy.message(JSON.stringify({
+    type: "PLAYER_EVENT",
+    data: { event: "ended", currentTime: 1200, duration: 1200, id: "2190", mediaType: "tv", season: 13, episode: 1 },
+  }), "https://www.vidy.st", oldVidyFrame.contentWindow);
+
+  const savedZen = progressStorage();
+  const zen = setup({
+    search: "?showId=2190&season=13&episode=2&provider=vidzen",
+    progressStorage: savedZen,
+  });
+  zen.message({ type: "vidzen", event: "ended", currentTime: 1200, duration: 1200 }, "https://vidzen.fun");
+  await flush();
+  assert.equal(zen.get("up-next").hidden, false);
+  assert.equal(zen.get("up-next-identity").textContent, "S13 E3");
+  assert.equal(savedZen.read().items[0].completed, true);
+  zen.key("Enter");
+  assert.deepEqual(zen.navigation, ["player-overlay.html?season=13&episode=3&sub=off&provider=vidzen&episodeTrail=13%3A2"]);
+
+  const yap = setup({ search: "?showId=2190&season=13&episode=2&provider=yapgrid&testEnd=1" });
+  yap.key("ArrowDown");
+  yap.get("manual-end").click();
+  await flush();
+  assert.equal(yap.get("up-next").hidden, false);
+  assert.equal(yap.get("up-next-identity").textContent, "S13 E3");
+  yap.key("Enter");
+  assert.deepEqual(yap.navigation, ["player-overlay.html?season=13&episode=3&sub=off&testEnd=1&episodeTrail=13%3A2"]);
+
+  const movie = setup({ search: "?type=movie&id=550&from=search&provider=vidzen" });
+  movie.message({ type: "vidzen", event: "ended", currentTime: 7200, duration: 7200 }, "https://vidzen.fun");
+  await flush();
+  assert.equal(movie.get("up-next").hidden, true, "movies never show Next Episode");
 });

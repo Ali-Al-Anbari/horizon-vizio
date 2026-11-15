@@ -65,6 +65,7 @@
       watchTab: "for-you", detailSourceTab: "for-you" };
     var finePointer = !!(clock.matchMedia && clock.matchMedia("(pointer: fine)").matches)
       && !/Vizio|SmartCast/i.test(clock.navigator && clock.navigator.userAgent || "");
+    doc.body.classList.toggle("watch-desktop-pointer", finePointer);
     var keyboardOpen = !finePointer;
     var historyReady = false, restoringHistory = false, historyBackPending = false, historyDepth = 0;
     var searchTimer = null, searchToken = 0, detailToken = 0, seasonToken = 0, activeAbort = null;
@@ -223,6 +224,7 @@
       get("keyboard-toggle").textContent = keyboardOpen ? "Hide Keyboard" : "Show Keyboard";
       doc.body.classList.toggle("details-active", name === "details");
       doc.body.classList.toggle("episodes-active", name === "episodes");
+      doc.body.classList.toggle("settings-active", name === "settings");
       doc.body.classList.toggle("watch-active", name === "watch");
       if (name !== "watch") get("watch-active-heading").hidden = true;
       syncRail();
@@ -515,9 +517,6 @@
       slot.homeEntry = source.homeEntry;
       if (reused < 0) {
         slot.addEventListener("click", function () { source.click(); });
-        slot.addEventListener("mouseenter", function () {
-          if (state.view === "watch") showHomeHero(slot.homeEntry);
-        });
         slot.querySelectorAll("img").forEach(function (image) {
           var art = image.closest(".poster-art");
           image.addEventListener("load", function () { if (art) art.classList.add("is-loaded"); });
@@ -1666,9 +1665,6 @@
         }
         card.appendChild(reasonEl);
         card.setAttribute("aria-label", candidate.title + ", " + (candidate.type === "tv" ? "TV series" : "movie"));
-        card.addEventListener("mouseenter", function () {
-          if (state.view === "watch") showHomeHero(card.homeEntry);
-        });
         track.appendChild(card);
       });
       var sec = get("watch-" + group + "-section");
@@ -1758,7 +1754,6 @@
           line.className = "home-progress"; fill.className = "home-progress-fill";
           fill.style.width = (fraction * 100).toFixed(1) + "%";
           line.appendChild(fill); artwork.appendChild(line); }
-        card.addEventListener("mouseenter", function () { if (state.view === "watch") showHomeHero(entry); });
         card.setAttribute("aria-label", "Continue " + row.title + ", " + context.textContent);
         return card;
       }
@@ -3164,6 +3159,16 @@
       if (watchPerformance && watchPerformance.handle(key, state.view, doc.activeElement, event.repeat)) {
         event.preventDefault(); return;
       }
+      if (activeFilterMenuType && key === "Tab") {
+        var menuOptions = Array.from(get("watch-filter-menu-options").querySelectorAll(".filter-menu-option"));
+        if (menuOptions.length) {
+          event.preventDefault();
+          var menuIndex = menuOptions.indexOf(doc.activeElement);
+          focus(menuIndex < 0 ? menuOptions[event.shiftKey ? menuOptions.length - 1 : 0]
+            : menuOptions[(menuIndex + (event.shiftKey ? menuOptions.length - 1 : 1)) % menuOptions.length]);
+          return;
+        }
+      }
       if (homeMotion) {
         if (key === "ArrowDown" || key === "ArrowUp" || key === "OK" || key === "Back") {
           finishHorizontalMotion();
@@ -3353,6 +3358,17 @@
       if (state.view === "watch" && doc.activeElement.dataset.homeGroup)
         syncActiveHomeHeading(doc.activeElement, true);
     });
+    // The persistent hero is a sibling of the row scroller, so native wheel
+    // bubbling cannot reliably reach it. Route only its vertical gestures.
+    get("watch-hero").addEventListener("wheel", function (event) {
+      if (state.view !== "watch" || event.ctrlKey || event.metaKey
+          || event.target.closest("#watch-filter-menu")) return;
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      event.preventDefault();
+      var scroller = get("watch-rows-scroll");
+      var unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? scroller.clientHeight : 1;
+      scroller.scrollTop += event.deltaY * unit;
+    }, { passive: false });
     clock.addEventListener("resize", function () {
       if (state.view !== "watch") return;
       if (homeMotion) finishHorizontalMotion();

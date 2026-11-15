@@ -1319,6 +1319,10 @@ test("VidBolt subtitle menu is D-pad accessible, defaults Off, adjusts timing, a
   assert.equal(app.document.activeElement.id, "independent-subtitle-english");
   app.key("Enter");
   assert.equal(app.get("subtitle-mode").textContent, "EN");
+  assert.equal(app.state(), "CONTROLS_VISIBLE");
+  assert.equal(app.get("independent-subtitle-menu").hidden, true);
+  assert.equal(app.document.activeElement.id, "subtitles");
+  app.key("Enter");
   assert.equal(app.document.activeElement.id, "independent-subtitle-english");
   app.key("ArrowDown"); app.key("ArrowRight");
   assert.match(app.get("independent-subtitle-offset").textContent, /\+0\.5s/);
@@ -1345,6 +1349,10 @@ test("VidBolt subtitle menu is D-pad accessible, defaults Off, adjusts timing, a
   assert.equal(app.state(), "CONTROLS_VISIBLE");
   assert.equal(app.document.activeElement.id, "subtitles");
   assert.equal(app.navigation.length, 0);
+  app.key("Enter"); app.key("ArrowUp"); app.key("Enter");
+  assert.equal(app.get("subtitle-mode").textContent, "OFF");
+  assert.equal(app.get("independent-subtitle-menu").hidden, true);
+  assert.equal(app.document.activeElement.id, "subtitles");
 });
 
 test("VidBolt movie can open Horizon subtitles without changing playback", async () => {
@@ -1356,6 +1364,9 @@ test("VidBolt movie can open Horizon subtitles without changing playback", async
   assert.match(app.get("independent-subtitle-status").textContent, /not configured/);
   assert.equal(app.get("subtitle-mode").textContent, "OFF");
   assert.equal(frame.sourceChanges, changes);
+  app.key("ArrowDown"); app.key("Enter");
+  assert.equal(app.state(), "SUBMENU_OPEN", "unavailable English cannot appear selected");
+  assert.equal(app.get("subtitle-mode").textContent, "OFF");
   app.key("Backspace");
   assert.equal(app.state(), "CONTROLS_VISIBLE");
 });
@@ -1446,7 +1457,7 @@ test("explicit VidBolt subtitle choice transfers to the next episode, then a fre
     subtitleFetch, subtitleSessionStorage });
   first.key("ArrowUp"); first.get("subtitles").focus(); first.key("Enter");
   await new Promise(resolve => setImmediate(resolve));
-  first.key("ArrowDown"); first.key("Enter"); first.key("Backspace");
+  first.key("ArrowDown"); first.key("Enter");
   first.get("episodes").focus(); first.key("Enter");
   assert.ok(values.has("horizon_subtitle_transfer_v1"));
   const next = setup({ search: "?showId=2190&season=15&episode=8&provider=vidbolt",
@@ -1465,7 +1476,7 @@ test("VidBolt captions reject short ad timelines and untrusted source messages",
     subtitleFetch: async () => ({ ok: true, json: async () => ({ text: fixture }) }) });
   app.key("ArrowUp"); app.get("subtitles").focus(); app.key("Enter");
   await new Promise(resolve => setImmediate(resolve));
-  app.key("ArrowDown"); app.key("Enter"); app.key("Backspace");
+  app.key("ArrowDown"); app.key("Enter");
   app.message({ type: "play" }, "https://vidbolt.xyz");
   app.message({ type: "timeupdate", time: 5, duration: 22 }, "https://vidbolt.xyz");
   app.message({ type: "timeupdate", time: 5.5, duration: 22 }, "https://vidbolt.xyz");
@@ -3333,6 +3344,13 @@ test("Audio language menu supports D-pad selection, persists preference, and rel
   assert.equal(app.get("audio-language-menu").hidden, false);
   assert.equal(app.document.activeElement.id, "audio-lang-auto");
   assert.equal(app.get("audio-lang-auto").getAttribute("aria-pressed"), "true");
+  const initialLoads = app.get("player-frame").sourceChanges;
+  app.key("Enter");
+  assert.equal(app.get("audio-language-menu").hidden, true);
+  assert.equal(app.document.activeElement.id, "audio-language");
+  assert.equal(app.get("player-frame").sourceChanges, initialLoads,
+    "choosing the active language closes the menu without reloading playback");
+  app.key("Enter");
 
   // ArrowDown to English
   app.key("ArrowDown");

@@ -8,6 +8,21 @@ const root = {};
 runInNewContext(source, { window: root });
 const engine = root.HorizonDiscoverEngine;
 
+test("Discover applies bounded language and presentation preferences in AI and fallback scoring", () => {
+  const seed = { type: "tv", id: 2190, title: "South Park", originalLanguage: "en",
+    genreIds: [16, 35], keywordIds: [10], overview: "Animated satire about a small town" };
+  const base = { type: "tv", title: "Comparable", genreIds: [16, 35], keywordIds: [10],
+    overview: "Animated satire about a small town", sources: [{ kind: "similar", rank: 5 }],
+    voteCount: 300, voteAverage: 7 };
+  for (const semantic of [undefined, 0.72]) {
+    const score = (id, originalLanguage, genreIds) => engine.scoreCandidate(seed,
+      { ...base, id, originalLanguage, genreIds, semanticSim: semantic }, {}).scores.closest;
+    assert.ok(score(1, "en", [16, 35]) > score(2, "hi", [16, 35]));
+    assert.ok(score(1, "en", [16, 35]) > score(3, "en", [35]));
+    assert.ok(score(4, "", [16, 35]) > 0, "missing language remains eligible");
+  }
+});
+
 test("Discover Engine: Tokenizer removes punctuation and stop words", () => {
   const tokens = engine.tokenize("The Quick, Brown Fox jumps over the lazy dog!");
   assert.ok(!tokens.includes("the"), "Stop word 'the' should be removed");

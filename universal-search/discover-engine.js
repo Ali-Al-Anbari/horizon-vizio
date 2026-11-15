@@ -235,6 +235,16 @@
     var quality = bayesianQuality(candidate.voteCount, candidate.voteAverage);
     var creator = creatorOverlap(seed, candidate);
     var crossMedia = candidate.type !== seed.type;
+    var seedLanguage = typeof seed.originalLanguage === "string" ? seed.originalLanguage.toLowerCase() : "";
+    var candidateLanguage = typeof candidate.originalLanguage === "string" ? candidate.originalLanguage.toLowerCase() : "";
+    var languageAdjustment = !candidateLanguage ? 0
+      : seedLanguage && candidateLanguage === seedLanguage ? 0.10
+      : ["en", "ja", "ko"].indexOf(candidateLanguage) >= 0 ? 0
+      : -0.22;
+    var seedAnimated = (seed.genreIds || []).indexOf(16) >= 0;
+    var candidateAnimated = (candidate.genreIds || []).indexOf(16) >= 0;
+    var presentationAdjustment = (seed.genreIds || []).length && (candidate.genreIds || []).length
+      ? (seedAnimated === candidateAnimated ? 0.09 : -0.06) : 0;
 
     var hasSemantic = typeof candidate.semanticSim === "number" && Number.isFinite(candidate.semanticSim) && candidate.semanticSim >= 0;
     var semanticSim = hasSemantic ? Math.min(1, Math.max(0, candidate.semanticSim)) : 0;
@@ -303,6 +313,14 @@
     } else {
       gems = -1;
     }
+    // Preserve strong cross-language and cross-presentation matches. These
+    // bounded preferences only separate candidates with comparable evidence.
+    var affinity = languageAdjustment + presentationAdjustment;
+    var evidenceScale = Math.max(0, 1 - Math.min(0.7, (kwSim + synopsisSim + semanticSim) / 2));
+    closest = closest > 0 ? Math.max(0, closest + affinity * evidenceScale) : closest;
+    vibe = vibe > 0 ? Math.max(0, vibe + affinity * evidenceScale) : vibe;
+    genreDiffStory = genreDiffStory > 0 ? Math.max(0, genreDiffStory + affinity * evidenceScale) : genreDiffStory;
+    gems = gems > 0 ? Math.max(0, gems + affinity * evidenceScale) : gems;
 
     var breakdown = {
       keyword: kwSim,
@@ -312,7 +330,9 @@
       source: sourceRel,
       quality: quality,
       creator: creator,
-      preference: pref
+      preference: pref,
+      languageAdjustment: languageAdjustment,
+      presentationAdjustment: presentationAdjustment
     };
 
     var matchReason = generateMatchReason(seed, candidate, breakdown);

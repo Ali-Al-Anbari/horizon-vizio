@@ -308,6 +308,8 @@ function title(row, type) {
     popularity: Number.isFinite(row.popularity) ? Math.max(0, Math.min(row.popularity, 1000000000)) : 0,
     voteCount: Number.isSafeInteger(row.vote_count) ? Math.max(0, Math.min(row.vote_count, 1000000000)) : 0,
     originalTitle: String(row.original_title || row.original_name || "").slice(0, 160),
+    originalLanguage: typeof row.original_language === "string" && /^[a-z]{2,3}$/.test(row.original_language)
+      ? row.original_language : "",
     overview: String(row.overview || "").slice(0, 1800),
     genres: Array.isArray(row.genres) ? row.genres.filter(genre => genre && Number.isInteger(genre.id)
       && typeof genre.name === "string").slice(0, 8).map(genre => String(genre.name).slice(0, 40)) : [],
@@ -343,6 +345,8 @@ async function recommendTmdb(fetcher, env, seeds, avoids, signal) {
         `/${seed.type}/${seed.id}?language=en-US&append_to_response=keywords`, signal);
       const keywords = seed.type === "movie" ? data.keywords?.keywords : data.keywords?.results;
       return { type: seed.type, id: seed.id, title: String(data.title || data.name || "").slice(0, 160),
+        originalLanguage: typeof data.original_language === "string" && /^[a-z]{2,3}$/.test(data.original_language)
+          ? data.original_language : "",
         genreIds: (data.genres || []).filter(g => Number.isInteger(g.id) && g.id > 0).slice(0, 8).map(g => g.id),
         keywordIds: (Array.isArray(keywords) ? keywords : []).filter(k => Number.isInteger(k.id) && k.id > 0)
           .slice(0, 8).map(k => k.id) };

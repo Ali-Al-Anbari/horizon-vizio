@@ -136,6 +136,10 @@
     var rows = Array.isArray(history) ? history : [], ratings = feedback && feedback.ratings || {};
     var profile = tasteProfile(rows, feedback, payload, now);
     var positive = profile.positive, seeds = {};
+    var seedDetailsByKey = {};
+    (payload && Array.isArray(payload.seeds) ? payload.seeds : []).forEach(function (seed) {
+      seedDetailsByKey[key(seed.type, seed.id)] = seed;
+    });
     positive.forEach(function (item) { seeds[item.type + ":" + item.id] = item; });
     var genreWeight = profile.genres, keywordWeight = profile.keywords,
       negativeGenres = {}, negativeKeywords = {};
@@ -213,6 +217,21 @@
         + Math.min(6, Math.log1p(Math.max(0, candidate.popularity || 0)) * 1.1)
         + Math.min(4, Math.max(0, Number(candidate.voteAverage) || 0) * 0.4);
       var relevance = similarity + genre + keyword;
+      var leadingDetail = strongest && seedDetailsByKey[strongest.source.seed];
+      var candidateLanguage = typeof candidate.originalLanguage === "string" ? candidate.originalLanguage.toLowerCase() : "";
+      var seedLanguage = leadingDetail && typeof leadingDetail.originalLanguage === "string"
+        ? leadingDetail.originalLanguage.toLowerCase() : "";
+      var languageAffinity = !candidateLanguage ? 0
+        : seedLanguage && candidateLanguage === seedLanguage ? 7
+        : ["en", "ja", "ko"].indexOf(candidateLanguage) >= 0 ? 0 : -12;
+      // Home already counts shared Animation genre in its genre score. Avoid
+      // awarding it twice; only mildly downrank animation for a live-action seed.
+      var presentationAffinity = leadingDetail && Array.isArray(leadingDetail.genreIds)
+          && leadingDetail.genreIds.length && genres.length
+          && leadingDetail.genreIds.indexOf(16) < 0 && genres.indexOf(16) >= 0 ? -2 : 0;
+      // Source/metadata evidence remains decisive; language and presentation
+      // preferences break close calls without excluding exceptional matches.
+      var affinityScale = Math.max(0.4, 1 - Math.min(0.6, relevance / 60));
       // A single verified watch is useful evidence; Love It reaches full confidence sooner.
       // Keep the full quality score at cold start and for strongly related candidates.
       var confidence = Math.min(1, profile.confidence * 5);
@@ -229,7 +248,8 @@
         : source && source.genreId && genreWeight[candidate.type + ":" + source.genreId]
           ? { code: "category", genreId: source.genreId }
           : { code: "popular" };
-      return { candidate: candidate, score: relevance + quality * qualityShare - aversion,
+      return { candidate: candidate, score: relevance + quality * qualityShare - aversion
+        + (languageAffinity + presentationAffinity) * affinityScale,
         relevance: relevance, reason: reason, leadingSeed: strongest && strongest.source.seed || null };
     }).filter(Boolean);
     var output = [], used = {}, seedCounts = {}, genreCounts = {}, typeCounts = {};

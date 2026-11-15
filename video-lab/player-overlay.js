@@ -1187,9 +1187,15 @@
         }
       } else if (key === "OK") {
         var isTiming = independentMenuIndex === 2 || doc.activeElement === independentButtons[2];
-        if (independentMenuIndex === 0 && !isTiming) independentSubtitles.setEnabled(false);
+        if (independentMenuIndex === 0 && !isTiming) {
+          independentSubtitles.setEnabled(false);
+          closeMenu(); return;
+        }
         else if (independentMenuIndex === 1 && !isTiming) {
-          if (independentSubtitles.state().available) independentSubtitles.setEnabled(true);
+          if (independentSubtitles.state().available) {
+            independentSubtitles.setEnabled(true);
+            closeMenu(); return;
+          }
           else independentSubtitles.load();
         } else if (isTiming) {
           independentMenuIndex = 2;
@@ -1240,7 +1246,8 @@
       }
     }
     function chooseAudioLanguage(lang) {
-      if (audioLanguages.indexOf(lang) === -1) lang = "auto";
+      if (audioLanguages.indexOf(lang) === -1) return;
+      if (currentAudioLanguage === lang) { closeAudioLanguageMenu(); return; }
       currentAudioLanguage = lang;
       writeAudioLanguagePref(lang);
       updateAudioLanguageUI();

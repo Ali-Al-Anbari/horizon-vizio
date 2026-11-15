@@ -81,6 +81,21 @@ test("empty history uses ranked popular fallback, with no invented personal reas
   { now }).length, 0);
 });
 
+test("seed language and animation preference reorder comparable Home candidates without excluding alternatives", () => {
+  const history = [row("tv", 2190, "South Park", now - 1000)];
+  const seed = { type: "tv", id: 2190, title: "South Park", originalLanguage: "en", genreIds: [16, 35], keywordIds: [] };
+  const candidates = [
+    candidate("tv", 1, "English animation", [16, 35], [source("similar", "tv:2190")], { originalLanguage: "en" }),
+    candidate("tv", 2, "Hindi animation", [16, 35], [source("similar", "tv:2190")], { originalLanguage: "hi" }),
+    candidate("tv", 3, "English live action", [35], [source("similar", "tv:2190")], { originalLanguage: "en" }),
+    candidate("tv", 4, "Unknown animation", [16, 35], [source("similar", "tv:2190")]),
+  ];
+  const ranked = engine.rank(history, { ratings: {} }, { seeds: [seed], candidates }, { now, limit: 4 });
+  assert.equal(ranked[0].id, 1);
+  assert.ok(ranked.findIndex(item => item.id === 2) > ranked.findIndex(item => item.id === 3));
+  assert.equal(ranked.length, 4);
+});
+
 test("taste profile ignores brief starts and short ambiguous media, caps series repetition", () => {
   const brief = core.item("tv", 9, "Brief", 1, 1, "off", now, { progress: {
     position: 12, duration: 1300, updatedAt: now, provider: "vidbolt", completed: false } });
@@ -389,11 +404,11 @@ test("Worker bounds TMDB calls, annotates real sources and survives partial fail
   const fetch = async (url, options) => {
     assert.equal(options.headers.Authorization, "Bearer secret");
     const path = new URL(url).pathname.replace(/^\/3/, ""); paths.push(path);
-    if (path === "/movie/1") return new Response(JSON.stringify({ id: 1, title: "Seed",
+    if (path === "/movie/1") return new Response(JSON.stringify({ id: 1, title: "Seed", original_language: "en",
       genres: [{ id: 10 }], keywords: { keywords: [{ id: 99 }] } }));
     if (path.endsWith("/similar")) return new Response("", { status: 500 });
     if (path.endsWith("/recommendations")) return new Response(JSON.stringify({ results: [
-      { id: 4, title: "Related", genre_ids: [10], popularity: 40, vote_count: 200 } ] }));
+      { id: 4, title: "Related", original_language: "ja", genre_ids: [10], popularity: 40, vote_count: 200 } ] }));
     if (path === "/discover/movie") return new Response(JSON.stringify({ results: [
       { id: 4, title: "Related", genre_ids: [10] }, { id: 5, title: "Keyword match", genre_ids: [10] } ] }));
     return new Response(JSON.stringify({ results: [{ id: path.includes("movie") ? 6 : 7,
@@ -404,6 +419,8 @@ test("Worker bounds TMDB calls, annotates real sources and survives partial fail
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(data.candidates.filter(item => item.type === "movie" && item.id === 4).length, 1);
+  assert.equal(data.seeds[0].originalLanguage, "en");
+  assert.equal(data.candidates.find(item => item.id === 4).originalLanguage, "ja");
   assert.deepEqual(data.candidates.find(item => item.id === 5).keywordIds, [99]);
   assert.ok(data.candidates.some(item => item.type === "tv"));
   assert.ok(paths.length <= 15);

@@ -65,6 +65,7 @@
       watchTab: "for-you", detailSourceTab: "for-you" };
     var finePointer = !!(clock.matchMedia && clock.matchMedia("(pointer: fine)").matches)
       && !/Vizio|SmartCast/i.test(clock.navigator && clock.navigator.userAgent || "");
+    var hoverPointer = finePointer && !!clock.matchMedia("(hover: hover)").matches;
     doc.body.classList.toggle("watch-desktop-pointer", finePointer);
     var keyboardOpen = !finePointer;
     var historyReady = false, restoringHistory = false, historyBackPending = false, historyDepth = 0;
@@ -542,6 +543,50 @@
     }
     var homeMotion = null, holdRepeatCount = 0, holdSettleTimer = 0,
       holdSettleRow = null, holdSettleGroup = "";
+    var edgeIntentTimer = 0, edgeMotionGroup = "", edgePointerX = 0, edgePointerY = 0,
+      edgeLastMoveAt = 0, hoverHeroTimer = 0, hoverHeroCard = null, pointerHeroActive = false;
+    function cancelHoverHero() {
+      if (hoverHeroTimer) clock.clearTimeout(hoverHeroTimer);
+      hoverHeroTimer = 0; hoverHeroCard = null;
+    }
+    function scheduleHoverHero(card) {
+      cancelHoverHero();
+      if (!hoverPointer || !pointerHeroActive || !card || !card.homeEntry || state.view !== "watch"
+          || homeMotion && homeMotion.mode === "edge") return;
+      hoverHeroCard = card;
+      hoverHeroTimer = clock.setTimeout(function () {
+        hoverHeroTimer = 0;
+        if (hoverHeroCard === card && card.isConnected && pointerHeroActive
+            && !(homeMotion && homeMotion.mode === "edge")) showHomeHero(card.homeEntry);
+      }, 160);
+    }
+    function stopEdgeMotion() {
+      if (edgeIntentTimer) clock.clearTimeout(edgeIntentTimer);
+      edgeIntentTimer = 0; edgeMotionGroup = "";
+      if (homeMotion && homeMotion.mode === "edge") {
+        homeMotion.target = Math.max(homeMotion.minTarget,
+          Math.min(homeMotion.maxTarget, Math.round(homeMotion.position)));
+        homeMotion.mode = "target";
+      }
+    }
+    function startEdgeMotion(group, direction) {
+      if (state.view !== "watch" || homeMotion || !hoverPointer) return;
+      var controller = homeCarousels[group];
+      if (!controller || controller.fits || controller.cards.length < 2) return;
+      var current = Math.max(0, -carouselX(controller.track) / controller.step);
+      var short = isRowShort(group, controller.cards);
+      var minimum = short ? 0 : Math.floor(controller.selected / controller.cards.length) * controller.cards.length;
+      var maximum = short ? controller.cards.length - 1 : Infinity;
+      if (direction < 0 && current <= minimum || direction > 0 && current >= maximum) return;
+      cancelHoverHero(); invalidatePendingHomeHero();
+      controller.row.classList.add("is-hold-scrolling");
+      var now = clock.performance && clock.performance.now ? clock.performance.now() : Date.now();
+      homeMotion = { controller: controller, group: group, mode: "edge", passive: true,
+        direction: direction, position: current, target: current, committedOrdinal: controller.selected,
+        minTarget: minimum, maxTarget: maximum, isShort: short, cycleStart: minimum,
+        lastFrame: now, frame: 0, inactivityTimer: 0 };
+      homeMotion.frame = clock.requestAnimationFrame(motionFrame);
+    }
     function isRowShort(group, cards) {
       var count = cards ? cards.length : 0;
       return group === "continue" || count < 8;
@@ -599,11 +644,25 @@
       var maximum = Math.ceil(position) + controller.visible + 3;
       while (controller.start < minimum && controller.track.firstElementChild) {
         var first = controller.track.firstElementChild;
+        if (first === doc.activeElement && homeMotion && homeMotion.passive) {
+          var second = first.nextElementSibling;
+          if (!second || Number(second.dataset.homeOrdinal) >= minimum) break;
+          delete controller.slots[second.dataset.homeOrdinal]; second.remove();
+          controller.pool.push(second);
+          continue;
+        }
         delete controller.slots[controller.start++]; first.remove();
         controller.pool.push(first);
       }
       while (controller.end > maximum && controller.track.lastElementChild) {
         var last = controller.track.lastElementChild;
+        if (last === doc.activeElement && homeMotion && homeMotion.passive) {
+          var beforeLast = last.previousElementSibling;
+          if (!beforeLast || Number(beforeLast.dataset.homeOrdinal) <= maximum) break;
+          delete controller.slots[beforeLast.dataset.homeOrdinal]; beforeLast.remove();
+          controller.pool.push(beforeLast);
+          continue;
+        }
         delete controller.slots[controller.end--]; last.remove();
         controller.pool.push(last);
       }
@@ -616,8 +675,8 @@
       motion.lastFrame = timestamp;
       var controller = motion.controller, track = controller.track;
 
-      if (motion.mode === "hold") {
-        var next = motion.position + motion.direction * elapsed * 0.0048;
+      if (motion.mode === "hold" || motion.mode === "edge") {
+        var next = motion.position + motion.direction * elapsed * (motion.mode === "edge" ? 0.0011 : 0.0048);
         if (motion.direction < 0) next = Math.max(motion.minTarget, next);
         if (motion.direction > 0 && motion.isShort) next = Math.min(motion.maxTarget, next);
         motion.position = next;
@@ -630,11 +689,14 @@
         track.style.transform = "translate3d(" + (-next * controller.step) + "px,0,0)";
 
         if (motion.direction < 0 && next <= motion.minTarget) {
-          finishHorizontalMotion(); return;
+          if (motion.mode === "edge") stopEdgeMotion();
+          else { finishHorizontalMotion(); return; }
         }
         if (motion.direction > 0 && motion.isShort && next >= motion.maxTarget) {
-          finishHorizontalMotion(); return;
+          if (motion.mode === "edge") stopEdgeMotion();
+          else { finishHorizontalMotion(); return; }
         }
+        if (motion.mode === "edge" && Date.now() - edgeLastMoveAt > 6000) stopEdgeMotion();
       } else {
         var diff = motion.target - motion.position;
         if (Math.abs(diff) < 0.005) {
@@ -685,7 +747,7 @@
 
       if (!isShort) {
         var cycleStart = Math.floor(target / controller.cards.length) * controller.cards.length;
-        prunePreviousCycleSlots(controller, cycleStart);
+        if (!motion.passive) prunePreviousCycleSlots(controller, cycleStart);
         ensureHoldSlots(controller, Math.max(cycleStart, target - 2), target + controller.visible + 3);
         rowCycleIndex[motion.group] = target % controller.cards.length;
       } else {
@@ -694,7 +756,7 @@
 
       var slot = controller.slots[target];
       if (!slot && isShort) slot = controller.cards[target];
-      if (slot) {
+      if (slot && !motion.passive) {
         var previous = doc.querySelector("[data-focus].is-focused");
         if (previous && previous !== slot) previous.classList.remove("is-focused");
         slot.focus({ preventScroll: true });
@@ -714,6 +776,10 @@
       if (holdSettleTimer) clock.clearTimeout(holdSettleTimer);
       holdSettleRow = controller.row; holdSettleGroup = motion.group;
       holdSettleTimer = clock.setTimeout(clearHoldOutline, 170);
+      if (motion.passive && pointerHeroActive) {
+        var underneath = doc.elementFromPoint(edgePointerX, edgePointerY);
+        scheduleHoverHero(underneath && underneath.closest(".home-card"));
+      }
     }
     function renewMotionInactivity() {
       if (!homeMotion) return;
@@ -722,6 +788,7 @@
       holdMotion.inactivityTimer = clock.setTimeout(finishHoldMotion, 240);
     }
     function stepHorizontalMotion(groupName, direction, isHold) {
+      if (homeMotion && homeMotion.mode === "edge") stopEdgeMotion();
       var controller = homeCarousels[groupName];
       if (!controller || controller.cards.length < 1 || state.view !== "watch") return false;
       var row = controller.row, track = controller.track;
@@ -1605,6 +1672,8 @@
     }
     function setWatchTab(tabName) {
       if (["for-you", "tv", "movies", "discover"].indexOf(tabName) < 0) return;
+      if (homeMotion && homeMotion.mode === "edge") { stopEdgeMotion(); finishHorizontalMotion(); }
+      cancelHoverHero();
       if (state.view === "watch") invalidatePendingHomeHero();
       if (activeFilterMenuType) closeFilterMenu();
       var scroller = get("watch-rows-scroll");
@@ -2628,6 +2697,8 @@
       }
     }
     function openDetails(row, episodeTarget, focusAction) {
+      if (homeMotion && homeMotion.mode === "edge") { stopEdgeMotion(); finishHorizontalMotion(); }
+      cancelHoverHero();
       if (pickingDiscoverSeed) {
         pickingDiscoverSeed = false;
         launchDiscoverWithSeed(row, "search");
@@ -3156,6 +3227,10 @@
     function handleKey(event) {
       if (disposed || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
       var key = keyName(event);
+      if (homeMotion && homeMotion.mode === "edge") stopEdgeMotion();
+      if (edgeIntentTimer) clock.clearTimeout(edgeIntentTimer);
+      edgeIntentTimer = 0; edgeMotionGroup = "";
+      pointerHeroActive = false; cancelHoverHero();
       if (watchPerformance && watchPerformance.handle(key, state.view, doc.activeElement, event.repeat)) {
         event.preventDefault(); return;
       }
@@ -3353,7 +3428,48 @@
         if (state.view === "watch" && event.target.homeEntry) showHomeHero(event.target.homeEntry);
       }
     });
+    if (hoverPointer) {
+      doc.addEventListener("pointermove", function (event) {
+        if (event.pointerType && event.pointerType !== "mouse" && event.pointerType !== "pen") return;
+        pointerHeroActive = true;
+        edgePointerX = event.clientX; edgePointerY = event.clientY;
+        edgeLastMoveAt = Date.now();
+        var row = state.view === "watch" && event.target.closest && event.target.closest(".watch-home-row");
+        var group = row && row.id && row.id.replace(/^watch-/, "").replace(/-row$/, "");
+        var rect = row && row.getBoundingClientRect();
+        var zone = rect ? Math.max(42, Math.min(110, rect.width * 0.07)) : 0;
+        var direction = rect && event.clientX <= rect.left + zone ? -1
+          : rect && event.clientX >= rect.right - zone ? 1 : 0;
+        if (!direction || !group || row.closest("[hidden]")) {
+          if (homeMotion && homeMotion.mode === "edge") stopEdgeMotion();
+          if (edgeIntentTimer) clock.clearTimeout(edgeIntentTimer);
+          edgeIntentTimer = 0; edgeMotionGroup = "";
+          var hovered = event.target.closest && event.target.closest(".home-card");
+          if (hovered && hovered !== hoverHeroCard) scheduleHoverHero(hovered);
+          else if (!hovered) cancelHoverHero();
+          return;
+        }
+        cancelHoverHero();
+        if (homeMotion && homeMotion.mode === "edge") {
+          if (homeMotion.group === group) homeMotion.direction = direction;
+          else stopEdgeMotion();
+          return;
+        }
+        var intent = group + ":" + direction;
+        if (edgeMotionGroup === intent) return;
+        if (edgeIntentTimer) clock.clearTimeout(edgeIntentTimer);
+        edgeMotionGroup = intent;
+        edgeIntentTimer = clock.setTimeout(function () {
+          edgeIntentTimer = 0;
+          if (edgeMotionGroup === intent) startEdgeMotion(group, direction);
+        }, 220);
+      }, { passive: true });
+      doc.addEventListener("pointerleave", function () {
+        pointerHeroActive = false; cancelHoverHero(); stopEdgeMotion();
+      });
+    }
     get("watch-rows-scroll").addEventListener("scroll", function () {
+      if (homeMotion && homeMotion.mode === "edge") stopEdgeMotion();
       get("watch-view").classList.toggle("has-row-scroll", get("watch-rows-scroll").scrollTop > 1);
       if (state.view === "watch" && doc.activeElement.dataset.homeGroup)
         syncActiveHomeHeading(doc.activeElement, true);
@@ -3407,7 +3523,11 @@
         if (holdMotion) finishHoldMotion();
       }
     });
-    clock.addEventListener("blur", function () { if (homeMotion) finishHorizontalMotion(); });
+    clock.addEventListener("blur", function () {
+      pointerHeroActive = false; cancelHoverHero();
+      if (homeMotion && homeMotion.mode === "edge") stopEdgeMotion();
+      else if (homeMotion) finishHorizontalMotion();
+    });
     doc.addEventListener("visibilitychange", function () {
       if (doc.hidden && homeMotion) finishHorizontalMotion();
     });

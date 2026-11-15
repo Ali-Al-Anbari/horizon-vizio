@@ -969,6 +969,15 @@ body.watch-active .home-card-poster { flex-basis: clamp(154px, 11.5vw, 210px); }
 body.watch-active .home-card-poster .poster-art { aspect-ratio: 2 / 3; border-radius: 8px; }
 body.watch-active .home-card-poster .poster-art img { position: absolute; inset: 0; object-fit: cover; }
 body.watch-active .home-card-poster .poster-art:not(.is-loaded) img { visibility: hidden; }
+body.watch-active.watch-artwork-fade .home-card-poster .poster-art img {
+  opacity: 1; transition: opacity 140ms ease-out;
+}
+body.watch-active.watch-artwork-fade .home-card-poster .poster-art:not(.is-loaded) img {
+  visibility: visible; opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  body.watch-active.watch-artwork-fade .home-card-poster .poster-art img { transition: none; }
+}
 body.watch-active .home-card-poster strong {
   margin-top: 8px; font-size: .9rem; line-height: 1.25;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;
@@ -980,6 +989,7 @@ body.watch-active .home-card-poster strong {
 .settings-list { display: grid; gap: 8px; }
 .settings-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 0; }
 .settings-entry > span { flex: 1 1 290px; min-width: 0; }
+.settings-entry > span small { display: block; margin-top: 3px; color: rgba(255,255,255,.62); font-size: .82rem; }
 .settings-entry button { padding: 8px 12px; border: 1px solid rgba(255,255,255,.32);
   border-radius: 5px; background: rgba(255,255,255,.06); font-size: .86rem; }
 .settings-entry button:focus, .settings-entry button.is-focused, .settings-credits a:focus {

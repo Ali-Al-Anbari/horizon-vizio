@@ -31,18 +31,18 @@ test("Watch rail and Settings expose the requested controls and retain TMDB attr
 });
 
 test("Watch home follows the reference layout and routes cards through the existing Watch views", () => {
-  for (const id of ["watch-view", "watch-hero-title", "watch-hero-description", "watch-continue-row", "watch-recent-row"])
+  for (const id of ["watch-view", "watch-hero-title", "watch-hero-description", "watch-continue-row", "watch-top-row"])
     assert.match(html, new RegExp(`id="${id}"`));
   assert.doesNotMatch(html, /id="home-toggle"|id="watch-hero-play"|id="watch-hero-details"/);
-  assert.match(html, /<h2>Recently Finished<\/h2>/);
+  assert.doesNotMatch(html, /<h2>Recently Finished<\/h2>/);
   assert.match(source, /core\.homepageContinueCandidates\(rows, local\)/);
-  assert.match(source, /core\.homepageFinished\(rows, local\)/);
-  assert.match(source, /group === "continue" \? landscapeArt\(row, true\) : verticalPosterArt\(row, true\)/);
+  assert.doesNotMatch(source, /core\.homepageFinished\(rows, local\)/);
+  assert.match(source, /var artwork = landscapeArt\(row, true\)/);
   assert.match(source, /function carouselSlot\(controller, ordinal\)/);
   assert.match(source, /image\.src = image\.dataset\.pendingSrc/);
   assert.match(source, /if \(row\.type === "movie"\) \{ openDetails\(row\); return; \}/);
   assert.match(source, /openDetails\(row, target \|\| \{ season: row\.season, episode: row\.episode \}\)/);
-  assert.match(source, /lookupNextEpisode\(row, detail\)/);
+  assert.match(source, /function lookupNextEpisode\(recent, detail\)/);
   assert.match(source, /pendingEpisodeFocus = \{ season: episodeTarget\.season, episode: episodeTarget\.episode \}/);
   assert.match(source, /if \(episodeTarget \|\| state\.view === "episodes"\) browseEpisodes\(\)/);
   assert.match(source, /event\.target\.homeEntry\) showHomeHero\(event\.target\.homeEntry\)/);
@@ -77,7 +77,7 @@ test("active Watch heading is outside the clipped scroller and above the decorat
 test("Continue Watching precedes recommendations in DOM and remote row order", () => {
   assert.ok(html.indexOf('id="watch-continue-section"') < html.indexOf('id="watch-top-section"'));
   assert.ok(html.indexOf('id="watch-top-section"') < html.indexOf('id="watch-because-section"'));
-  assert.match(source, /homeRowOrder = \["continue", "top", "because", "recent"\]/);
+  assert.match(source, /homeRowOrder = \["continue", "top", "because"\]/);
 });
 
 test("focused rail circle expands without moving its neighbors", () => {

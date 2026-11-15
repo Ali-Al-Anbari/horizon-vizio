@@ -9,7 +9,7 @@ test("hero preferences are local, versioned, and default to immediate without a 
   assert.match(source, /HERO_PREF_KEY = "horizon-watch-hero-preferences"/);
   assert.match(source, /HERO_DELAYS = \[0, 110, 150, 250, 300, 400, 500\]/);
   assert.match(source, /saved\.version === 1/);
-  assert.match(source, /return \{ delay: 0, fade: false \}/);
+  assert.match(source, /return \{ delay: 0, fade: false, glide: true, hold: true,/);
   assert.match(html, /id="settings-hero-delay" data-focus/);
   assert.match(html, /id="settings-hero-fade" data-focus/);
 });
@@ -30,5 +30,5 @@ test("held navigation has a release and missing-keyup stop", () => {
   assert.match(source, /holdMotion\.inactivityTimer = clock\.setTimeout\(finishHoldMotion, 240\)/);
   assert.match(source, /clock\.addEventListener\("blur"/);
   assert.match(source, /doc\.addEventListener\("visibilitychange"/);
-  assert.match(source, /event\.repeat && key === \(holdMotion\.direction/);
+  assert.match(source, /heroPreferences\.hold && homeMotion\.mode === "hold" && event\.repeat/);
 });

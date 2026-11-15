@@ -136,6 +136,8 @@ try {
   assert.equal(await evaluate("document.querySelector('#settings-hero-delay').textContent"), "Immediate");
   assert.equal(await evaluate("document.querySelector('#settings-hero-fade').textContent"), "Fade Off");
   await key("ArrowRight");
+  assert.equal(await evaluate("document.activeElement.id"), "settings-poster-glide");
+  for (let i = 0; i < 3; i++) await key("ArrowDown");
   assert.equal(await evaluate("document.activeElement.id"), "settings-hero-delay");
   const timingLabels = [];
   for (let i = 0; i < 7; i++) {

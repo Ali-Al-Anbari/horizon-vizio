@@ -109,24 +109,41 @@
     var rowCycleIndex = Object.create(null);
     var homeCards = Object.create(null);
     var homeCarousels = Object.create(null);
+    var visibleRowGroups = [];
     var homeScrollFrame = 0, homeHeroTimer = 0;
     var HERO_PREF_KEY = "horizon-watch-hero-preferences";
     var HERO_DELAYS = [0, 110, 150, 250, 300, 400, 500];
+    function defaultAppearance() {
+      return { delay: 0, fade: false, glide: true, hold: true,
+        scrollAnimations: true, artworkFade: false };
+    }
     function readHeroPreferences() {
       try {
         var saved = JSON.parse(local.getItem(HERO_PREF_KEY));
-        if (saved && saved.version === 1 && HERO_DELAYS.indexOf(saved.delay) >= 0
-            && typeof saved.fade === "boolean") return { delay: saved.delay, fade: saved.fade };
+        if (saved && (saved.version === 1 || saved.version === 2)) {
+          var result = defaultAppearance();
+          if (HERO_DELAYS.indexOf(saved.delay) >= 0) result.delay = saved.delay;
+          if (typeof saved.fade === "boolean") result.fade = saved.fade;
+          if (saved.version === 2) ["glide", "hold", "scrollAnimations", "artworkFade"].forEach(function (key) {
+            if (typeof saved[key] === "boolean") result[key] = saved[key];
+          });
+          return result;
+        }
       } catch (_error) { /* Unsupported or damaged data uses safe defaults. */ }
-      return { delay: 0, fade: false };
+      return defaultAppearance();
     }
     var heroPreferences = readHeroPreferences();
     function saveHeroPreferences() {
-      local.setItem(HERO_PREF_KEY, JSON.stringify({ version: 1,
-        delay: heroPreferences.delay, fade: heroPreferences.fade }));
+      local.setItem(HERO_PREF_KEY, JSON.stringify({ version: 2,
+        delay: heroPreferences.delay, fade: heroPreferences.fade,
+        glide: heroPreferences.glide, hold: heroPreferences.hold,
+        scrollAnimations: heroPreferences.scrollAnimations,
+        artworkFade: heroPreferences.artworkFade }));
+      doc.body.classList.toggle("watch-artwork-fade", heroPreferences.artworkFade);
     }
+    doc.body.classList.toggle("watch-artwork-fade", heroPreferences.artworkFade);
     var catalogRequests = Object.create(null);
-    var homeRowOrder = ["continue", "top", "because", "recent"];
+    var homeRowOrder = ["continue", "top", "because"];
     var recommendationPayload = null, recommendationLoadedSignature = "", recommendationPending = null,
       recommendationWantedSignature = "", recommendationRows = { top: [], because: [], seed: null };
     var previewRows = previewHistoryMode ? mock.previewHistory(previewScenario) : null;
@@ -146,7 +163,7 @@
         if (discoverMode === "gems") return ["discover-gems"];
         return ["discover-closest", "discover-vibe", "discover-genre", "discover-gems"];
       }
-      return ["continue", "top", "because", "trending", "gems", "explore", "recent"];
+      return ["continue", "top", "because", "trending", "gems", "explore"];
     }
     function text(id, value) { get(id).textContent = value; }
     function createPlaybackHandoff(type, id, season, episode) {
@@ -189,7 +206,7 @@
     function setView(name) {
       var changed = state.view !== name;
       if (changed && state.view === "watch") {
-        if (holdMotion) finishHoldMotion();
+        if (homeMotion) finishHorizontalMotion();
         clearHoldOutline();
         if (watchPerformance) watchPerformance.close();
         invalidatePendingHomeHero();
@@ -273,7 +290,7 @@
       var destination = scroller.scrollTop + delta;
       if (homeScrollFrame) clock.cancelAnimationFrame(homeScrollFrame);
       homeScrollFrame = 0;
-      if (!clock.requestAnimationFrame || !clock.cancelAnimationFrame || !clock.matchMedia
+      if (!heroPreferences.scrollAnimations || !clock.requestAnimationFrame || !clock.cancelAnimationFrame || !clock.matchMedia
           || clock.matchMedia("(prefers-reduced-motion: reduce)").matches) {
         scroller.scrollTop = destination; return;
       }
@@ -453,8 +470,12 @@
       var host = get("watch-" + group + "-row");
       return host && !host.closest("[hidden]") ? homeCards[group] || [] : [];
     }
+    function visibleHomeRowOrder() {
+      return visibleRowGroups;
+    }
     function recordHomeCards(group) {
       var row = get("watch-" + group + "-row"), track = row.querySelector(".watch-home-track");
+      if (homeMotion && homeMotion.group === group) finishHorizontalMotion();
       homeCards[group] = Array.from(track.querySelectorAll(".home-card"));
       homeCards[group].forEach(function (card, index) { card.dataset.homeIndex = String(index); });
       if (homeCarousels[group] && homeCarousels[group].trimTimer)
@@ -464,6 +485,7 @@
       delete homeCarousels[group];
       track.replaceChildren();
       track.style.transform = "";
+      track.style.height = "";
       row.classList.add("is-virtualized"); track.classList.add("is-virtualized");
     }
     function prunePreviousCycleSlots(controller, cycleStart) {
@@ -542,7 +564,7 @@
       while (controller.start > minimum) {
         if (controller.track.childElementCount >= controller.capacity) {
           var oldLast = controller.track.lastElementChild;
-          if (oldLast && oldLast !== doc.activeElement) {
+          if (oldLast && oldLast !== doc.activeElement && Number(oldLast.dataset.homeOrdinal) > maximum) {
             delete controller.slots[oldLast.dataset.homeOrdinal];
             oldLast.remove();
             controller.pool.push(oldLast);
@@ -557,7 +579,10 @@
       while (controller.end < maximum) {
         if (controller.track.childElementCount >= controller.capacity) {
           var oldFirst = controller.track.firstElementChild;
-          if (oldFirst && oldFirst !== doc.activeElement) {
+          var visualMinimum = homeMotion && homeMotion.controller === controller
+            ? Math.floor(homeMotion.position) - 2 : minimum;
+          if (oldFirst && oldFirst !== doc.activeElement
+              && Number(oldFirst.dataset.homeOrdinal) < Math.min(minimum, visualMinimum)) {
             delete controller.slots[oldFirst.dataset.homeOrdinal];
             oldFirst.remove();
             controller.pool.push(oldFirst);
@@ -620,8 +645,10 @@
           return;
         }
         var distance = Math.abs(diff);
-        var speed = Math.max(0.018, distance * 0.22);
-        var delta = Math.min(distance, speed * (elapsed / 16.7));
+        // Glide Off keeps spatially continuous movement, but omits the slow
+        // decorative ease. A one-frame position jump would violate wrapping.
+        var speed = heroPreferences.glide ? Math.max(0.018, distance * 0.22) : 0.35;
+        var delta = Math.min(distance, speed * (elapsed / 16.7), 0.35 * (elapsed / 16.7));
         var nextPos = motion.position + Math.sign(diff) * delta;
         motion.position = nextPos;
 
@@ -816,7 +843,21 @@
     // Backwards-compatible aliases
     var holdMotion = null;
     function holdFrame(timestamp) { return motionFrame(timestamp); }
-    function finishHoldMotion() { return finishHorizontalMotion(); }
+    function finishHoldMotion() {
+      var motion = homeMotion;
+      if (!motion) return;
+      clock.clearTimeout(motion.inactivityTimer);
+      motion.inactivityTimer = 0;
+      if (motion.mode === "hold") {
+        motion.target = Math.max(motion.minTarget,
+          Math.min(motion.maxTarget, Math.round(motion.position)));
+        motion.mode = "target";
+      }
+      // Keyup releases control; the existing rAF movement completes the
+      // selection without snapping by as much as half a poster.
+      holdMotion = null;
+      holdRepeatCount = 0;
+    }
     function startHoldMotion(key) {
       var focused = doc.activeElement, group = focused && focused.dataset.homeGroup;
       return stepHorizontalMotion(group, key === "ArrowRight" ? 1 : -1, true);
@@ -872,6 +913,9 @@
       var group = element.dataset.homeGroup, cards = homeCards[group];
       if (!cards || !cards.length) return element;
       var row = get("watch-" + group + "-row"), track = row.querySelector(".watch-home-track");
+      // Async rows can be populated while their destination is hidden. Never
+      // cache measurements from a zero-sized row: they collapse poster tracks.
+      if (!row.getClientRects().length || !row.clientWidth) return element;
       var controller = homeCarousels[group];
       var isShort = isRowShort(group, cards);
       if (!controller) {
@@ -881,6 +925,10 @@
         var gap = parseFloat(rowStyle.columnGap);
         if (!Number.isFinite(gap)) gap = parseFloat(rowStyle.gap) || 0;
         var firstRect = firstSlot.getBoundingClientRect();
+        if (!firstRect.width || !firstRect.height) {
+          firstSlot.remove();
+          return element;
+        }
         var gutter = parseFloat(rowStyle.paddingLeft) || 0;
         var step = firstRect.width + gap;
         var available = row.clientWidth - gutter;
@@ -901,7 +949,7 @@
         } else {
           controller = homeCarousels[group] = { isShort: false, cards: cards, row: row, track: track,
             start: 0, end: 0, selected: 0, step: step, width: firstRect.width,
-            gutter: gutter, visible: visible, capacity: cards.length,
+            gutter: gutter, visible: visible, capacity: visible + 7,
             wrapTimer: 0, pool: [], slots: Object.create(null) };
           controller.slots[0] = firstSlot;
           var initialEnd = Math.min(cards.length - 1, visible + 2);
@@ -940,7 +988,7 @@
       while (controller.start > target) {
         if (track.childElementCount >= controller.capacity) {
           var oldLast = track.lastElementChild;
-          if (oldLast && oldLast !== doc.activeElement) {
+          if (oldLast && oldLast !== doc.activeElement && Number(oldLast.dataset.homeOrdinal) > target + controller.visible + 2) {
             delete controller.slots[oldLast.dataset.homeOrdinal];
             track.removeChild(oldLast);
             oldLast.classList.remove("is-focused");
@@ -956,7 +1004,7 @@
       while (cards.length > 1 && controller.end < neededEnd) {
         if (track.childElementCount >= controller.capacity) {
           var oldFirst = track.firstElementChild;
-          if (oldFirst && oldFirst !== doc.activeElement) {
+          if (oldFirst && oldFirst !== doc.activeElement && Number(oldFirst.dataset.homeOrdinal) < target - 2) {
             delete controller.slots[oldFirst.dataset.homeOrdinal];
             track.removeChild(oldFirst);
             oldFirst.classList.remove("is-focused");
@@ -1001,14 +1049,14 @@
         || cards[Math.max(0, Math.min(Number.isInteger(saved.index) ? saved.index : 0, cards.length - 1))] || null;
     }
     function firstHomeButton() {
-      var order = currentTabRowOrder();
+      var order = visibleHomeRowOrder();
       for (var i = 0; i < order.length; i++) {
         var first = homeRowButtons(order[i])[0]; if (first) return first;
       }
       return null;
     }
     function nearestHomeButton(group) {
-      var order = currentTabRowOrder();
+      var order = visibleHomeRowOrder();
       var index = order.indexOf(group);
       if (index < 0) return firstHomeButton();
       for (var distance = 1; distance < order.length; distance++) {
@@ -1224,14 +1272,7 @@
         homeOpenPending = false;
         openDetails(row, target || { season: row.season, episode: row.episode });
       }
-      if (entry.group !== "recent") { openEpisode(null); return; }
-      homeOpenPending = true;
-      var token = ++homeOpenToken;
-      homeDetail(row).then(function (detail) {
-        var canonical = core.canonicalEpisodeTarget(core.readHistory(local), row.id, detail || local, local);
-        return canonical ? { season: canonical.season, episode: canonical.episode } : (detail ? lookupNextEpisode(row, detail) : null);
-      }).then(function (target) { if (token === homeOpenToken) openEpisode(target); },
-        function () { if (token === homeOpenToken) openEpisode(null); });
+      openEpisode(null);
     }
     function isFilterActive(tab) {
       if (tab === "discover") {
@@ -1697,61 +1738,47 @@
         updateHomeSections();
       });
     }
-    function paintHomepage(continueRows, finishedRows) {
+    function paintHomepage(continueRows) {
       var previous = homeFocusIdentity(doc.activeElement);
       if (state.watchTab === "for-you") {
-        homeDefaultEntry = continueRows[0] ? { row: continueRows[0], group: "continue" }
-          : finishedRows[0] ? { row: finishedRows[0], group: "recent" } : null;
+        homeDefaultEntry = continueRows[0] ? { row: continueRows[0], group: "continue" } : null;
       }
-      function rowCard(entry, group, action) {
+      function rowCard(entry, action) {
         var row = entry.row, card = button("", action, "home-card");
-        card.dataset.homeGroup = group; card.dataset.homeKey = row.type + ":" + row.id;
+        card.dataset.homeGroup = "continue"; card.dataset.homeKey = row.type + ":" + row.id;
         card.homeEntry = entry;
-        var artwork = group === "continue" ? landscapeArt(row, true) : verticalPosterArt(row, true),
+        var artwork = landscapeArt(row, true),
           title = doc.createElement("strong"), context = doc.createElement("small");
         title.textContent = row.title; context.textContent = homeContext(row);
         card.appendChild(artwork);
-        if (group === "continue") {
-          var caption = doc.createElement("span"); caption.className = "home-card-caption";
-          caption.appendChild(title); caption.appendChild(context); artwork.appendChild(caption);
-          var fraction = core.episodeProgressFraction(row);
-          if (fraction > 0) { var line = doc.createElement("span"), fill = doc.createElement("span");
-            line.className = "home-progress"; fill.className = "home-progress-fill";
-            fill.style.width = (fraction * 100).toFixed(1) + "%";
-            line.appendChild(fill); artwork.appendChild(line); }
-        } else {
-          card.classList.add("home-card-poster"); card.appendChild(title);
-        }
+        var caption = doc.createElement("span"); caption.className = "home-card-caption";
+        caption.appendChild(title); caption.appendChild(context); artwork.appendChild(caption);
+        var fraction = core.episodeProgressFraction(row);
+        if (fraction > 0) { var line = doc.createElement("span"), fill = doc.createElement("span");
+          line.className = "home-progress"; fill.className = "home-progress-fill";
+          fill.style.width = (fraction * 100).toFixed(1) + "%";
+          line.appendChild(fill); artwork.appendChild(line); }
         card.addEventListener("mouseenter", function () { if (state.view === "watch") showHomeHero(entry); });
-        card.setAttribute("aria-label", (group === "continue" ? "Continue " : "Finished ")
-          + row.title + ", " + context.textContent);
+        card.setAttribute("aria-label", "Continue " + row.title + ", " + context.textContent);
         return card;
       }
-      var continueHost = get("watch-continue-row"), recentHost = get("watch-recent-row");
-      continueHost.scrollLeft = 0; recentHost.scrollLeft = 0;
-      rowCycleIndex["continue"] = 0; rowCycleIndex["recent"] = 0;
+      var continueHost = get("watch-continue-row");
+      continueHost.scrollLeft = 0;
+      rowCycleIndex["continue"] = 0;
       var continueRow = continueHost.querySelector(".watch-home-track");
-      var recentRow = recentHost.querySelector(".watch-home-track");
-      continueRow.replaceChildren(); recentRow.replaceChildren();
+      continueRow.replaceChildren();
       if (state.watchTab === "for-you") {
         continueRows.slice(0, 8).forEach(function (row) {
           var entry = { row: row, group: "continue" };
-          continueRow.appendChild(rowCard(entry, "continue", function () { openHomeEntry(entry); }));
-        });
-        finishedRows.slice(0, 8).forEach(function (row) {
-          var entry = { row: row, group: "recent" };
-          recentRow.appendChild(rowCard(entry, "recent", function () { openHomeEntry(entry); }));
+          continueRow.appendChild(rowCard(entry, function () { openHomeEntry(entry); }));
         });
         get("watch-continue-section").hidden = !continueRows.length;
-        get("watch-recent-section").hidden = !finishedRows.length;
-        recordHomeCards("continue"); recordHomeCards("recent");
+        recordHomeCards("continue");
       } else {
         get("watch-continue-section").hidden = true;
-        get("watch-recent-section").hidden = true;
         homeCards["continue"] = [];
-        homeCards["recent"] = [];
       }
-      if (state.watchTab === "for-you") ["continue", "recent"].forEach(function (group) {
+      if (state.watchTab === "for-you") ["continue"].forEach(function (group) {
         var cards = homeRowButtons(group);
         if (cards.length) revealHomeWindow(resolveHomeSelection(previous && previous.group === group ? previous : null) || cards[0]);
       });
@@ -1761,7 +1788,7 @@
     }
     function updateHomeSections() {
       var allKnownGroups = [
-        "continue", "top", "because", "recent", "trending", "gems", "explore",
+        "continue", "top", "because", "trending", "gems", "explore",
         "tv-recommended", "tv-trending", "tv-genres", "tv-short", "tv-gems", "tv-acclaimed",
         "movies-recommended", "movies-trending", "movies-genres", "movies-short", "movies-acclaimed", "movies-gems",
         "discover-closest", "discover-vibe", "discover-genre", "discover-gems",
@@ -1773,7 +1800,7 @@
         if (!sec) return;
         if (activeOrder.indexOf(group) < 0) {
           sec.hidden = true;
-        } else if (group !== "continue" && group !== "recent" && group !== "filtered") {
+        } else if (group !== "continue" && group !== "filtered") {
           sec.hidden = (homeCards[group] || []).length < (group.indexOf("discover-") === 0 ? 1 : 2);
         }
       });
@@ -1784,13 +1811,20 @@
         section.classList.toggle("is-first-visible", !section.hidden && !first);
         if (!section.hidden) first = true;
       });
+      // Use the actual visual order, cached when rows change. A separate
+      // hand-maintained navigation order once made the third row unreachable.
+      visibleRowGroups = Array.from(get("watch-rows-scroll").querySelectorAll(".watch-home-section"))
+        .filter(function (section) {
+          var group = section.id.slice(6, -8);
+          return !section.hidden && activeOrder.indexOf(group) >= 0 && homeRowButtons(group).length;
+        }).map(function (section) { return section.id.slice(6, -8); });
       get("watch-view").classList.toggle("is-empty", !first);
       // Recommendation rows are often built while their destination is hidden.
       // Measure and attach the complete visible window only after revealing it,
       // before the browser paints or the first D-pad input can reach the row.
       activeOrder.forEach(function (group) {
         var section = get("watch-" + group + "-section");
-        if (!section || section.hidden || homeCarousels[group] || !homeCards[group]
+        if (get("watch-view").hidden || !section || section.hidden || homeCarousels[group] || !homeCards[group]
             || !homeCards[group].length) return;
         revealHomeWindow(homeCards[group][0]);
       });
@@ -1798,7 +1832,7 @@
     function paintRecommendationRows(rows) {
       recommendationRows = rows;
       var active = homeFocusIdentity(doc.activeElement), activeGroup = active && active.group;
-      var activeRow = activeGroup && activeGroup !== "continue" && activeGroup !== "recent";
+      var activeRow = activeGroup && activeGroup !== "continue";
       var anchor = state.view === "watch" && !activeRow && active && active.group
         ? doc.activeElement : null;
       var anchorY = anchor ? anchor.getBoundingClientRect().top : 0;
@@ -2158,7 +2192,7 @@
       var rows = previewRows || core.readHistory(local);
       paintHomepage(core.homepageContinueCandidates(rows, local).filter(function (row) {
         return !core.isContinueHidden(local, row);
-      }), core.homepageFinished(rows, local));
+      }));
       if (state.watchTab === "discover") {
         loadDiscoverData();
       }
@@ -2308,6 +2342,17 @@
       var delayButton = get("settings-hero-delay"), fadeButton = get("settings-hero-fade");
       delayButton.textContent = heroPreferences.delay ? heroPreferences.delay + "ms" : "Immediate";
       fadeButton.textContent = heroPreferences.fade ? "Fade On" : "Fade Off";
+      [
+        ["settings-poster-glide", "glide"],
+        ["settings-hold-scroll", "hold"],
+        ["settings-scroll-animations", "scrollAnimations"],
+        ["settings-artwork-fade", "artworkFade"]
+      ].forEach(function (pair) {
+        var control = get(pair[0]);
+        control.textContent = heroPreferences[pair[1]] ? "On" : "Off";
+        control.setAttribute("aria-pressed", String(heroPreferences[pair[1]]));
+      });
+      fadeButton.setAttribute("aria-pressed", String(heroPreferences.fade));
       var rows = core.readHistory(local), visible = core.homepageContinueCandidates(rows, local);
       var continueHost = get("settings-continue"), historyHost = get("settings-history");
       continueHost.replaceChildren(); historyHost.replaceChildren();
@@ -2886,7 +2931,8 @@
         return;
       }
       if (state.view === "watch") {
-        var watchRows = currentTabRowOrder().map(homeRowButtons);
+        var visibleOrder = visibleHomeRowOrder();
+        var watchRows = visibleOrder.map(homeRowButtons);
         var first = firstHomeButton() || get("watch-toggle");
         if (current.closest(".watch-rail")) {
           var railIndex = railButtons.indexOf(current);
@@ -2940,10 +2986,10 @@
           }
           return;
         }
-        var groupIndex = currentTabRowOrder().indexOf(current.dataset.homeGroup);
+        var groupIndex = visibleOrder.indexOf(current.dataset.homeGroup);
         var group = groupIndex >= 0 ? watchRows[groupIndex] : null;
         if (group) {
-          var groupName = currentTabRowOrder()[groupIndex];
+          var groupName = visibleOrder[groupIndex];
           var index = Number(current.dataset.homeIndex);
           var down = adjacentHomeRow(watchRows, groupIndex, 1);
           var up = adjacentHomeRow(watchRows, groupIndex, -1);
@@ -2979,11 +3025,11 @@
               focus(group[circularIndex(index, group.length, 1)], true, 1);
             }
           } else if (key === "ArrowDown") {
-            if (down) { var downGroup = currentTabRowOrder()[downIdx >= 0 ? downIdx : watchRows.indexOf(down)];
+            if (down) { var downGroup = visibleOrder[downIdx >= 0 ? downIdx : watchRows.indexOf(down)];
               var downTarget = resolveHomeSelection(homeRowMemory[downGroup]) || down[0];
               if (downTarget) focus(downTarget); }
           } else if (key === "ArrowUp") {
-            var upGroup = currentTabRowOrder()[upIdx >= 0 ? upIdx : watchRows.indexOf(up)];
+            var upGroup = visibleOrder[upIdx >= 0 ? upIdx : watchRows.indexOf(up)];
             if (up) {
               var upTarget = resolveHomeSelection(homeRowMemory[upGroup]) || up[0];
               if (upTarget) focus(upTarget);
@@ -3118,10 +3164,11 @@
       if (watchPerformance && watchPerformance.handle(key, state.view, doc.activeElement, event.repeat)) {
         event.preventDefault(); return;
       }
-      if (holdMotion) {
+      if (homeMotion) {
         if (key === "ArrowDown" || key === "ArrowUp" || key === "OK" || key === "Back") {
-          finishHoldMotion();
-        } else if (event.repeat && key === (holdMotion.direction > 0 ? "ArrowRight" : "ArrowLeft")) {
+          finishHorizontalMotion();
+        } else if (heroPreferences.hold && homeMotion.mode === "hold" && event.repeat
+            && key === (homeMotion.direction > 0 ? "ArrowRight" : "ArrowLeft")) {
           event.preventDefault(); renewHoldInactivity(); return;
         }
       }
@@ -3129,7 +3176,7 @@
         var active = doc.activeElement, group = active && active.dataset.homeGroup;
         if (state.view === "watch" && group) {
           var dir = key === "ArrowRight" ? 1 : -1;
-          var isHold = !!event.repeat;
+          var isHold = heroPreferences.hold && !!event.repeat;
           if (stepHorizontalMotion(group, dir, isHold)) {
             event.preventDefault(); return;
           }
@@ -3230,6 +3277,27 @@
       heroPreferences.fade = !heroPreferences.fade;
       saveHeroPreferences();
       this.textContent = heroPreferences.fade ? "Fade On" : "Fade Off";
+      this.setAttribute("aria-pressed", String(heroPreferences.fade));
+      focus(this);
+    });
+    [
+      ["settings-poster-glide", "glide"],
+      ["settings-hold-scroll", "hold"],
+      ["settings-scroll-animations", "scrollAnimations"],
+      ["settings-artwork-fade", "artworkFade"]
+    ].forEach(function (pair) {
+      get(pair[0]).addEventListener("click", function () {
+        heroPreferences[pair[1]] = !heroPreferences[pair[1]];
+        saveHeroPreferences();
+        this.textContent = heroPreferences[pair[1]] ? "On" : "Off";
+        this.setAttribute("aria-pressed", String(heroPreferences[pair[1]]));
+        focus(this);
+      });
+    });
+    get("settings-appearance-reset").addEventListener("click", function () {
+      heroPreferences = defaultAppearance();
+      saveHeroPreferences();
+      renderSettings();
       focus(this);
     });
     get("history-back").addEventListener("click", function () { returnWithinWatch(leaveHistory); });
@@ -3287,6 +3355,7 @@
     });
     clock.addEventListener("resize", function () {
       if (state.view !== "watch") return;
+      if (homeMotion) finishHorizontalMotion();
       var active = homeFocusIdentity(doc.activeElement), restored = null;
       Object.keys(homeCarousels).forEach(function (group) {
         var old = homeCarousels[group], row = old.row, track = old.track;
@@ -3322,14 +3391,14 @@
         if (holdMotion) finishHoldMotion();
       }
     });
-    clock.addEventListener("blur", function () { if (holdMotion) finishHoldMotion(); });
+    clock.addEventListener("blur", function () { if (homeMotion) finishHorizontalMotion(); });
     doc.addEventListener("visibilitychange", function () {
-      if (doc.hidden && holdMotion) finishHoldMotion();
+      if (doc.hidden && homeMotion) finishHorizontalMotion();
     });
     if (finePointer && root.history && root.history.replaceState && clock.addEventListener) {
       clock.addEventListener("popstate", restoreBrowserView);
     }
-    clock.addEventListener("pagehide", function () { if (holdMotion) finishHoldMotion();
+    clock.addEventListener("pagehide", function () { if (homeMotion) finishHorizontalMotion();
       disposed = true; if (searchTimer !== null) clock.clearTimeout(searchTimer);
       if (activeAbort) activeAbort.abort(); });
     try {

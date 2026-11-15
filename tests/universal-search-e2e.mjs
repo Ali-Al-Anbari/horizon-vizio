@@ -73,8 +73,8 @@ try {
   assert.equal(await evaluate("document.title"), "Horizon Watch");
   assert.equal(await evaluate("document.querySelector('#watch-hero-title').textContent"), "Find your next watch");
   assert.equal(await evaluate("document.querySelector('#watch-continue-section').hidden"), true);
-  assert.equal(await evaluate("document.querySelector('#watch-recent-section').hidden"), true);
-  for (const id of ["search-toggle", "history-toggle", "settings-toggle"]) {
+  assert.equal(await evaluate("document.querySelector('#watch-recent-section')"), null);
+  for (const id of ["tv-toggle", "movies-toggle", "discover-toggle", "history-toggle", "settings-toggle"]) {
     await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))");
     assert.equal(await evaluate("document.activeElement.id"), id);
   }
@@ -98,9 +98,8 @@ try {
   homeUrl.searchParams.set("rec-fail", "1");
   await navigate(homeUrl.href, true);
   assert.equal(await evaluate("document.querySelector('#watch-hero-title').textContent"), "Fight Club");
-  assert.equal(await evaluate("document.querySelectorAll('#watch-continue-row button').length"), 3);
-  assert.equal(await evaluate("document.querySelectorAll('#watch-recent-row button').length"), 1);
-  assert.match(await evaluate("document.querySelector('#watch-recent-row button:first-child').getAttribute('aria-label')"), /Finished Film/);
+  assert.equal(await evaluate("document.querySelectorAll('#watch-continue-row button').length"), 2);
+  assert.equal(await evaluate("document.querySelector('#watch-recent-row')"), null);
   assert.equal(await evaluate("document.querySelector('#watch-hero-play') === null && document.querySelector('#home-toggle') === null"), true);
   await pressArrow("ArrowRight");
   assert.equal(await evaluate("document.activeElement.dataset.homeGroup"), "continue");
@@ -108,15 +107,18 @@ try {
   assert.equal(await evaluate("document.activeElement.dataset.homeKey"), "tv:2190");
   await until("document.querySelector('#watch-hero-title').textContent === 'South Park'", "focused hero settles");
   await pressArrow("ArrowDown");
-  assert.equal(await evaluate("document.activeElement.dataset.homeGroup"), "recent");
+  assert.equal(await evaluate("document.activeElement.dataset.homeGroup"), "continue", "last row Down is a no-op");
   await pressArrow("ArrowUp");
-  assert.equal(await evaluate("document.activeElement.dataset.homeGroup"), "continue");
+  assert.equal(await evaluate("document.activeElement.id"), "watch-toggle");
+  await pressArrow("ArrowRight");
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))");
   await until("document.querySelector('#episodes-view').hidden === false && document.activeElement.dataset.episode === '2'", "homepage TV opens exact episode");
   await evaluate("document.querySelector('#watch-toggle').click()");
   await until("document.querySelector('#watch-view').hidden === false", "return to homepage");
-  await evaluate("document.querySelector('#watch-recent-row button:first-child').click()");
-  await until("document.querySelector('#details-view').hidden === false && document.querySelector('#detail-title').textContent === 'Finished Film'", "finished movie opens Details");
+  await evaluate("document.querySelector('#history-toggle').click()");
+  await until("document.querySelector('#history-list').textContent.includes('Finished Film')", "completed movie remains in History");
+  assert.ok(await evaluate("[...document.querySelectorAll('#history-list button')].some(button => button.getAttribute('aria-label').includes('Finished Film'))"),
+    "completed movie remains selectable in History");
   await evaluate("document.querySelector('#watch-toggle').click(); document.querySelector('#watch-continue-row button:first-child').click()");
   await until("document.querySelector('#details-view').hidden === false && document.activeElement.classList.contains('detail-primary')", "movie opens Details play action");
   await evaluate("document.querySelector('#watch-toggle').click()");
@@ -154,7 +156,11 @@ try {
   await evaluate("document.querySelector('#keyboard-toggle').click()");
   assert.equal(await evaluate("document.querySelector('#keyboard').hidden"), false, "keyboard can be reopened");
   await evaluate("document.querySelector('#search-toggle').focus(); document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));");
-  assert.equal(await evaluate("document.activeElement.id"), "history-toggle");
+  assert.equal(await evaluate("document.activeElement.id"), "watch-toggle");
+  for (const id of ["tv-toggle", "movies-toggle", "discover-toggle", "history-toggle"]) {
+    await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));");
+    assert.equal(await evaluate("document.activeElement.id"), id);
+  }
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));");
   assert.equal(await evaluate("document.activeElement.id"), "settings-toggle");
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true}));");
@@ -319,7 +325,7 @@ try {
   returnUrl.searchParams.set("season", "13"); returnUrl.searchParams.set("episode", "3");
   returnUrl.searchParams.set("sub", "off");
   await send("Page.navigate", { url: returnUrl.href });
-  await until("!document.querySelector('#episodes-view')?.hidden && document.querySelectorAll('#episode-list .episode-play').length === 3", "return to episode selection");
+  await until("!document.querySelector('#episodes-view')?.hidden && document.querySelector('#episode-list [data-episode=\"3\"]')", "return to episode selection");
   assert.equal(await evaluate("JSON.parse(localStorage.getItem(window.HorizonSearchCore.HISTORY_KEY)).items[0].episode"), 3);
   assert.equal(await evaluate("document.querySelectorAll('#episode-list .episode-progress').length"), 0);
   assert.equal(await evaluate("JSON.parse(localStorage.getItem(window.HorizonSearchCore.HISTORY_KEY)).items[0].subtitle"), "off");
@@ -334,7 +340,7 @@ try {
   await until("document.querySelector('#results button')?.textContent.includes('South Park')", "search after return");
   await evaluate("document.querySelector('#results button').click(); document.querySelector('#detail-actions .detail-secondary').click()");
   await until("document.querySelector('#episode-status').textContent === 'Loading season metadata…'", "early episode browsing waits for metadata");
-  await until("document.querySelectorAll('#episode-list .episode-play').length === 3", "early episode browsing recovers");
+  await until("document.querySelector('#episode-list [data-episode=\"3\"]')", "early episode browsing recovers");
   await evaluate("localStorage.setItem(window.HorizonSearchCore.HISTORY_KEY,JSON.stringify({version:2,items:[{type:'tv',id:2190,title:'South Park',season:13,episode:2,subtitle:'on',at:100},{type:'tv',id:2190,title:'South Park',season:13,episode:3,subtitle:'off',at:300},{type:'movie',id:550,title:'Fight Club',at:200}]})); sessionStorage.clear()");
   const historyUrl = new URL(base); historyUrl.searchParams.set("run", "history-" + Date.now());
   await navigate(historyUrl.href);

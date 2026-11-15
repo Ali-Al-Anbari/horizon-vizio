@@ -171,7 +171,7 @@ test("12. First-card left alignment on initial load", () => {
   const searchSource = readFileSync(new URL("../universal-search/search.js", import.meta.url), "utf8");
   // The physical window begins at ordinal zero. Browser E2E checks its pixel gutter.
   assert.match(searchSource, /start: 0, end: 0, selected: 0/);
-  assert.match(searchSource, /track\.replaceChildren\(\);\s*track\.style\.transform = "";\s*row\.classList\.add\("is-virtualized"\)/);
+  assert.match(searchSource, /track\.replaceChildren\(\);\s*track\.style\.transform = "";\s*track\.style\.height = "";\s*row\.classList\.add\("is-virtualized"\)/);
 });
 
 test("13. No stale transform or focus memory after seed changes", () => {

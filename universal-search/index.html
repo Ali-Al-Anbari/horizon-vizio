@@ -6,14 +6,14 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://image.tmdb.org data:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'" />
   <title>Horizon Watch</title>
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="search.css?v=phase3c7-1" />
+  <link rel="stylesheet" href="search.css?v=phase3c9-2" />
   <script src="core.js" defer></script>
   <script src="recommendations.js" defer></script>
   <script src="discover-engine.js" defer></script>
   <script src="player-adapter.js" defer></script>
   <script src="mock-data.js" defer></script>
   <script src="watch-performance.js?v=hero-test-2" defer></script>
-  <script src="search.js?v=phase3c7-1" defer></script>
+  <script src="search.js?v=phase3c9-2" defer></script>
 </head>
 <body>
   <main class="shell">
@@ -70,10 +70,6 @@
       <section id="watch-because-section" class="watch-home-section" aria-label="Because You Watched" hidden>
         <h2 id="watch-because-heading"></h2>
         <div id="watch-because-row" class="watch-home-row"><div class="watch-home-track"></div></div>
-      </section>
-      <section id="watch-recent-section" class="watch-home-section" aria-label="Recently Finished" hidden>
-        <h2>Recently Finished</h2>
-        <div id="watch-recent-row" class="watch-home-row"><div class="watch-home-track"></div></div>
       </section>
       <section id="watch-trending-section" class="watch-home-section" aria-label="Trending" hidden>
         <h2 id="watch-trending-heading"></h2>
@@ -220,11 +216,21 @@
     </section>
     <section id="settings-view" class="view settings-view" aria-label="Watch Settings" hidden>
       <h1>Settings</h1>
-      <section class="settings-panel" aria-label="Hero display preferences">
-        <h2>Hero display</h2>
+      <section class="settings-panel" aria-label="Navigation and motion preferences">
+        <h2>Navigation &amp; Motion</h2>
         <div class="settings-list">
-          <div class="settings-entry"><span>Artwork update delay on this device</span><button id="settings-hero-delay" data-focus type="button"></button></div>
-          <div class="settings-entry"><span>Artwork transition on this device</span><button id="settings-hero-fade" data-focus type="button"></button></div>
+          <div class="settings-entry"><span>Poster Glide<small>Ease movement between single presses.</small></span><button id="settings-poster-glide" data-focus type="button"></button></div>
+          <div class="settings-entry"><span>Continuous Hold Scrolling<small>Scroll while held; Off steps on repeated presses.</small></span><button id="settings-hold-scroll" data-focus type="button"></button></div>
+          <div class="settings-entry"><span>Scrolling Animations<small>Animate movement between poster rows.</small></span><button id="settings-scroll-animations" data-focus type="button"></button></div>
+        </div>
+      </section>
+      <section class="settings-panel" aria-label="Hero and artwork preferences">
+        <h2>Hero &amp; Artwork</h2>
+        <div class="settings-list">
+          <div class="settings-entry"><span>Hero Update Delay</span><button id="settings-hero-delay" data-focus type="button"></button></div>
+          <div class="settings-entry"><span>Hero Fade</span><button id="settings-hero-fade" data-focus type="button"></button></div>
+          <div class="settings-entry"><span>Artwork Fade-in on Entry</span><button id="settings-artwork-fade" data-focus type="button"></button></div>
+          <div class="settings-entry"><span>Reset Appearance &amp; Motion</span><button id="settings-appearance-reset" data-focus type="button">Reset</button></div>
         </div>
       </section>
       <section class="settings-panel" aria-label="Manage Continue Watching">

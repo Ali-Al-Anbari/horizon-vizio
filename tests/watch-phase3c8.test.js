@@ -42,7 +42,7 @@ test("Phase 3C.8: nextHomeRowIndex reliably skips empty rows and respects bounda
     [],         // 2: Because (empty/hidden)
     [{}, {}, {}], // 3: Trending (3 items)
     [],         // 4: Gems (empty)
-    [{}]        // 5: Recent (1 item)
+    [{}]        // 5: Explore (1 item)
   ];
 
   // Down (+1) from Continue (0) must reliably skip empty rows 1 & 2 and land on Trending (3)
@@ -51,10 +51,10 @@ test("Phase 3C.8: nextHomeRowIndex reliably skips empty rows and respects bounda
   // Up (-1) from Trending (3) must reliably return to Continue Watching (0)
   assert.equal(nextHomeRowIndex(rows, 3, -1), 0);
 
-  // Down (+1) from Trending (3) must skip 4 and land on Recent (5)
+  // Down (+1) from Trending (3) must skip 4 and land on Explore (5)
   assert.equal(nextHomeRowIndex(rows, 3, 1), 5);
 
-  // Down (+1) from Recent (5) has no next row
+  // Down (+1) from Explore (5) has no next row
   assert.equal(nextHomeRowIndex(rows, 5, 1), -1);
 
   // Up (-1) from Continue (0) has no previous row
@@ -94,13 +94,13 @@ test("Phase 3C.8: Search.js implements unified motion, focus recovery, and non-l
   assert.match(source, /if \(isShort\) \{\s*if \(index < group\.length - 1\) \{\s*focus\(group\[index \+ 1\], true, 1\);/);
 
   // Vertical keys settle horizontal motion before moving
-  assert.match(source, /if \(key === "ArrowDown" \|\| key === "ArrowUp" \|\| key === "OK" \|\| key === "Back"\) \{\s*finishHoldMotion\(\);/);
+  assert.match(source, /if \(key === "ArrowDown" \|\| key === "ArrowUp" \|\| key === "OK" \|\| key === "Back"\) \{\s*finishHorizontalMotion\(\);/);
 });
 
 test("Phase 3C.8: Settings preferences and defaults preserved", () => {
   assert.match(source, /HERO_PREF_KEY = "horizon-watch-hero-preferences"/);
   assert.match(source, /HERO_DELAYS = \[0, 110, 150, 250, 300, 400, 500\]/);
-  assert.match(source, /return \{ delay: 0, fade: false \}/);
+  assert.match(source, /return \{ delay: 0, fade: false, glide: true, hold: true,/);
   assert.match(html, /id="settings-hero-delay"/);
   assert.match(html, /id="settings-hero-fade"/);
 });

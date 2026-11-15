@@ -71,10 +71,10 @@ test("five lab providers use documented movie routes and preserve exact TV ident
   assert.equal(url(movie, "apiplayer"), "https://apiplayer.ru/embed/movie/155?autoplay=1&resume=0");
   assert.equal(url(movie, "vidzen"), "https://vidzen.fun/movie/155?autoPlay=true");
   assert.equal(url(episode, "apiplayer"), null, "no documented way to disable its internal episode behavior");
-  assert.equal(url(episode, "vidzen"), null, "no documented exact episode route");
+  assert.equal(url(episode, "vidzen"), "https://vidzen.fun/tv/2190/16/10?autoPlay=true");
   for (const value of ["vidy", "stellar", "embedwave", "apiplayer", "vidzen"]) {
     assert.equal(providers.isPlaybackOnly(value), true);
-    assert.equal(providers.sendCommand({ contentWindow: { postMessage() {} } }, "play", [], value), false);
+    assert.equal(providers.sendCommand({ contentWindow: { postMessage() {} } }, "play", [], value), value === "vidzen");
     assert.equal(catalog.parse("?type=movie&id=155&provider=" + value).provider, value);
   }
 });
@@ -92,6 +92,7 @@ test("lab events are diagnostic only and require active exact origin and iframe"
   const vidy = { origin: "https://www.vidy.st", source,
     data: JSON.stringify({ type: "PLAYER_EVENT", event: "play", currentTime: 0, duration: 7200 }) };
   assert.equal(providers.acceptEvent(vidy, frame, "vidy").type, "lab:play");
+  assert.equal(providers.acceptEvent({ ...vidy, origin: "https://vidy.st" }, frame, "vidy").type, "lab:play");
   assert.equal(providers.acceptEvent({ ...vidy, data: "not json" }, frame, "vidy"), null);
   assert.equal(providers.acceptEvent(vidy, frame, "stellar"), null);
   const sent = [];

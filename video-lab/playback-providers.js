@@ -52,7 +52,7 @@
   }
   function compatible(target) {
     var tv = target && positive(target.showId);
-    return VISIBLE.filter(function (value) { return !tv || value !== "apiplayer" && value !== "vidzen"; });
+    return VISIBLE.filter(function (value) { return !tv || value !== "apiplayer"; });
   }
   function label(value) {
     var s = select(value);
@@ -79,8 +79,8 @@
       var tv = positive(target.showId) && positive(target.season) && positive(target.episode);
       if (!movie && !tv) return null;
       // APIPlayer documents an internal episode drawer/next-episode prewarm without
-      // a disable option; VidZen does not document an exact TV episode route.
-      if (tv && (provider === "apiplayer" || provider === "vidzen")) return null;
+      // a disable option. VidZen documents an exact TV episode route.
+      if (tv && provider === "apiplayer") return null;
       var id = movie ? target.movieId : target.showId;
       var suffix = tv ? "/" + target.season + "/" + target.episode : "";
       if (provider === "vidy") return LAB_ORIGINS.vidy + (movie ? "/movie/" : "/tv/")
@@ -94,7 +94,9 @@
         + (movie ? "movie/" : "tv/") + id + suffix + "?autoplay=1";
       if (provider === "apiplayer") return LAB_ORIGINS.apiplayer
         + "/embed/movie/" + id + "?autoplay=1&resume=0";
-      return LAB_ORIGINS.vidzen + "/movie/" + id + "?autoPlay=true";
+      return LAB_ORIGINS.vidzen + (movie ? "/movie/" + id
+        : "/tv/" + id + "/" + target.season + "/" + target.episode)
+        + "?autoPlay=true";
     }
     // Preserved CineSrc embed generation for reference only:
     if (provider === CINESRC) {
@@ -209,6 +211,15 @@
     if (typeof value === "number" && isFinite(value) && Math.floor(value) === value) value = String(value);
     return typeof value === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(value) ? value : null;
   }
+  function exactLabFrame(frame, chosen, target) {
+    if (!target || typeof frame.src !== "string") return false;
+    var movie = positive(target.movieId);
+    var tv = positive(target.showId) && positive(target.season) && positive(target.episode);
+    if (!movie && !tv) return false;
+    var base = LAB_ORIGINS[chosen] + (movie ? "/movie/" + target.movieId
+      : "/tv/" + target.showId + "/" + target.season + "/" + target.episode);
+    return frame.src.indexOf(base + "?") === 0;
+  }
 
   function acceptEvent(event, frame, provider, target) {
     try {
@@ -216,8 +227,27 @@
       if (!event || !frame || !frame.contentWindow || event.source !== frame.contentWindow) return null;
 
       if (Object.prototype.hasOwnProperty.call(LAB_ORIGINS, chosen)) {
-        if (event.origin !== LAB_ORIGINS[chosen]) return null;
+        if (event.origin !== LAB_ORIGINS[chosen]
+            && !(chosen === "vidy" && event.origin === "https://vidy.st")) return null;
         var lab = event.data;
+        if (chosen === "vidzen") {
+          if (!exactLabFrame(frame, chosen, target)) return null;
+          if (!lab || typeof lab !== "object" || Array.isArray(lab)) return null;
+          if (lab.type === "vidzen:status") {
+            if (!finiteNonnegative(lab.currentTime) || !finiteNonnegative(lab.duration)
+                || typeof lab.paused !== "boolean") return null;
+            return { type: "lab:status", currentTime: lab.currentTime,
+              duration: lab.duration, paused: lab.paused, identityVerified: true };
+          }
+          if (lab.type !== "vidzen" || ["play", "pause", "seeked", "timeupdate", "ended"].indexOf(lab.event) < 0)
+            return null;
+          if (lab.currentTime !== undefined && !finiteNonnegative(lab.currentTime)
+              || lab.duration !== undefined && !finiteNonnegative(lab.duration)) return null;
+          return { type: "lab:" + lab.event,
+            currentTime: finiteNonnegative(lab.currentTime) ? lab.currentTime : null,
+            duration: finiteNonnegative(lab.duration) ? lab.duration : null,
+            identityVerified: true };
+        }
         if (chosen === "vidy" && typeof lab === "string") {
           if (lab.length > 2048) return null;
           try { lab = JSON.parse(lab); } catch (_error) { return null; }
@@ -236,7 +266,8 @@
         return { type: "lab:" + name,
           currentTime: finiteNonnegative(payload.currentTime) ? payload.currentTime : null,
           duration: finiteNonnegative(payload.duration) ? payload.duration : null,
-          identityVerified: !riftIdentityIssue(payload, target, false) };
+          identityVerified: !riftIdentityIssue(payload, target, false)
+            || chosen === "vidy" && exactLabFrame(frame, chosen, target) };
       }
 
       if (chosen === VIDRIFT) {
@@ -468,6 +499,17 @@
   function sendCommand(frame, command, args, provider) {
     if (!frame || !frame.contentWindow || typeof frame.contentWindow.postMessage !== "function") return false;
     var chosen = provider === VIDFAST ? VIDFAST : select(provider);
+
+    if (chosen === "vidzen") {
+      var vidzenCommand = null;
+      if (command === "play" || command === "pause" || command === "getStatus")
+        vidzenCommand = { command: command };
+      else if (command === "seek" && Array.isArray(args) && args.length === 1
+          && finiteNonnegative(args[0])) vidzenCommand = { command: "seek", time: args[0] };
+      if (!vidzenCommand) return false;
+      try { frame.contentWindow.postMessage(vidzenCommand, LAB_ORIGINS.vidzen); return true; }
+      catch (_error) { return false; }
+    }
 
     if (chosen === VIDRIFT || chosen === VIDBOLT) {
       var payload = null;

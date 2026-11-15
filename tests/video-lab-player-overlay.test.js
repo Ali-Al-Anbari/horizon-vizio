@@ -47,8 +47,9 @@ test("TV provider menu omits sources without exact episode routes", () => {
   const app = setup({ search: "?showId=2190&season=16&episode=10&provider=stellar&from=search", desktop: true });
   app.get("provider-choice").click();
   const labels = app.get("provider-options").children.map(button => button.textContent);
-  assert.equal(labels.length, 5);
-  assert.equal(labels.some(label => /APIPlayer|VidZen/.test(label)), false);
+  assert.equal(labels.length, 6);
+  assert.equal(labels.some(label => /APIPlayer/.test(label)), false);
+  assert.equal(labels.some(label => /VidZen/.test(label)), true);
   app.key("Backspace");
   assert.equal(app.get("provider-menu").hidden, true);
   assert.equal(app.document.activeElement.id, "provider-choice");
@@ -1153,20 +1154,20 @@ test("movie provider list selects VidBolt and Vidy by D-pad", () => {
   assert.equal(app.get("provider-choice").textContent, "Provider: Vidy · experimental");
   assert.equal(app.get("unload-provider").hidden, false);
   assert.equal(app.get("recover-provider").hidden, false);
-  assert.equal(app.get("play-pause").disabled, true);
+  assert.equal(app.get("play-pause").disabled, false);
 });
 
-test("playback-only lab selection disables host controls and never records progress from iframe load", () => {
+test("Stellar virtual controls remain reachable but iframe load alone never records progress", () => {
   const app = setup({ search: "?type=movie&id=155&provider=stellar&from=search" });
   assert.equal(app.get("player-frame").src,
     "https://stellar.rip/en/watch/embed/movie/155?autoPlay=true&nextButton=false&autoNext=false");
-  assert.equal(app.get("play-pause").disabled, true);
-  assert.equal(app.get("rewind").disabled, true);
-  assert.equal(app.get("forward").disabled, true);
+  assert.equal(app.get("play-pause").disabled, false);
+  assert.equal(app.get("rewind").disabled, false);
+  assert.equal(app.get("forward").disabled, false);
   assert.equal(app.get("subtitles").disabled, true);
   app.get("player-frame").fire("load");
   app.key("ArrowDown");
-  assert.equal(app.document.activeElement.id, "provider-choice");
+  assert.equal(app.document.activeElement.id, "play-pause");
   app.get("diagnostics-open").click();
   assert.match(app.get("diag-experimental").textContent, /Iframe loaded; player initialization and video unverified/);
   assert.match(app.get("diag-experimental").textContent, /Host play, pause, and seek are undocumented/);
@@ -1191,6 +1192,138 @@ test("Stellar progress is identity checked and a switched provider ignores the o
   app.get("diagnostics-open").click();
   assert.doesNotMatch(app.get("diag-experimental").textContent, /99s/);
   assert.equal(saved.read().items[0].position, 31);
+});
+
+test("Stellar virtual pause stops iframe and verifies resume before advancing progress", () => {
+  const saved = progressStorage();
+  const app = setup({ search: "?type=movie&id=155&provider=stellar", progressStorage: saved });
+  const report = (time, source = app.get("player-frame").contentWindow) => app.message({ type: "PLAYER_EVENT",
+    data: { event: "timeupdate", currentTime: time, duration: 7200,
+      tmdbId: 155, mediaType: "movie" } }, "https://stellar.rip", source);
+  app.get("player-frame").fire("load");
+  report(120);
+  app.key("ArrowDown");
+  app.get("play-pause").click();
+  const old = app.get("player-frame");
+  assert.equal(old.src, "about:blank");
+  assert.equal(app.get("play-pause-label").textContent, "Resume");
+  assert.equal(saved.read().items[0].position, 120);
+  app.get("play-pause").click();
+  assert.match(app.get("player-frame").src, /startAt=120/);
+  assert.notEqual(app.get("player-frame"), old);
+  report(10, old.contentWindow);
+  assert.equal(saved.read().items[0].position, 120, "retired iframe cannot alter progress");
+  report(5);
+  assert.equal(saved.read().items[0].position, 120, "restart pre-roll is not saved");
+  report(122);
+  assert.match(app.get("command-status").textContent, /resume confirmed/);
+  assert.equal(app.get("play-pause-label").textContent, "Pause");
+});
+
+test("Vidy timestamp seek requires confirmation and failed reload leaves controls available", () => {
+  const saved = progressStorage();
+  const app = setup({ search: "?type=movie&id=550&provider=vidy", progressStorage: saved });
+  const report = time => app.message({ type: "PLAYER_EVENT", event: "timeupdate",
+    currentTime: time, duration: 7200 }, "https://www.vidy.st");
+  app.get("player-frame").fire("load");
+  report(100);
+  app.key("ArrowDown");
+  app.get("forward").click();
+  assert.match(app.get("player-frame").src, /progress=110/);
+  assert.equal(saved.read().items[0].position, 100);
+  report(1);
+  assert.equal(saved.read().items[0].position, 100);
+  app.advance(25000);
+  assert.equal(app.get("player-frame").src, "about:blank");
+  assert.equal(app.get("play-pause-label").textContent, "Resume");
+  assert.notEqual(app.get("provider-choice").disabled, true);
+  assert.notEqual(app.get("recover-provider").disabled, true);
+  assert.notEqual(app.get("watch-exit").disabled, true);
+  assert.equal(saved.read().items[0].position, 100);
+});
+
+test("virtual pause retains focus through Reload and provider switching", () => {
+  const saved = progressStorage();
+  const app = setup({ search: "?showId=1399&season=1&episode=1&provider=stellar", progressStorage: saved });
+  app.get("player-frame").fire("load");
+  app.message({ type: "PLAYER_EVENT", data: { event: "timeupdate", currentTime: 300,
+    duration: 3600, tmdbId: 1399, mediaType: "tv", season: 1, episode: 1 } }, "https://stellar.rip");
+  app.key("ArrowDown");
+  app.get("play-pause").click();
+  assert.equal(app.get("player-frame").src, "about:blank");
+  app.get("recover-provider").click();
+  assert.equal(app.get("player-frame").src, "about:blank", "Reload keeps virtual pause stopped");
+  assert.equal(app.document.activeElement.id, "recover-provider");
+  chooseProvider(app, "VidBolt");
+  assert.match(app.get("player-frame").src, /vidbolt\.xyz\/tv\/1399\/1\/1/);
+  assert.equal(saved.read().items[0].identity, "tv:1399:1:1");
+  assert.equal(saved.read().items[0].position, 300);
+  assert.equal(app.document.activeElement.id, "provider-choice");
+});
+
+test("virtual paused seek uses Horizon escalation without moving stored checkpoint", () => {
+  const saved = progressStorage();
+  const app = setup({ search: "?type=movie&id=155&provider=stellar", progressStorage: saved });
+  const report = time => app.message({ type: "PLAYER_EVENT", data: { event: "timeupdate",
+    currentTime: time, duration: 7200, tmdbId: 155, mediaType: "movie" } }, "https://stellar.rip");
+  app.get("player-frame").fire("load"); report(1200);
+  app.key("ArrowDown"); app.get("play-pause").click();
+  app.get("forward").focus();
+  for (let i = 0; i < 5; i += 1) app.key("ArrowRight");
+  assert.equal(app.get("forward-label").textContent, "+10m");
+  app.key("Enter");
+  assert.equal(app.get("player-frame").src, "about:blank");
+  assert.equal(saved.read().items[0].position, 1200);
+  app.get("play-pause").click();
+  assert.match(app.get("player-frame").src, /startAt=1800/);
+  report(1802);
+  assert.match(app.get("command-status").textContent, /resume confirmed/);
+  assert.equal(saved.read().items[0].position, 1200,
+    "target is not a progress checkpoint until playback advances and a write is due");
+});
+
+test("VidZen commands use exact origin and require player state confirmation", () => {
+  const app = setup({ search: "?type=movie&id=155&provider=vidzen" });
+  app.get("player-frame").fire("load");
+  assert.equal(app.posted.at(-1).data.command, "getStatus");
+  assert.equal(app.posted.at(-1).origin, "https://vidzen.fun");
+  app.message({ type: "vidzen:status", currentTime: 120, duration: 7200, paused: false }, "https://vidzen.fun");
+  app.key("ArrowDown");
+  app.get("play-pause").click();
+  assert.equal(app.posted.at(-1).data.command, "pause");
+  app.message({ type: "vidzen:status", currentTime: 120, duration: 7200, paused: true }, "https://vidzen.fun");
+  assert.match(app.get("command-status").textContent, /pause confirmed/);
+  app.get("play-pause").click();
+  assert.equal(app.posted.at(-1).data.command, "play");
+  app.message({ type: "vidzen", event: "play", currentTime: 120, duration: 7200 }, "https://vidzen.fun");
+  assert.match(app.get("command-status").textContent, /play confirmed/);
+  app.get("forward").click();
+  assert.equal(app.posted.at(-1).data.command, "seek");
+  assert.equal(app.posted.at(-1).data.time, 130);
+  app.message({ type: "vidzen", event: "timeupdate", currentTime: 130, duration: 7200 }, "https://vidzen.fun");
+  assert.match(app.get("command-status").textContent, /seek confirmed/);
+});
+
+test("all visible providers share D-pad access to Provider, Reload, and Exit", () => {
+  for (const provider of ["yapgrid", "vidbolt", "vidy", "stellar", "embedwave", "apiplayer", "vidzen"]) {
+    const app = setup({ search: `?type=movie&id=550&provider=${provider}&from=search` });
+    app.key("ArrowDown");
+    assert.equal(app.document.activeElement.id,
+      ["embedwave", "apiplayer"].includes(provider) ? "provider-choice" : "play-pause", provider);
+    app.key("ArrowDown");
+    assert.equal(app.document.activeElement.id, "recover-provider", provider);
+    app.key("ArrowLeft");
+    assert.equal(app.document.activeElement.id, "provider-choice", provider);
+    app.key("Enter");
+    assert.equal(app.get("provider-menu").hidden, false, provider);
+    app.key("Escape");
+    assert.equal(app.document.activeElement.id, "provider-choice", provider);
+    app.key("ArrowRight");
+    assert.equal(app.document.activeElement.id, "recover-provider", provider);
+    for (let step = 0; step < 12 && app.document.activeElement.id !== "watch-exit"; step += 1)
+      app.key("ArrowRight");
+    assert.equal(app.document.activeElement.id, "watch-exit", provider);
+  }
 });
 
 test("Watch opens VidBolt, pointer reveals controls, and Exit returns to Watch", () => {
@@ -1614,7 +1747,7 @@ test("provider switching keeps controls for VidBolt and disables unsupported lab
     assert.deepEqual(["rewind", "play-pause", "forward"].map(id => app.get(id)), primary);
     assert.equal(app.get("experimental-controls").hidden, true);
     app.key("ArrowDown");
-    assert.equal(app.document.activeElement.id, name === "VidBolt" ? "provider-choice" : "unload-provider");
+    assert.equal(app.document.activeElement.id, "provider-choice");
     app.key("Backspace");
   }
 });

@@ -25,6 +25,9 @@
   var BOLT_SEEK_GRACE_MS = 20000;
   var BOLT_WATCHDOG_TICK_MS = 5000;
   var BOLT_CONTROL_PENDING_MS = 3000;
+  var LAB_POSITION_FRESH_MS = 15000;
+  var LAB_RELOAD_TIMEOUT_MS = 25000;
+  var LAB_POSITION_TOLERANCE = 12;
 
   function keyName(event) {
     var key = event && event.key;
@@ -162,7 +165,7 @@
         if (!record || !Number.isFinite(record.position) || record.position <= 0
             || !Number.isFinite(record.duration) || record.duration <= 0 || record.duration > 10000000
             || record.position > record.duration + 2
-            || !Number.isFinite(record.updatedAt) || ["vidbolt", "vidy", "stellar"].indexOf(record.provider) < 0
+            || !Number.isFinite(record.updatedAt) || ["vidbolt", "vidy", "stellar", "vidzen"].indexOf(record.provider) < 0
             || record.provider !== "vidbolt" && record.duration < (isMovie ? 1200 : 600)) return null;
         return { position: Math.min(record.position, record.duration), duration: record.duration,
           updatedAt: record.updatedAt, provider: record.provider, completed: record.completed === true };
@@ -178,7 +181,7 @@
       } catch (_error) {}
     }
     function storePlayerProgress(position, duration, completed, force, allowRegression) {
-      if ([providers.VIDBOLT, "vidy", "stellar"].indexOf(provider) < 0 || !playerProgressStorage || !Number.isFinite(position)
+      if ([providers.VIDBOLT, "vidy", "stellar", "vidzen"].indexOf(provider) < 0 || !playerProgressStorage || !Number.isFinite(position)
           || !Number.isFinite(duration) || duration <= 0 || duration > 10000000
           || position <= 0 || position > duration + 2) return null;
       var stamp = Date.now();
@@ -322,6 +325,13 @@
     var labPositionAt = 0;
     var labPaused = false;
     var labRestoreTarget = null;
+    var labGeneration = 0;
+    var labPending = null;
+    var labPendingTimer = null;
+    var virtualPaused = null;
+    var vidzenPending = null;
+    var vidzenPendingTimer = null;
+    var vidzenStatusAt = null;
     var providerOptions = [];
     var providerMenuSelected = 0;
     var providerMenuOpen = false;
@@ -347,7 +357,14 @@
 
     function providerLabel() { return providers.label(provider); }
     function playbackOnly() { return providers.isPlaybackOnly(provider); }
-    function isCommandProvider() { return provider === providers.VIDRIFT || provider === providers.VIDBOLT; }
+    function isCommandProvider() { return provider === providers.VIDRIFT || provider === providers.VIDBOLT
+      || provider === "vidzen"; }
+    function transportMode() {
+      if (provider === "vidzen") return "direct";
+      if (provider === "vidy" || provider === "stellar") return "virtual";
+      if (provider === providers.VIDBOLT || provider === providers.YAPGRID) return "direct";
+      return "unsupported";
+    }
     function usesExperimentalRow() { return provider === providers.VIDRIFT; }
     function renderProviderChoice() {
       if (playbackOnly()) playerShell.classList.add("lab-playback");
@@ -386,7 +403,7 @@
       get("experiment-skip").hidden = provider !== providers.VIDRIFT;
       ["rewind", "play-pause", "forward"].forEach(function (id) {
         get(id).hidden = usesExperimentalRow();
-        get(id).disabled = playbackOnly();
+        get(id).disabled = playbackOnly() && transportMode() === "unsupported";
       });
       get("subtitle-mode").textContent = provider === providers.VIDBOLT
         ? independentSubtitles.state().enabled ? "EN" : "OFF" : subtitleMode.toUpperCase();
@@ -429,9 +446,14 @@
     function renderBoltPlayPause() {
       var button = get("play-pause");
       if (provider !== providers.VIDBOLT) {
-        get("play-pause-label").textContent = "Play / Pause";
-        button.setAttribute("aria-label", "Play / Pause");
-        button.setAttribute("data-playback", "unknown");
+        var pending = labPending || vidzenPending;
+        var label = pending ? "Awaiting player" : virtualPaused ? "Resume"
+          : labPaused ? "Play" : providerPlaying ? "Pause" : "Play / Pause";
+        get("play-pause-label").textContent = label;
+        button.setAttribute("aria-label", providerLabel() + " " + label);
+        button.setAttribute("data-playback", virtualPaused || labPaused ? "paused"
+          : providerPlaying ? "playing" : "unknown");
+        button.title = label;
         return;
       }
       var s = boltSession;
@@ -442,6 +464,149 @@
         + (!s || s.paused === null && !s.controlPending ? "; state unknown" : ""));
       button.setAttribute("data-playback", s && s.paused === false ? "playing" : "paused");
       button.title = label;
+    }
+    function labPositionUsable() {
+      return Number.isFinite(labPosition) && labPosition >= 0
+        && Number.isFinite(labDuration) && labDuration >= (isMovie ? 1200 : 600)
+        && labPosition <= labDuration + 2
+        && (now() - labPositionAt <= LAB_POSITION_FRESH_MS || provider === "vidzen" && labPaused);
+    }
+    function clearLabPending() {
+      if (labPendingTimer !== null) { clock.clearTimeout(labPendingTimer); labPendingTimer = null; }
+      labPending = null;
+    }
+    function armLabPending(kind, target, baseline) {
+      clearLabPending();
+      labPending = { kind: kind, target: target, baseline: baseline,
+        generation: labGeneration, identity: boltIdentity() };
+      labPendingTimer = clock.setTimeout(function () {
+        labPendingTimer = null;
+        var pending = labPending;
+        if (!pending || pending.generation !== labGeneration || disposed) return;
+        clearLabPending();
+        unloadFrame();
+        virtualPaused = { provider: provider, identity: boltIdentity(),
+          position: pending.baseline.verifiedPosition === undefined
+            ? pending.baseline.position : pending.baseline.verifiedPosition,
+          verifiedPosition: pending.baseline.verifiedPosition === undefined
+            ? pending.baseline.position : pending.baseline.verifiedPosition,
+          duration: pending.baseline.duration };
+        labPosition = virtualPaused.position;
+        labDuration = pending.baseline.duration;
+        labPositionAt = now();
+        labPaused = true;
+        providerPlaying = false;
+        get("player-loading").classList.add("is-warning");
+        loading(providerLabel() + " did not confirm " + pending.kind
+          + " near " + boltClock(pending.target) + ". Player stopped; use Resume, Reload, or Provider.");
+        get("command-status").textContent = "Position not confirmed; playback stopped at the last verified checkpoint.";
+        renderTimeline(); renderBoltPlayPause(); resetIdle();
+      }, LAB_RELOAD_TIMEOUT_MS);
+    }
+    function virtualPauseToggle() {
+      if (labPending) {
+        get("command-status").textContent = "Waiting for the player to confirm the requested position.";
+        return;
+      }
+      if (virtualPaused) {
+        var saved = virtualPaused;
+        if (saved.provider !== provider || saved.identity !== boltIdentity()) return;
+        loadProviderFrame(saved.position, true);
+        armLabPending("resume", saved.position, saved);
+        get("command-status").textContent = "Resuming " + providerLabel()
+          + " near " + boltClock(saved.position) + "; awaiting playback confirmation.";
+        renderBoltPlayPause(); resetIdle();
+        return;
+      }
+      if (!labPositionUsable() || frame.src === "about:blank") {
+        get("command-status").textContent = "A fresh, identity-checked position is required before virtual pause.";
+        return;
+      }
+      var checkpoint = { provider: provider, identity: boltIdentity(),
+        position: labPosition, verifiedPosition: labPosition, duration: labDuration };
+      unloadFrame();
+      virtualPaused = checkpoint;
+      labPosition = checkpoint.position;
+      labDuration = checkpoint.duration;
+      labPositionAt = now();
+      labPaused = true;
+      providerPlaying = false;
+      get("player-loading").hidden = true;
+      get("command-status").textContent = "Virtual pause at " + boltClock(checkpoint.position)
+        + ": player stopped. OK recreates it from this checkpoint.";
+      renderTimeline(); renderBoltPlayPause(); resetIdle();
+    }
+    function virtualSeek(delta) {
+      if (labPending) {
+        get("command-status").textContent = "Awaiting the previous position request; no new seek sent.";
+        return;
+      }
+      var baseline = virtualPaused || (labPositionUsable() ? {
+        provider: provider, identity: boltIdentity(), position: labPosition, duration: labDuration } : null);
+      if (!baseline || baseline.identity !== boltIdentity()) {
+        get("command-status").textContent = "A fresh, identity-checked position is required before seeking.";
+        return;
+      }
+      var target = Math.max(0, Math.min(baseline.duration, baseline.position + delta));
+      if (target === baseline.position) {
+        get("command-status").textContent = "At the seek boundary; no position change requested.";
+        return;
+      }
+      if (virtualPaused) {
+        virtualPaused.position = target;
+        get("command-status").textContent = "Resume target " + boltClock(target)
+          + " set while virtually paused. Stored progress stays at the last confirmed position.";
+        renderSeekPreview(CONTROL_IDS[selected]);
+        return;
+      }
+      unloadFrame();
+      loadProviderFrame(target, true);
+      armLabPending("seek", target, baseline);
+      get("command-status").textContent = "Seeking to " + boltClock(target)
+        + " by reloading " + providerLabel() + "; awaiting position confirmation.";
+      renderBoltPlayPause(); resetIdle();
+    }
+    function clearVidzenPending() {
+      if (vidzenPendingTimer !== null) { clock.clearTimeout(vidzenPendingTimer); vidzenPendingTimer = null; }
+      vidzenPending = null;
+    }
+    function sendVidzenControl(kind, delta) {
+      if (vidzenPending) {
+        get("command-status").textContent = "Waiting for VidZen to confirm the previous command.";
+        return;
+      }
+      if (!labPositionUsable() || frame.src === "about:blank" || !frameLoaded
+          || kind === "toggle" && vidzenStatusAt === null) {
+        get("command-status").textContent = "VidZen needs a fresh, identity-checked player status before controls are available.";
+        providers.sendCommand(frame, "getStatus", [], provider);
+        return;
+      }
+      var command = kind === "toggle" ? labPaused ? "play" : "pause" : "seek";
+      var target = command === "seek"
+        ? Math.max(0, Math.min(labDuration, labPosition + delta)) : null;
+      if (command === "seek" && target === labPosition) {
+        get("command-status").textContent = "At the seek boundary; no command sent.";
+        return;
+      }
+      if (!providers.sendCommand(frame, command, command === "seek" ? [target] : [], provider)) {
+        get("command-status").textContent = "VidZen command could not be sent.";
+        return;
+      }
+      vidzenPending = { command: command, target: target, generation: labGeneration };
+      var pending = vidzenPending;
+      vidzenPendingTimer = clock.setTimeout(function () {
+        if (vidzenPending !== pending) return;
+        clearVidzenPending();
+        get("command-status").textContent = "VidZen did not confirm " + command + "; actual playback state is unknown.";
+        providers.sendCommand(frame, "getStatus", [], provider);
+        renderBoltPlayPause();
+      }, 10000);
+      clock.setTimeout(function () {
+        if (!disposed && vidzenPending === pending && labGeneration === pending.generation)
+          providers.sendCommand(frame, "getStatus", [], provider);
+      }, 650);
+      get("command-status").textContent = "VidZen " + command + " requested; awaiting actual player state.";
+      renderBoltPlayPause();
     }
     function boltDiagnostic() {
       if (provider !== providers.VIDBOLT) return "VidBolt not selected.";
@@ -751,6 +916,12 @@
             ? boltDuration : Infinity, boltPosition + delta));
           detail = " · target " + boltClock(target);
         } else detail = " · waiting for current position";
+      } else if (transportMode() === "virtual" || provider === "vidzen") {
+        var position = virtualPaused ? virtualPaused.position : labPosition;
+        var duration = virtualPaused ? virtualPaused.duration : labDuration;
+        if (virtualPaused || labPositionUsable()) detail = " · target "
+          + boltClock(Math.max(0, Math.min(duration, position + delta)));
+        else detail = " · waiting for current position";
       }
       preview.textContent = (delta < 0 ? "Rewind " : "Forward ")
         + SEEK_LABELS[seekLevels[id]] + detail + " · OK to confirm";
@@ -772,6 +943,14 @@
         return label + " · target " + (target === null ? "unavailable until fresh position" : boltClock(target))
           + " · " + arrows + " · OK seeks · Up Play/Pause · Down "
           + (id === "forward" ? "Next Episode" : "Previous Episode");
+      }
+      if (transportMode() === "virtual" || provider === "vidzen") {
+        var position = virtualPaused ? virtualPaused.position : labPosition;
+        var duration = virtualPaused ? virtualPaused.duration : labDuration;
+        var deltaLab = SEEK_COUNTS[seekLevels[id]] * 10 * (id === "forward" ? 1 : -1);
+        return label + " · target " + (virtualPaused || labPositionUsable()
+          ? boltClock(Math.max(0, Math.min(duration, position + deltaLab))) : "unavailable until fresh position")
+          + " · " + arrows + " · OK seeks · Up Play/Pause";
       }
       return label + " · " + arrows + " · OK seeks · Up Play/Pause · Down "
         + (id === "forward" ? "Next Episode" : "Previous Episode");
@@ -840,7 +1019,8 @@
     }
     function resetIdle() {
       clearIdle();
-      if (state === STATES.CONTROLS_VISIBLE && !disposed && !activeBatch
+      if (state === STATES.CONTROLS_VISIBLE && !disposed && !activeBatch && !virtualPaused
+          && !(provider === "vidzen" && labPaused)
           && !(provider === providers.VIDBOLT && boltSession
             && (boltSession.paused === true || boltSession.pauseIntent || boltSession.endedAt !== null))) {
         idleTimer = clock.setTimeout(function () {
@@ -863,7 +1043,8 @@
       });
     }
     function focusControl(index) {
-      if (playbackOnly() && index <= 2) index = 8;
+      if (playbackOnly() && controls[index]
+          && (controls[index].disabled || controls[index].hidden)) index = 8;
       if (selected !== index) {
         pendingEpisode = null;
         episodeLookup += 1;
@@ -883,12 +1064,15 @@
       if (disposed || state !== STATES.PLAYBACK_HIDDEN) return;
       state = STATES.CONTROLS_VISIBLE;
       renderTimeline();
-      selected = usesExperimentalRow() ? 12 : 1;
+      selected = usesExperimentalRow() ? 12 : get("play-pause").disabled ? 8 : 1;
       setOverlayVisible(true);
       focusControl(selected);
       markPause("overlayAt");
       get("command-status").classList.remove("is-seek-help");
-      get("command-status").textContent = provider === providers.VIDBOLT ? "" : isCommandProvider()
+      get("command-status").textContent = provider === providers.VIDBOLT ? "" : transportMode() === "virtual"
+        ? "Pause stops the player; Resume and Seek recreate it at a confirmed timestamp."
+        : provider === "vidzen" ? "VidZen controls await player status confirmation."
+        : isCommandProvider()
         ? "Experimental commands use the provider iframe; TV effect remains unverified."
         : playbackOnly() ? "Provider playback controls are inside the player. Horizon can reload or switch providers."
         : adapter && typeof adapter.send === "function"
@@ -922,6 +1106,7 @@
     }
     function hideControls(force) {
       if (disposed || state !== STATES.CONTROLS_VISIBLE) return;
+      if (!force && (virtualPaused || provider === "vidzen" && labPaused)) return;
       if (!force && provider === providers.VIDBOLT && boltSession
           && (boltSession.paused === true || boltSession.pauseIntent || boltSession.endedAt !== null)) return;
       clearIdle();
@@ -995,7 +1180,7 @@
         + " seconds. Horizon will restore its controls automatically.";
     }
     function navigate(key) {
-      if ((provider === providers.YAPGRID || provider === providers.VIDBOLT)
+      if ((provider === providers.YAPGRID || provider === providers.VIDBOLT || playbackOnly())
           && navigateSharedControls(key)) return;
       if (desktopWatch && selected === 21) {
         if (key === "ArrowLeft" || key === "ArrowUp") focusControl(11);
@@ -1098,7 +1283,7 @@
           return controls[index] && !controls[index].hidden && !controls[index].disabled;
         }); }).filter(function (row) { return row.length; });
       var rowIndex = rows.findIndex(function (row) { return row.indexOf(selected) !== -1; });
-      if (rowIndex < 0) { focusControl(playbackOnly() ? 8 : 1); return true; }
+      if (rowIndex < 0) { focusControl(get("play-pause").disabled ? 8 : 1); return true; }
       var row = rows[rowIndex];
       var column = row.indexOf(selected);
       if (upNextTarget && !leavingUpNextFocus && rowIndex === 1
@@ -1122,6 +1307,9 @@
             if (nextRow.indexOf(moviePreferred) !== -1) target = nextRow.indexOf(moviePreferred);
           }
           focusControl(nextRow[target]);
+        } else if (rows.length === 1) {
+          var adjacent = column + (key === "ArrowDown" ? 1 : -1);
+          if (adjacent >= 0 && adjacent < row.length) focusControl(row[adjacent]);
         }
       }
       return true;
@@ -1664,7 +1852,7 @@
         ? storePlayerProgress(confirmed.position, confirmed.duration,
           confirmed.completed || !!(prior && prior.completed), true) : null;
       var saved = flushed || readPlayerProgress(boltIdentity()) || confirmed;
-      if (saved && ["vidbolt", "vidy", "stellar"].indexOf(saved.provider) >= 0)
+      if (saved && ["vidbolt", "vidy", "stellar", "vidzen"].indexOf(saved.provider) >= 0)
         query += "&position=" + encodeURIComponent(saved.position)
         + "&duration=" + encodeURIComponent(saved.duration) + "&updated=" + encodeURIComponent(saved.updatedAt)
         + "&progressProvider=" + encodeURIComponent(saved.provider) + (saved.completed ? "&completed=1" : "");
@@ -1674,7 +1862,7 @@
           var batch = store && store.version === 1 && Array.isArray(store.items) ? store.items
             .filter(function (entry) { return entry && typeof entry.identity === "string"
               && entry.identity.indexOf(prefix) === 0
-              && ["vidbolt", "vidy", "stellar"].indexOf(entry.provider) >= 0
+              && ["vidbolt", "vidy", "stellar", "vidzen"].indexOf(entry.provider) >= 0
               && route.handoffAt > 0 && entry.updatedAt >= route.handoffAt; })
             .slice(0, 16).map(function (entry) { var parts = entry.identity.slice(prefix.length).split(":");
               return { season: Number(parts[0]), episode: Number(parts[1]), progress: {
@@ -1815,7 +2003,7 @@
     }
     function renderTimeline() {
       var timeline = get("playback-timeline");
-      var labUsable = (provider === "vidy" || provider === "stellar")
+      var labUsable = (provider === "vidy" || provider === "stellar" || provider === "vidzen")
         && labPosition !== null && labDuration !== null && labDuration > 0
         && (labPaused || now() - labPositionAt <= 15000);
       var usable = labUsable || provider === providers.VIDBOLT && boltSession
@@ -2009,6 +2197,18 @@
           * SEEK_COUNTS[seekLevels[selected === 2 ? "forward" : "rewind"]]);
         return;
       }
+      if (selected <= 2 && transportMode() === "virtual") {
+        if (selected === 1) virtualPauseToggle();
+        else virtualSeek((selected === 2 ? 1 : -1) * 10
+          * SEEK_COUNTS[seekLevels[selected === 2 ? "forward" : "rewind"]]);
+        return;
+      }
+      if (selected <= 2 && provider === "vidzen") {
+        sendVidzenControl(selected === 1 ? "toggle" : "seek", selected === 1 ? 0
+          : (selected === 2 ? 1 : -1) * 10
+            * SEEK_COUNTS[seekLevels[selected === 2 ? "forward" : "rewind"]]);
+        return;
+      }
       if (id === "diagnostics-open") { openDiagnostics(); return; }
       if (id === "provider-choice") { openProviderMenu(); return; }
       if (id === "unload-provider") { stopAndUnloadProvider(); return; }
@@ -2098,12 +2298,11 @@
       }
       if (state === STATES.PLAYBACK_HIDDEN) {
         if (key === "Back") { if (!event.repeat) exitPlayer(); }
-        else if (key === "OK" && !event.repeat && (!isCommandProvider() || provider === providers.VIDBOLT)) {
+        else if (key === "OK" && !event.repeat && (transportMode() !== "unsupported")) {
           if (provider !== providers.VIDBOLT) pauseTrace = { inputAt: now(), hidden: true };
           overlay.classList.add("is-quick-pause");
           showControls();
-          if (provider === providers.VIDBOLT) activateControl();
-          else requestCommand("play-pause");
+          activateControl();
         } else if (!event.repeat || key.indexOf("Arrow") === 0) showControls();
         return;
       }
@@ -2175,6 +2374,7 @@
     function dispose() {
       if (disposed) return;
       disposed = true;
+      clearLabPending(); clearVidzenPending();
       playerShell.classList.remove("subtitle-settings-open");
       if (nativeFocusTimer !== null) { clock.clearTimeout(nativeFocusTimer); nativeFocusTimer = null; }
       get("player-shell").classList.remove("native-focus-trial");
@@ -2366,7 +2566,7 @@
     }
     function unloadFrame() {
       independentSubtitles.clear();
-      if (playbackOnly() && labPosition !== null && labDuration !== null)
+      if (playbackOnly() && !labPending && labPosition !== null && labDuration !== null)
         storePlayerProgress(labPosition, labDuration, false, true);
       labPosition = null;
       labDuration = null;
@@ -2421,6 +2621,13 @@
     }
     function reloadProvider() {
       if (disposed || route.invalid || activeBatch) return;
+      clearLabPending(); clearVidzenPending();
+      if (virtualPaused && (provider === "vidy" || provider === "stellar")) {
+        focusControl(11);
+        get("command-status").textContent = "Player remains virtually paused. Resume recreates it at "
+          + boltClock(virtualPaused.position) + ".";
+        return;
+      }
       var checkpoint = labPosition !== null && labDuration !== null ? labPosition
         : readPlayerProgress(boltIdentity()) && readPlayerProgress(boltIdentity()).position;
       unloadFrame();
@@ -2433,6 +2640,8 @@
           : "Playback may restart from the beginning.");
     }
     function loadProviderFrame(resumeAt, recovering) {
+      labGeneration += 1;
+      vidzenStatusAt = null;
       independentSubtitles.clear();
       independentTimelineEnded = false;
       if (movieLoadTimer !== null) { clock.clearTimeout(movieLoadTimer); movieLoadTimer = null; }
@@ -2472,7 +2681,7 @@
           : provider === providers.VIDLINK ? vidLinkMode
           : provider === providers.VIDBOLT ? (vidBoltAutoplay ? "autoPlayTrue" : "autoPlayOff")
           : compatibilityMode, labStart, currentAudioLanguage);
-      labRestoreTarget = playbackOnly() && (provider === "vidy" || provider === "stellar")
+      labRestoreTarget = playbackOnly() && (provider === "vidy" || provider === "stellar" || provider === "vidzen")
         ? labStart : null;
       if (!url) {
         loading(playbackOnly() ? providerLabel() + " does not document a safe exact-episode embed for this selection. Choose another provider."
@@ -2568,19 +2777,59 @@
             + (message.duration !== null ? " / " + Math.floor(message.duration) + "s" : "")
             + "; visible frames and sound unverified.";
         }
+        var credible = message.identityVerified && message.currentTime !== null && message.duration !== null
+          && message.duration >= (isMovie ? 1200 : 600)
+          && message.currentTime <= message.duration + 2;
+        if (labPending) {
+          if (labPending.generation !== labGeneration || labPending.identity !== boltIdentity()) return;
+          if (!credible || Math.abs(message.currentTime - labPending.target) > LAB_POSITION_TOLERANCE
+              || message.type !== "lab:play" && message.type !== "lab:timeupdate") {
+            labStatus += " Requested position not confirmed.";
+            if (state === STATES.DIAGNOSTICS_OPEN) renderDiagnostics();
+            return;
+          }
+          var confirmedSeek = labPending.kind === "seek";
+          clearLabPending();
+          virtualPaused = null;
+          get("command-status").textContent = providerLabel() + " "
+            + (confirmedSeek ? "seek" : "resume") + " confirmed near " + boltClock(message.currentTime) + ".";
+          get("player-loading").hidden = true;
+          if (confirmedSeek) storePlayerProgress(message.currentTime, message.duration, false, true, true);
+        }
+        if (provider === "vidzen" && vidzenPending && vidzenPending.command === "seek"
+            && (!credible || Math.abs(message.currentTime - vidzenPending.target) > LAB_POSITION_TOLERANCE)) {
+          labStatus += " Seek position not confirmed.";
+          return;
+        }
         if (message.type === "lab:play") { providerPlaying = true; labPaused = false; }
+        if (message.type === "lab:timeupdate" && credible) { providerPlaying = true; labPaused = false; }
         if (message.type === "lab:pause") { providerPlaying = false; labPaused = true; }
         if (message.type === "lab:ended") { providerPlaying = false; labPaused = true; }
-        if (message.identityVerified && message.currentTime !== null && message.duration !== null
-            && message.duration >= (isMovie ? 1200 : 600)
-            && message.currentTime <= message.duration + 2) {
+        if (message.type === "lab:status") { providerPlaying = !message.paused; labPaused = message.paused; vidzenStatusAt = now(); }
+        if (provider === "vidzen" && labPaused && state === STATES.PLAYBACK_HIDDEN) showControls();
+        if (provider === "vidzen" && vidzenPending && vidzenPending.generation === labGeneration && credible) {
+          var vp = vidzenPending;
+          var confirmed = vp.command === "seek" && (message.type === "lab:timeupdate"
+              || message.type === "lab:status")
+              && Math.abs(message.currentTime - vp.target) <= LAB_POSITION_TOLERANCE
+            || vp.command === "pause" && (message.type === "lab:pause"
+              || message.type === "lab:status" && message.paused === true)
+            || vp.command === "play" && (message.type === "lab:play"
+              || message.type === "lab:status" && message.paused === false);
+          if (confirmed) {
+            clearVidzenPending();
+            get("command-status").textContent = "VidZen " + vp.command + " confirmed by player state.";
+            if (vp.command === "seek") storePlayerProgress(message.currentTime, message.duration, false, true, true);
+          }
+        }
+        if (credible) {
           labPosition = message.currentTime;
           labDuration = message.duration;
           labPositionAt = now();
           if (message.currentTime > 0) {
             var completed = message.type === "lab:ended"
               && message.currentTime / message.duration >= 0.95;
-            storePlayerProgress(message.currentTime, message.duration, completed,
+            if (!vidzenPending || vidzenPending.command !== "seek") storePlayerProgress(message.currentTime, message.duration, completed,
               completed || message.type === "lab:pause" || message.type === "lab:seeked");
           }
           if (labRestoreTarget !== null) {
@@ -2589,6 +2838,14 @@
             if (Math.abs(message.currentTime - labRestoreTarget) <= 12) labRestoreTarget = null;
           }
           renderTimeline();
+        }
+        renderBoltPlayPause();
+        if (state === STATES.CONTROLS_VISIBLE) resetIdle();
+        if (provider === "vidzen" && (message.type === "lab:status" || message.type === "lab:timeupdate") && credible
+            && labRestoreTarget !== null && labRestoreTarget > 0 && !vidzenPending) {
+          var restoreAt = labRestoreTarget;
+          labRestoreTarget = null;
+          sendVidzenControl("seek", restoreAt - message.currentTime);
         }
         if (message.type === "lab:play" || message.type === "lab:timeupdate") {
           if (movieLoadTimer !== null) { clock.clearTimeout(movieLoadTimer); movieLoadTimer = null; }
@@ -2804,8 +3061,10 @@
     function switchProvider(chosen) {
       if (disposed || state !== STATES.CONTROLS_VISIBLE || activeBatch || route.invalid) return;
       if (providers.compatible(currentEpisode).indexOf(chosen) < 0 || chosen === provider) return;
+      clearLabPending(); clearVidzenPending();
       if (labPosition !== null && labDuration !== null) storePlayerProgress(labPosition, labDuration, false, true);
       unloadFrame();
+      virtualPaused = null;
       provider = chosen;
       labStatus = "New experimental selection; iframe pending.";
       labFirstEvent = null;
@@ -2856,6 +3115,7 @@
         if (provider === "stellar") {
           providers.initializeLabFrame(frame, provider);
         }
+        if (provider === "vidzen") providers.sendCommand(frame, "getStatus", [], provider);
         loading(providerLabel() + " iframe loaded. Playback and audio unverified; open Diagnostics or choose another provider.");
       }
       if (provider === providers.VIDBOLT && boltSession) {

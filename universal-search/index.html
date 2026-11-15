@@ -206,51 +206,170 @@
       <div id="episode-list" class="episode-list" aria-label="Episodes"></div>
     </section>
     <section id="history-view" class="view history-view" hidden>
-      <div class="history-header">
-        <button id="history-back" class="back-button" data-focus type="button">← History</button>
-        <span class="history-sort-label">Recently started</span>
+      <div id="history-overview">
+        <div class="history-header">
+          <div class="history-header-left">
+            <button id="history-back" class="back-button" data-focus type="button">← Back</button>
+            <h1>Viewing History</h1>
+          </div>
+          <div class="history-header-actions">
+            <button id="history-view-all" class="history-action-btn" data-focus type="button">View All Media</button>
+            <button id="history-clear" class="back-button" data-focus type="button">Clear History</button>
+          </div>
+        </div>
+        <div id="history-recent-section" class="history-section">
+          <h2 class="history-section-title">Recently Watched</h2>
+          <div id="history-list" class="results history-grid" aria-label="Watch History"></div>
+        </div>
+        <div id="history-movies-section" class="history-section" hidden>
+          <h2 class="history-section-title">Movies</h2>
+          <div id="history-movies-list" class="results history-grid" aria-label="Watched Movies"></div>
+        </div>
+        <div id="history-tv-section" class="history-section" hidden>
+          <h2 class="history-section-title">TV Shows</h2>
+          <div id="history-tv-list" class="results history-grid" aria-label="Watched TV Shows"></div>
+        </div>
+        <p id="history-status" class="status" role="status"></p>
       </div>
-      <div id="history-list" class="results history-grid" aria-label="Watch History"></div>
-      <p id="history-status" class="status" role="status"></p>
-      <button id="history-clear" class="back-button" data-focus type="button">Clear History</button>
+      <div id="history-empty" class="history-empty-state" hidden>
+        <div class="history-empty-content">
+          <span class="history-empty-icon" aria-hidden="true">🎬</span>
+          <h2>No Viewing History Yet</h2>
+          <p>Titles you watch will appear here with your playback progress.</p>
+          <button id="history-empty-action" class="history-empty-btn" data-focus type="button">Explore Watch Home</button>
+        </div>
+      </div>
+      <div id="history-all-view" class="history-all-container" hidden>
+        <div class="history-all-header">
+          <div class="history-all-header-left">
+            <button id="history-all-back" class="back-button" data-focus type="button">← History Overview</button>
+            <h1>All Watched Media</h1>
+          </div>
+          <span id="history-all-count" class="history-sort-label"></span>
+        </div>
+        <div class="history-all-toolbar">
+          <div class="history-all-filters" aria-label="History media filter">
+            <button id="history-filter-all" class="filter-chip is-current" data-history-filter="all" data-focus type="button">All</button>
+            <button id="history-filter-movie" class="filter-chip" data-history-filter="movie" data-focus type="button">Movies</button>
+            <button id="history-filter-tv" class="filter-chip" data-history-filter="tv" data-focus type="button">TV Shows</button>
+          </div>
+          <div class="history-search-field">
+            <img src="icons/search.svg" alt="" />
+            <input id="history-search-input" data-focus type="search" autocomplete="off" placeholder="Filter history titles…" aria-label="Filter history titles" />
+          </div>
+        </div>
+        <div id="history-all-list" class="results history-grid" aria-label="All Viewing History"></div>
+        <div id="history-all-empty" class="history-filter-empty" hidden>
+          <p>No matching titles found in your viewing history.</p>
+        </div>
+      </div>
     </section>
     <section id="settings-view" class="view settings-view" aria-label="Watch Settings" hidden>
-      <h1>Settings</h1>
-      <section class="settings-panel" aria-label="Navigation and motion preferences">
-        <h2>Navigation &amp; Motion</h2>
-        <div class="settings-list">
-          <div class="settings-entry"><span>Poster Glide<small>Ease movement between single presses.</small></span><button id="settings-poster-glide" data-focus type="button"></button></div>
-          <div class="settings-entry"><span>Continuous Hold Scrolling<small>Scroll while held; Off steps on repeated presses.</small></span><button id="settings-hold-scroll" data-focus type="button"></button></div>
-          <div class="settings-entry"><span>Scrolling Animations<small>Animate movement between poster rows.</small></span><button id="settings-scroll-animations" data-focus type="button"></button></div>
+      <div id="settings-landing" class="settings-landing">
+        <header class="settings-landing-header">
+          <h1>Settings</h1>
+          <p class="settings-subtitle">Customize navigation, display, and library preferences</p>
+        </header>
+        <div class="settings-categories" role="navigation" aria-label="Settings Categories">
+          <button id="settings-cat-appearance" class="settings-category-card" data-focus type="button">
+            <div class="settings-cat-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="26" height="26"><path d="M12 3c-4.97 0-9 4.03-9 9 0 2.12.74 4.07 1.97 5.61L4.35 19.4c-.39.39-.39 1.02 0 1.41.39.39 1.02.39 1.41 0l1.9-1.9C9.28 19.59 10.59 20 12 20c4.97 0 9-4.03 9-9s-4.03-9-9-9zm0 15c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6z"/></svg>
+            </div>
+            <div class="settings-cat-info">
+              <strong>Appearance &amp; Motion</strong>
+              <p>Poster glide, hold scrolling, scrolling animations, hero fade, artwork fade</p>
+              <span id="settings-summary-appearance" class="settings-cat-summary"></span>
+            </div>
+            <span class="settings-cat-arrow" aria-hidden="true">›</span>
+          </button>
+          <button id="settings-cat-browsing" class="settings-category-card" data-focus type="button">
+            <div class="settings-cat-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="26" height="26"><path d="M13 2.05v3.03c3.39.49 6 3.39 6 6.92 0 .9-.18 1.75-.48 2.54l2.25 1.5c.78-1.22 1.23-2.67 1.23-4.22 0-4.42-3.58-8-8-8zm-2 0c-4.42 0-8 3.58-8 8 0 1.55.45 3 1.23 4.22l2.25-1.5c-.3-.79-.48-1.64-.48-2.54 0-3.53 2.61-6.43 6-6.92V2.05zM12 7c-2.76 0-5 2.24-5 5 0 1.02.31 1.97.84 2.76L12 11V7zm7.52 9.46l-2.25-1.5c-.53.79-1.25 1.44-2.09 1.88l1.18 2.82c1.32-.7 2.4-1.78 3.16-3.2zm-12.86 0c.76 1.42 1.84 2.5 3.16 3.2l1.18-2.82c-.84-.44-1.56-1.09-2.09-1.88l-2.25 1.5z"/></svg>
+            </div>
+            <div class="settings-cat-info">
+              <strong>Browsing &amp; Display</strong>
+              <p>Hero preview update delay and preview responsiveness</p>
+              <span id="settings-summary-browsing" class="settings-cat-summary"></span>
+            </div>
+            <span class="settings-cat-arrow" aria-hidden="true">›</span>
+          </button>
+          <button id="settings-cat-library" class="settings-category-card" data-focus type="button">
+            <div class="settings-cat-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="26" height="26"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12zm-8-2h4v-2h-4v2zm0-4h6V8h-6v2z"/></svg>
+            </div>
+            <div class="settings-cat-info">
+              <strong>Library &amp; Content</strong>
+              <p>Continue Watching management, viewing history, recommendation choices</p>
+              <span id="settings-summary-library" class="settings-cat-summary"></span>
+            </div>
+            <span class="settings-cat-arrow" aria-hidden="true">›</span>
+          </button>
+          <button id="settings-cat-about" class="settings-category-card" data-focus type="button">
+            <div class="settings-cat-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="26" height="26"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+            </div>
+            <div class="settings-cat-info">
+              <strong>About Horizon</strong>
+              <p>Version, local storage, TMDB attribution &amp; credits</p>
+              <span id="settings-summary-about" class="settings-cat-summary">Horizon Watch v4.0 · Local storage</span>
+            </div>
+            <span class="settings-cat-arrow" aria-hidden="true">›</span>
+          </button>
         </div>
-      </section>
-      <section class="settings-panel" aria-label="Hero and artwork preferences">
-        <h2>Hero &amp; Artwork</h2>
-        <div class="settings-list">
-          <div class="settings-entry"><span>Hero Update Delay</span><button id="settings-hero-delay" data-focus type="button"></button></div>
-          <div class="settings-entry"><span>Hero Fade</span><button id="settings-hero-fade" data-focus type="button"></button></div>
-          <div class="settings-entry"><span>Artwork Fade-in on Entry</span><button id="settings-artwork-fade" data-focus type="button"></button></div>
-          <div class="settings-entry"><span>Reset Appearance &amp; Motion</span><button id="settings-appearance-reset" data-focus type="button">Reset</button></div>
+      </div>
+      <div id="settings-subpage" class="settings-subpage" hidden>
+        <header class="settings-subpage-header">
+          <button id="settings-subpage-back" class="back-button settings-subpage-back" data-focus type="button">← Settings</button>
+          <div class="settings-subpage-headings">
+            <h2 id="settings-subpage-title"></h2>
+            <p id="settings-subpage-desc" class="settings-subpage-desc"></p>
+          </div>
+        </header>
+        <div id="settings-subpage-body" class="settings-subpage-body">
+          <section id="settings-panel-appearance" class="settings-panel" aria-label="Appearance and motion preferences" hidden>
+            <h3>Navigation &amp; Motion</h3>
+            <div class="settings-list">
+              <div class="settings-entry"><span>Poster Glide<small>Ease movement between single presses.</small></span><button id="settings-poster-glide" data-focus type="button"></button></div>
+              <div class="settings-entry"><span>Continuous Hold Scrolling<small>Scroll while held; Off steps on repeated presses.</small></span><button id="settings-hold-scroll" data-focus type="button"></button></div>
+              <div class="settings-entry"><span>Scrolling Animations<small>Animate movement between poster rows.</small></span><button id="settings-scroll-animations" data-focus type="button"></button></div>
+            </div>
+            <h3 style="margin-top:20px;">Hero &amp; Artwork</h3>
+            <div class="settings-list">
+              <div class="settings-entry"><span>Hero Fade<small>Subtle crossfade when updating hero backdrop.</small></span><button id="settings-hero-fade" data-focus type="button"></button></div>
+              <div class="settings-entry"><span>Artwork Fade-in on Entry<small>Fade in posters when navigating to a row.</small></span><button id="settings-artwork-fade" data-focus type="button"></button></div>
+              <div class="settings-entry"><span>Reset Appearance &amp; Motion<small>Restore default motion and transition settings.</small></span><button id="settings-appearance-reset" data-focus type="button">Reset</button></div>
+            </div>
+          </section>
+          <section id="settings-panel-browsing" class="settings-panel" aria-label="Browsing and display preferences" hidden>
+            <h3>Hero Preview</h3>
+            <div class="settings-list">
+              <div class="settings-entry"><span>Hero Update Delay<small>Delay before updating backdrop when moving across posters.</small></span><button id="settings-hero-delay" data-focus type="button"></button></div>
+            </div>
+          </section>
+          <section id="settings-panel-library" class="settings-panel" aria-label="Manage Library and Content" hidden>
+            <h3>Continue Watching</h3>
+            <div id="settings-continue" class="settings-list"></div>
+            <h3 style="margin-top:20px;">Viewing History</h3>
+            <div id="settings-history" class="settings-list"></div>
+            <h3 style="margin-top:20px;">Recommendations</h3>
+            <div id="settings-taste" class="settings-list"></div>
+          </section>
+          <section id="settings-panel-about" class="settings-panel settings-credits" aria-label="About and Credits" hidden>
+            <div class="settings-about-container">
+              <div class="settings-about-card">
+                <h3>Horizon Watch</h3>
+                <p class="settings-version-tag">Version 4.0 · High-Performance TV Edition</p>
+                <p>Viewing history, playback progress, and preferences are stored securely on this device.</p>
+              </div>
+              <div class="settings-credits-card">
+                <h3>Metadata Attribution</h3>
+                <a href="https://www.themoviedb.org/" data-focus aria-label="The Movie Database"><img src="icons/tmdb-approved.svg" alt="TMDB" /></a>
+                <p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+              </div>
+            </div>
+          </section>
         </div>
-      </section>
-      <section class="settings-panel" aria-label="Manage Continue Watching">
-        <h2>Continue Watching</h2>
-        <div id="settings-continue" class="settings-list"></div>
-      </section>
-      <section class="settings-panel" aria-label="Manage History">
-        <h2>Viewing History</h2>
-        <div id="settings-history" class="settings-list"></div>
-      </section>
-      <section class="settings-panel" aria-label="Personalized recommendations">
-        <h2>Recommendations</h2>
-        <div id="settings-taste" class="settings-list"></div>
-      </section>
-      <section class="settings-panel settings-credits" aria-label="About and Credits">
-        <h2>About &amp; Credits</h2>
-        <a href="https://www.themoviedb.org/" data-focus aria-label="The Movie Database"><img src="icons/tmdb-approved.svg" alt="TMDB" /></a>
-        <p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
-        <p>Viewing history and progress are stored on this device.</p>
-      </section>
+      </div>
     </section>
     </div>
   </main>

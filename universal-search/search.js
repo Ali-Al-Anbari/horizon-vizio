@@ -62,7 +62,9 @@
     var query = get("query"), results = get("results");
     var state = { view: "watch", previousView: "watch", detailSource: "watch", filter: "all", query: "", title: null, detail: null,
       season: null, episodes: [], subtitle: core.readSubtitlePref(local), continueMode: false,
-      watchTab: "for-you", detailSourceTab: "for-you" };
+      watchTab: "for-you", detailSourceTab: "for-you",
+      historyMode: "overview", historyFilter: "all", historyQuery: "",
+      settingsCategory: null, lastSettingsCategory: "appearance" };
     var finePointer = !!(clock.matchMedia && clock.matchMedia("(pointer: fine)").matches)
       && !/Vizio|SmartCast/i.test(clock.navigator && clock.navigator.userAgent || "");
     var hoverPointer = finePointer && !!clock.matchMedia("(hover: hover)").matches;
@@ -2306,10 +2308,20 @@
       results.replaceChildren();
       results.scrollTop = 0;
       rows.forEach(function (row) {
-        var card = button("", function () { openDetails(row); }, "poster-card");
+        var card = button("", function () { openDetails(row); }, "poster-card search-card home-card-poster");
         card.dataset.mediaType = row.type;
         card.dataset.mediaId = String(row.id);
-        var art = landscapeArt(row);
+        var art = verticalPosterArt(row);
+        var badge = doc.createElement("span");
+        badge.className = "search-badge";
+        badge.textContent = row.type === "tv" ? "TV" : "Movie";
+        art.appendChild(badge);
+        if (row.resume && row.resume.progress && !row.resume.progress.completed && row.resume.progress.duration > 0) {
+          var bar = doc.createElement("span"); bar.className = "home-progress-bar";
+          var fill = doc.createElement("span"); fill.className = "home-progress-fill";
+          fill.style.width = Math.min(100, Math.max(5, Math.round(row.resume.progress.position / row.resume.progress.duration * 100))) + "%";
+          bar.appendChild(fill); art.appendChild(bar);
+        }
         var meta = doc.createElement("span"); meta.className = "poster-meta";
         var title = doc.createElement("strong"); title.textContent = row.title;
         var info = doc.createElement("small"); info.textContent = row.resume && row.type === "movie"
@@ -2404,8 +2416,11 @@
     }
     function renderSettings() {
       var delayButton = get("settings-hero-delay"), fadeButton = get("settings-hero-fade");
-      delayButton.textContent = heroPreferences.delay ? heroPreferences.delay + "ms" : "Immediate";
-      fadeButton.textContent = heroPreferences.fade ? "Fade On" : "Fade Off";
+      if (delayButton) delayButton.textContent = heroPreferences.delay ? heroPreferences.delay + "ms" : "Immediate";
+      if (fadeButton) {
+        fadeButton.textContent = heroPreferences.fade ? "Fade On" : "Fade Off";
+        fadeButton.setAttribute("aria-pressed", String(heroPreferences.fade));
+      }
       [
         ["settings-poster-glide", "glide"],
         ["settings-hold-scroll", "hold"],
@@ -2413,106 +2428,306 @@
         ["settings-artwork-fade", "artworkFade"]
       ].forEach(function (pair) {
         var control = get(pair[0]);
-        control.textContent = heroPreferences[pair[1]] ? "On" : "Off";
-        control.setAttribute("aria-pressed", String(heroPreferences[pair[1]]));
+        if (control) {
+          control.textContent = heroPreferences[pair[1]] ? "On" : "Off";
+          control.setAttribute("aria-pressed", String(heroPreferences[pair[1]]));
+        }
       });
-      fadeButton.setAttribute("aria-pressed", String(heroPreferences.fade));
       var rows = core.readHistory(local), visible = core.homepageContinueCandidates(rows, local);
       var continueHost = get("settings-continue"), historyHost = get("settings-history");
-      continueHost.replaceChildren(); historyHost.replaceChildren();
+      if (continueHost) continueHost.replaceChildren();
+      if (historyHost) historyHost.replaceChildren();
       var tasteHost = get("settings-taste");
-      tasteHost.replaceChildren();
+      if (tasteHost) tasteHost.replaceChildren();
       var tasteRatings = recommendations && recommendations.readFeedback(local).ratings || {};
-      var tasteLine = doc.createElement("div"); tasteLine.className = "settings-entry";
-      var tasteLabel = doc.createElement("span");
-      tasteLabel.textContent = Object.keys(tasteRatings).length + " saved Love It / Not Interested choices";
-      tasteLine.appendChild(tasteLabel);
-      var confirmTasteReset = false;
-      tasteLine.appendChild(button("Reset recommendation choices", function () {
-        if (!confirmTasteReset) { confirmTasteReset = true;
-          this.textContent = "Confirm reset choices"; focus(this); return; }
-        if (recommendations && recommendations.resetFeedback(local)) {
-          recommendationLoadedSignature = "";
-          renderSettings(); refreshRecommendations();
-          focus(get("settings-taste").querySelector("button"));
-        }
-      }));
-      tasteHost.appendChild(tasteLine);
-      if (!visible.length) { var empty = doc.createElement("p"); empty.textContent = "No unfinished titles saved.";
-        continueHost.appendChild(empty); }
-      visible.forEach(function (row) {
-        var line = doc.createElement("div"); line.className = "settings-entry";
-        var name = doc.createElement("span"); name.textContent = row.title + " · " + homeContext(row);
-        var hidden = core.isContinueHidden(local, row);
-        line.appendChild(name);
-        line.appendChild(button(hidden ? "Restore to Continue" : "Hide from Continue", function () {
-          core.setContinueHidden(local, row, !hidden); renderSettings(); focus(get("settings-toggle"));
-        })); continueHost.appendChild(line);
-      });
-      if (!rows.length) { var noHistory = doc.createElement("p"); noHistory.textContent = "No saved viewing history.";
-        historyHost.appendChild(noHistory); }
-      rows.forEach(function (row) {
-        var line = doc.createElement("div"); line.className = "settings-entry";
-        var name = doc.createElement("span");
-        name.textContent = row.title + (row.type === "tv" ? " · S" + row.season + " E" + row.episode : " · Movie")
-          + (row.progress ? " · " + Math.floor(row.progress.position / 60) + "m / "
-            + Math.floor(row.progress.duration / 60) + "m" : " · Position unavailable");
-        if (row.type === "tv") {
-          var last = core.lastWatchedEpisode(rows, row.id);
-          if (last && last.season === row.season && last.episode === row.episode) name.textContent += " · Last watched";
-        }
-        line.appendChild(name);
-        line.appendChild(button(row.manualWatched === true ? "Mark unfinished" : "Mark finished", function () {
-          core.setHistoryWatched(local, row.type, row.id, row.season, row.episode, row.manualWatched !== true);
-          renderSettings(); focus(get("settings-toggle"));
+      if (tasteHost) {
+        var tasteLine = doc.createElement("div"); tasteLine.className = "settings-entry";
+        var tasteLabel = doc.createElement("span");
+        tasteLabel.textContent = Object.keys(tasteRatings).length + " saved Love It / Not Interested choices";
+        tasteLine.appendChild(tasteLabel);
+        var confirmTasteReset = false;
+        tasteLine.appendChild(button("Reset recommendation choices", function () {
+          if (!confirmTasteReset) { confirmTasteReset = true;
+            this.textContent = "Confirm reset choices"; focus(this); return; }
+          if (recommendations && recommendations.resetFeedback(local)) {
+            recommendationLoadedSignature = "";
+            renderSettings(); refreshRecommendations();
+            focus(get("settings-taste").querySelector("button"));
+          }
         }));
-        function deleteButton(label, allTitle) {
-          var confirm = false;
-          return button(label, function () {
-            if (!confirm) { confirm = true; this.textContent = "Confirm " + label.toLowerCase(); focus(this); return; }
-            core.deleteHistory(local, row.type, row.id, row.season, row.episode, allTitle);
+        tasteHost.appendChild(tasteLine);
+      }
+      if (continueHost) {
+        if (!visible.length) { var empty = doc.createElement("p"); empty.textContent = "No unfinished titles saved.";
+          continueHost.appendChild(empty); }
+        visible.forEach(function (row) {
+          var line = doc.createElement("div"); line.className = "settings-entry";
+          var name = doc.createElement("span"); name.textContent = row.title + " · " + homeContext(row);
+          var hidden = core.isContinueHidden(local, row);
+          line.appendChild(name);
+          line.appendChild(button(hidden ? "Restore to Continue" : "Hide from Continue", function () {
+            core.setContinueHidden(local, row, !hidden); renderSettings(); focus(get("settings-toggle"));
+          })); continueHost.appendChild(line);
+        });
+      }
+      if (historyHost) {
+        if (!rows.length) { var noHistory = doc.createElement("p"); noHistory.textContent = "No saved viewing history.";
+          historyHost.appendChild(noHistory); }
+        rows.forEach(function (row) {
+          var line = doc.createElement("div"); line.className = "settings-entry";
+          var name = doc.createElement("span");
+          name.textContent = row.title + (row.type === "tv" ? " · S" + row.season + " E" + row.episode : " · Movie")
+            + (row.progress ? " · " + Math.floor(row.progress.position / 60) + "m / "
+              + Math.floor(row.progress.duration / 60) + "m" : " · Position unavailable");
+          if (row.type === "tv") {
+            var last = core.lastWatchedEpisode(rows, row.id);
+            if (last && last.season === row.season && last.episode === row.episode) name.textContent += " · Last watched";
+          }
+          line.appendChild(name);
+          line.appendChild(button(row.manualWatched === true ? "Mark unfinished" : "Mark finished", function () {
+            core.setHistoryWatched(local, row.type, row.id, row.season, row.episode, row.manualWatched !== true);
             renderSettings(); focus(get("settings-toggle"));
-          });
-        }
-        line.appendChild(deleteButton("Delete entry", false));
-        if (row.type === "tv") line.appendChild(deleteButton("Delete all for show", true));
-        historyHost.appendChild(line);
-      });
+          }));
+          function deleteButton(label, allTitle) {
+            var confirm = false;
+            return button(label, function () {
+              if (!confirm) { confirm = true; this.textContent = "Confirm " + label.toLowerCase(); focus(this); return; }
+              core.deleteHistory(local, row.type, row.id, row.season, row.episode, allTitle);
+              renderSettings(); focus(get("settings-toggle"));
+            });
+          }
+          line.appendChild(deleteButton("Delete entry", false));
+          if (row.type === "tv") line.appendChild(deleteButton("Delete all for show", true));
+          historyHost.appendChild(line);
+        });
+      }
+      var appSummary = get("settings-summary-appearance");
+      if (appSummary) {
+        appSummary.textContent = "Glide " + (heroPreferences.glide ? "On" : "Off")
+          + " · Hold " + (heroPreferences.hold ? "On" : "Off")
+          + " · Animations " + (heroPreferences.scrollAnimations ? "On" : "Off")
+          + " · Fade " + (heroPreferences.fade ? "On" : "Off");
+      }
+      var browseSummary = get("settings-summary-browsing");
+      if (browseSummary) {
+        browseSummary.textContent = "Hero delay: " + (heroPreferences.delay ? heroPreferences.delay + "ms" : "Immediate");
+      }
+      var libSummary = get("settings-summary-library");
+      if (libSummary) {
+        libSummary.textContent = visible.length + " Continue · " + rows.length + " History · " + Object.keys(tasteRatings).length + " ratings";
+      }
     }
-    function showSettings() { setView("settings"); renderSettings(); focus(get("settings-toggle")); saveView(); }
-    function renderHistory() {
-      var list = get("history-list"); list.replaceChildren();
-      list.scrollTop = 0;
-      var rows = core.groupedHistory(core.readHistory(local));
-      rows.forEach(function (row) {
-        var label = row.title + (row.type === "tv" ? " · S" + row.season + " E" + row.episode
-          + (row.episodeTitle ? " · " + row.episodeTitle : "") : "")
-          + (row.progress && !row.progress.completed
-            ? " · " + Math.round(row.progress.position / row.progress.duration * 100) + "% watched" : "")
-          + " · " + new Date(row.at).toLocaleDateString();
-        var card = button(label, function () { launchHistory(row); }, "poster-card history-card");
-        var art = verticalPosterArt(row);
-        var meta = doc.createElement("span"); meta.className = "poster-meta";
-        var name = doc.createElement("strong"); name.textContent = row.title;
-        var detail = doc.createElement("small");
-        detail.textContent = row.type === "tv" ? "S" + row.season + " E" + row.episode
-          + (row.progress && !row.progress.completed ? " · "
-            + Math.round(row.progress.position / row.progress.duration * 100) + "% watched" : "")
-          : row.progress && !row.progress.completed ? "Movie · "
-            + Math.round(row.progress.position / row.progress.duration * 100) + "% watched" : "Movie";
-        meta.appendChild(name); meta.appendChild(detail); card.textContent = "";
-        card.appendChild(art); card.appendChild(meta); card.setAttribute("aria-label", label);
-        list.appendChild(card);
+    var SETTINGS_CATEGORIES = {
+      appearance: {
+        title: "Appearance & Motion",
+        desc: "Customize scrolling physics, poster glide, animations, and artwork transitions",
+        panelId: "settings-panel-appearance"
+      },
+      browsing: {
+        title: "Browsing & Display",
+        desc: "Fine-tune hero preview latency and display responsiveness",
+        panelId: "settings-panel-browsing"
+      },
+      library: {
+        title: "Library & Content",
+        desc: "Manage Continue Watching, stored viewing history, and recommendation preferences",
+        panelId: "settings-panel-library"
+      },
+      about: {
+        title: "About Horizon",
+        desc: "System version, local storage notice, and TMDB metadata attribution",
+        panelId: "settings-panel-about"
+      }
+    };
+    function openSettingsCategory(catId) {
+      var cat = SETTINGS_CATEGORIES[catId];
+      if (!cat) return;
+      state.settingsCategory = catId;
+      state.lastSettingsCategory = catId;
+      get("settings-landing").hidden = true;
+      var subpage = get("settings-subpage");
+      subpage.hidden = false;
+      text("settings-subpage-title", cat.title);
+      text("settings-subpage-desc", cat.desc);
+      ["settings-panel-appearance", "settings-panel-browsing", "settings-panel-library", "settings-panel-about"].forEach(function (pid) {
+        var p = get(pid);
+        if (p) p.hidden = (pid !== cat.panelId);
       });
+      var panel = get(cat.panelId);
+      var firstBtn = panel && panel.querySelector("[data-focus]");
+      focus(firstBtn || get("settings-subpage-back"));
+    }
+    function closeSettingsCategory() {
+      state.settingsCategory = null;
+      get("settings-subpage").hidden = true;
+      get("settings-landing").hidden = false;
+      ["settings-panel-appearance", "settings-panel-browsing", "settings-panel-library", "settings-panel-about"].forEach(function (pid) {
+        var p = get(pid);
+        if (p) p.hidden = true;
+      });
+      var returnBtn = get("settings-cat-" + (state.lastSettingsCategory || "appearance"));
+      focus(returnBtn || get("settings-toggle"));
+    }
+    function showSettings() {
+      state.previousView = state.view === "settings" ? state.previousView : state.view;
+      state.settingsCategory = null;
+      get("settings-subpage").hidden = true;
+      get("settings-landing").hidden = false;
+      ["settings-panel-appearance", "settings-panel-browsing", "settings-panel-library", "settings-panel-about"].forEach(function (pid) {
+        var p = get(pid);
+        if (p) p.hidden = true;
+      });
+      setView("settings");
+      renderSettings();
+      focus(get("settings-cat-" + (state.lastSettingsCategory || "appearance")) || get("settings-toggle"));
+      saveView();
+    }
+    function createHistoryCard(row) {
+      var isTv = row.type === "tv";
+      var percent = row.progress && !row.progress.completed && row.progress.duration > 0
+        ? Math.round(row.progress.position / row.progress.duration * 100) : 0;
+      var label = row.title + (isTv ? " · S" + row.season + " E" + row.episode
+        + (row.episodeTitle ? " · " + row.episodeTitle : "") : "")
+        + (percent > 0 ? " · " + percent + "% watched" : "")
+        + " · " + new Date(row.at).toLocaleDateString();
+      var card = button(label, function () { launchHistory(row); }, "poster-card history-card home-card-poster");
+      card.dataset.mediaType = row.type;
+      card.dataset.mediaId = String(row.id);
+      var art = verticalPosterArt(row);
+      if (percent > 0) {
+        var bar = doc.createElement("span"); bar.className = "home-progress-bar";
+        var fill = doc.createElement("span"); fill.className = "home-progress-fill";
+        fill.style.width = Math.min(100, Math.max(5, percent)) + "%";
+        bar.appendChild(fill); art.appendChild(bar);
+      }
+      var meta = doc.createElement("span"); meta.className = "poster-meta";
+      var name = doc.createElement("strong"); name.textContent = row.title;
+      var detail = doc.createElement("small");
+      detail.textContent = isTv
+        ? ("S" + row.season + " E" + row.episode + (percent > 0 ? " · " + percent + "%" : ""))
+        : (percent > 0 ? "Movie · " + percent + "%" : "Movie");
+      meta.appendChild(name); meta.appendChild(detail);
+      card.textContent = "";
+      card.appendChild(art); card.appendChild(meta); card.setAttribute("aria-label", label);
+      return card;
+    }
+    function renderHistory() {
+      var allRows = core.readHistory(local);
+      var rows = core.groupedHistory(allRows);
+      var overview = get("history-overview");
+      var empty = get("history-empty");
+      var allView = get("history-all-view");
+      if (allView) allView.hidden = true;
+      if (!rows.length) {
+        if (overview) overview.hidden = true;
+        if (empty) empty.hidden = false;
+        text("history-status", "No viewing history yet.");
+        return;
+      }
+      if (empty) empty.hidden = true;
+      if (overview) overview.hidden = false;
+
+      var list = get("history-list");
+      list.replaceChildren();
+      list.scrollTop = 0;
+      var topRows = rows.slice(0, 12);
+      topRows.forEach(function (row) {
+        list.appendChild(createHistoryCard(row));
+      });
+
+      var movieSection = get("history-movies-section");
+      var movieList = get("history-movies-list");
+      var movieRows = rows.filter(function (r) { return r.type === "movie"; });
+      if (movieSection && movieList) {
+        if (movieRows.length > 0) {
+          movieSection.hidden = false;
+          movieList.replaceChildren();
+          movieRows.slice(0, 6).forEach(function (row) {
+            movieList.appendChild(createHistoryCard(row));
+          });
+        } else {
+          movieSection.hidden = true;
+        }
+      }
+
+      var tvSection = get("history-tv-section");
+      var tvList = get("history-tv-list");
+      var tvRows = rows.filter(function (r) { return r.type === "tv"; });
+      if (tvSection && tvList) {
+        if (tvRows.length > 0) {
+          tvSection.hidden = false;
+          tvList.replaceChildren();
+          tvRows.slice(0, 6).forEach(function (row) {
+            tvList.appendChild(createHistoryCard(row));
+          });
+        } else {
+          tvSection.hidden = true;
+        }
+      }
+
       text("history-status", rows.length ? rows.length + " recently started titles" : "No viewing history yet.");
+    }
+    function renderHistoryAll() {
+      var allRows = core.readHistory(local);
+      var rows = core.groupedHistory(allRows);
+      var filter = state.historyFilter || "all";
+      var q = (state.historyQuery || "").trim().toLowerCase();
+      var filtered = rows.filter(function (row) {
+        if (filter !== "all" && row.type !== filter) return false;
+        if (q) {
+          var matchTitle = row.title && row.title.toLowerCase().indexOf(q) >= 0;
+          var matchEp = row.episodeTitle && row.episodeTitle.toLowerCase().indexOf(q) >= 0;
+          if (!matchTitle && !matchEp) return false;
+        }
+        return true;
+      });
+      var list = get("history-all-list");
+      if (list) {
+        list.replaceChildren();
+        list.scrollTop = 0;
+        filtered.forEach(function (row) {
+          list.appendChild(createHistoryCard(row));
+        });
+      }
+      var emptyEl = get("history-all-empty");
+      if (emptyEl) emptyEl.hidden = (filtered.length > 0);
+      text("history-all-count", filtered.length + (filtered.length === 1 ? " title" : " titles"));
+    }
+    function openHistoryAll() {
+      state.historyMode = "all";
+      state.historyFilter = "all";
+      state.historyQuery = "";
+      var searchInput = get("history-search-input");
+      if (searchInput) searchInput.value = "";
+      doc.querySelectorAll("[data-history-filter]").forEach(function (btn) {
+        btn.classList.toggle("is-current", btn.dataset.historyFilter === "all");
+      });
+      var overview = get("history-overview"), empty = get("history-empty"), allView = get("history-all-view");
+      if (overview) overview.hidden = true;
+      if (empty) empty.hidden = true;
+      if (allView) allView.hidden = false;
+      renderHistoryAll();
+      focus(get("history-all-back"));
+    }
+    function closeHistoryAll() {
+      state.historyMode = "overview";
+      var allView = get("history-all-view");
+      if (allView) allView.hidden = true;
+      renderHistory();
+      focus(get("history-view-all"));
     }
     function showHistory() {
       state.previousView = state.view === "history" ? state.previousView : state.view;
+      state.historyMode = "overview";
       clearPending = false; get("history-clear").textContent = "Clear History";
       setView("history"); renderHistory(); focus(get("history-back"));
     }
     function leaveHistory() {
       clearPending = false; get("history-clear").textContent = "Clear History";
+      if (state.historyMode === "all") {
+        closeHistoryAll();
+        return;
+      }
       setView(["details", "episodes", "watch", "settings"].indexOf(state.previousView) >= 0 ? state.previousView : "search");
       if (state.view === "watch") { renderHomepage(); focusHomeTarget(); }
       else if (state.view === "settings") { renderSettings(); focus(get("settings-toggle")); }
@@ -2986,15 +3201,183 @@
           railPosition + (key === "ArrowDown" ? 1 : -1)))]); return;
       }
       if (state.view === "settings") {
-        var settingsButtons = Array.from(get("settings-view").querySelectorAll("[data-focus]"));
-        var settingsIndex = settingsButtons.indexOf(current);
-        if (railPosition >= 0 && key === "ArrowRight") focus(settingsButtons[0]);
-        else if (settingsIndex >= 0) {
-          if (key === "ArrowDown" || key === "ArrowRight") focus(settingsButtons[Math.min(settingsButtons.length - 1, settingsIndex + 1)]);
-          else if (key === "ArrowUp") focus(settingsButtons[Math.max(0, settingsIndex - 1)]);
-          else if (key === "ArrowLeft") focus(get("settings-toggle"));
+        if (!state.settingsCategory) {
+          var catButtons = [
+            get("settings-cat-appearance"),
+            get("settings-cat-browsing"),
+            get("settings-cat-library"),
+            get("settings-cat-about")
+          ].filter(Boolean);
+          var catIndex = catButtons.indexOf(current);
+          if (railPosition >= 0 && key === "ArrowRight") {
+            var targetCat = get("settings-cat-" + (state.lastSettingsCategory || "appearance")) || catButtons[0];
+            focus(targetCat);
+          } else if (catIndex >= 0) {
+            if (key === "ArrowDown") focus(catButtons[Math.min(catButtons.length - 1, catIndex + 1)]);
+            else if (key === "ArrowUp") focus(catButtons[Math.max(0, catIndex - 1)]);
+            else if (key === "ArrowLeft") focus(get("settings-toggle"));
+            else if (key === "ArrowRight") openSettingsCategory(catButtons[catIndex].id.replace("settings-cat-", ""));
+          }
+          return;
+        } else {
+          var activeCatMeta = SETTINGS_CATEGORIES[state.settingsCategory];
+          var activePanel = activeCatMeta && get(activeCatMeta.panelId);
+          var subButtons = [get("settings-subpage-back")];
+          if (activePanel) {
+            subButtons = subButtons.concat(Array.from(activePanel.querySelectorAll("[data-focus]")).filter(function (el) {
+              return !el.disabled && !el.closest("[hidden]");
+            }));
+          }
+          var subIdx = subButtons.indexOf(current);
+          if (railPosition >= 0 && key === "ArrowRight") {
+            focus(subButtons[0]);
+          } else if (subIdx >= 0) {
+            if (key === "ArrowDown") focus(subButtons[Math.min(subButtons.length - 1, subIdx + 1)]);
+            else if (key === "ArrowUp") focus(subButtons[Math.max(0, subIdx - 1)]);
+            else if (key === "ArrowLeft") {
+              if (current === get("settings-subpage-back")) focus(get("settings-toggle"));
+              else focus(get("settings-subpage-back"));
+            }
+          }
+          return;
         }
-        return;
+      }
+      if (state.view === "history") {
+        if (state.historyMode === "all") {
+          var allToolbar = [
+            get("history-all-back"),
+            get("history-filter-all"),
+            get("history-filter-movie"),
+            get("history-filter-tv"),
+            get("history-search-input")
+          ].filter(Boolean);
+          var allCards = Array.from(get("history-all-list").querySelectorAll("button")).filter(function (b) {
+            return !b.disabled && !b.closest("[hidden]");
+          });
+          var tIdx = allToolbar.indexOf(current);
+          var cIdx = allCards.indexOf(current);
+          if (railPosition >= 0 && key === "ArrowRight") {
+            focus(allToolbar[0]);
+            return;
+          }
+          if (tIdx >= 0) {
+            if (key === "ArrowLeft") {
+              if (tIdx === 0) focus(get("history-toggle"));
+              else focus(allToolbar[tIdx - 1]);
+            } else if (key === "ArrowRight") {
+              if (tIdx < allToolbar.length - 1) focus(allToolbar[tIdx + 1]);
+            } else if (key === "ArrowDown") {
+              if (allCards.length) focus(allCards[0]);
+            }
+            return;
+          }
+          if (cIdx >= 0) {
+            var cols = 5;
+            if (key === "ArrowLeft") {
+              if (cIdx % cols === 0) focus(get("history-toggle"));
+              else focus(allCards[cIdx - 1]);
+            } else if (key === "ArrowRight") {
+              if (cIdx < allCards.length - 1) focus(allCards[cIdx + 1]);
+            } else if (key === "ArrowUp") {
+              if (cIdx < cols) focus(allToolbar[1] || allToolbar[0]);
+              else focus(allCards[cIdx - cols]);
+            } else if (key === "ArrowDown") {
+              if (cIdx + cols < allCards.length) focus(allCards[cIdx + cols]);
+            }
+            return;
+          }
+        } else {
+          var overviewHeaders = [
+            get("history-back"),
+            get("history-view-all"),
+            get("history-clear")
+          ].filter(Boolean);
+          var hIdx = overviewHeaders.indexOf(current);
+          var listCards = Array.from(get("history-list").querySelectorAll("button")).filter(function (b) {
+            return !b.disabled && !b.closest("[hidden]");
+          });
+          var lIdx = listCards.indexOf(current);
+          var emptyAction = get("history-empty-action");
+          if (current === emptyAction) {
+            if (key === "ArrowLeft") focus(get("history-toggle"));
+            return;
+          }
+          if (railPosition >= 0 && key === "ArrowRight") {
+            if (emptyAction && !emptyAction.closest("[hidden]")) focus(emptyAction);
+            else focus(overviewHeaders[0]);
+            return;
+          }
+          if (hIdx >= 0) {
+            if (key === "ArrowLeft") {
+              if (hIdx === 0) focus(get("history-toggle"));
+              else focus(overviewHeaders[hIdx - 1]);
+            } else if (key === "ArrowRight") {
+              if (hIdx < overviewHeaders.length - 1) focus(overviewHeaders[hIdx + 1]);
+            } else if (key === "ArrowDown") {
+              if (listCards.length) focus(listCards[0]);
+            }
+            return;
+          }
+          if (lIdx >= 0) {
+            var cols = 5;
+            if (key === "ArrowLeft") {
+              if (lIdx % cols === 0) focus(get("history-toggle"));
+              else focus(listCards[lIdx - 1]);
+            } else if (key === "ArrowRight") {
+              if (lIdx < listCards.length - 1) focus(listCards[lIdx + 1]);
+            } else if (key === "ArrowUp") {
+              if (lIdx < cols) focus(overviewHeaders[0]);
+              else focus(listCards[lIdx - cols]);
+            } else if (key === "ArrowDown") {
+              var movieCards = Array.from(get("history-movies-list").querySelectorAll("button")).filter(function (b) {
+                return !b.disabled && !b.closest("[hidden]");
+              });
+              var tvCards = Array.from(get("history-tv-list").querySelectorAll("button")).filter(function (b) {
+                return !b.disabled && !b.closest("[hidden]");
+              });
+              if (lIdx + cols < listCards.length) focus(listCards[lIdx + cols]);
+              else if (movieCards.length) focus(movieCards[0]);
+              else if (tvCards.length) focus(tvCards[0]);
+            }
+            return;
+          }
+          var movieCards = Array.from(get("history-movies-list").querySelectorAll("button")).filter(function (b) {
+            return !b.disabled && !b.closest("[hidden]");
+          });
+          var mIdx = movieCards.indexOf(current);
+          if (mIdx >= 0) {
+            if (key === "ArrowLeft") {
+              if (mIdx === 0) focus(get("history-toggle"));
+              else focus(movieCards[mIdx - 1]);
+            } else if (key === "ArrowRight" && mIdx < movieCards.length - 1) {
+              focus(movieCards[mIdx + 1]);
+            } else if (key === "ArrowUp") {
+              focus(listCards[listCards.length - 1] || overviewHeaders[0]);
+            } else if (key === "ArrowDown") {
+              var tvCards = Array.from(get("history-tv-list").querySelectorAll("button")).filter(function (b) {
+                return !b.disabled && !b.closest("[hidden]");
+              });
+              if (tvCards.length) focus(tvCards[0]);
+            }
+            return;
+          }
+          var tvCards = Array.from(get("history-tv-list").querySelectorAll("button")).filter(function (b) {
+            return !b.disabled && !b.closest("[hidden]");
+          });
+          var tvIdx = tvCards.indexOf(current);
+          if (tvIdx >= 0) {
+            if (key === "ArrowLeft") {
+              if (tvIdx === 0) focus(get("history-toggle"));
+              else focus(tvCards[tvIdx - 1]);
+            } else if (key === "ArrowRight" && tvIdx < tvCards.length - 1) {
+              focus(tvCards[tvIdx + 1]);
+            } else if (key === "ArrowUp") {
+              if (movieCards.length) focus(movieCards[movieCards.length - 1]);
+              else focus(listCards[listCards.length - 1] || overviewHeaders[0]);
+            }
+            return;
+          }
+        }
       }
       if (state.view === "watch") {
         var visibleOrder = visibleHomeRowOrder();
@@ -3271,8 +3654,20 @@
           closeFilterMenu();
           return;
         }
-        if (state.view === "history") returnWithinWatch(leaveHistory);
-        else if (state.view === "settings") returnWithinWatch(function () { showWatch(); });
+        if (state.view === "history") {
+          if (state.historyMode === "all") {
+            closeHistoryAll();
+            return;
+          }
+          returnWithinWatch(leaveHistory);
+        }
+        else if (state.view === "settings") {
+          if (state.settingsCategory) {
+            closeSettingsCategory();
+            return;
+          }
+          returnWithinWatch(function () { showWatch(); });
+        }
         else if (state.view === "episodes") returnWithinWatch(backToDetails);
         else if (state.view === "details") returnWithinWatch(backToResults);
         else if (state.view === "search" && state.query) {
@@ -3380,7 +3775,35 @@
       renderSettings();
       focus(this);
     });
+    ["appearance", "browsing", "library", "about"].forEach(function (catId) {
+      var btn = get("settings-cat-" + catId);
+      if (btn) btn.addEventListener("click", function () { openSettingsCategory(catId); });
+    });
+    var subpageBack = get("settings-subpage-back");
+    if (subpageBack) subpageBack.addEventListener("click", closeSettingsCategory);
     get("history-back").addEventListener("click", function () { returnWithinWatch(leaveHistory); });
+    var viewAllBtn = get("history-view-all");
+    if (viewAllBtn) viewAllBtn.addEventListener("click", openHistoryAll);
+    var allBackBtn = get("history-all-back");
+    if (allBackBtn) allBackBtn.addEventListener("click", closeHistoryAll);
+    var emptyActionBtn = get("history-empty-action");
+    if (emptyActionBtn) emptyActionBtn.addEventListener("click", function () { exitToHome(); });
+    doc.querySelectorAll("[data-history-filter]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.historyFilter = this.dataset.historyFilter;
+        doc.querySelectorAll("[data-history-filter]").forEach(function (b) {
+          b.classList.toggle("is-current", b === btn);
+        });
+        renderHistoryAll();
+      });
+    });
+    var historySearch = get("history-search-input");
+    if (historySearch) {
+      historySearch.addEventListener("input", function () {
+        state.historyQuery = this.value;
+        renderHistoryAll();
+      });
+    }
     get("history-clear").addEventListener("click", function () {
       if (!clearPending) { clearPending = true; this.textContent = "Confirm clear history"; return; }
       core.clearHistory(local); clearPending = false; this.textContent = "Clear History";

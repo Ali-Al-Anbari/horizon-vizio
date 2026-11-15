@@ -12,6 +12,10 @@
   }
 
   function create(host, doc, frame, clock) {
+    function labProvider(value) {
+      return value === "vidy" || value === "stellar" || value === "embedwave"
+        || value === "apiplayer" || value === "vidzen";
+    }
     var mediaSource = host.MediaSource || host.WebKitMediaSource || null;
     var video = null;
     try { video = doc.createElement("video"); } catch (_error) { /* Capability unavailable. */ }
@@ -108,7 +112,8 @@
     }
     function recordFrame(kind) {
       if ((provider !== "cinesrc" && provider !== "vidfast" && provider !== "vidlink"
-          && provider !== "vidrift" && provider !== "vidbolt") || (kind !== "load" && kind !== "error")) return;
+          && provider !== "vidrift" && provider !== "vidbolt" && !labProvider(provider))
+          || (kind !== "load" && kind !== "error")) return;
       frameEvents.push("+" + Math.max(0, Math.floor((now() - startedAt) / 1000)) + "s iframe " + kind);
       if (frameEvents.length > 4) frameEvents.shift();
     }
@@ -141,8 +146,20 @@
     }
     function record(message) {
       if (!message || (provider !== "cinesrc" && provider !== "vidfast" && provider !== "vidlink"
-          && provider !== "vidrift" && provider !== "vidbolt")) return;
+          && provider !== "vidrift" && provider !== "vidbolt" && !labProvider(provider))) return;
       var type = message.type || "";
+      if (labProvider(provider)) {
+        if (type.indexOf("lab:") !== 0) return;
+        var labEvent = type.slice(4);
+        if (labEvent === "ready") ready = true;
+        if (labEvent === "play") play = true;
+        if (labEvent === "pause" || labEvent === "ended") play = false;
+        if (labEvent !== "timeupdate" || !events.length || !/timeupdate$/.test(events[events.length - 1])) {
+          events.push("+" + Math.max(0, Math.floor((now() - startedAt) / 1000)) + "s " + labEvent);
+          if (events.length > 6) events.shift();
+        }
+        return;
+      }
       if (provider === "vidrift" || provider === "vidbolt") {
         var prefix = provider + ":";
         if (type.indexOf(prefix) !== 0) return;
@@ -241,6 +258,11 @@
       if (events.length > 6) events.shift();
     }
     function assessment() {
+      if (labProvider(provider)) {
+        if (play) return "Provider reported play; advancing frames and sound require direct verification. Horizon transport controls are unsupported.";
+        if (ready) return "Provider reported ready; video playback and sound remain unverified. Horizon transport controls are unsupported.";
+        return "Iframe load alone does not confirm video. Horizon transport controls are unsupported.";
+      }
       if (provider === "vidrift" || provider === "vidbolt") {
         if (lastError) return "Provider reported " + lastError + "; command outcome requires TV verification.";
         if (play) return "Provider reported play; visible video and audible sound require TV verification.";
@@ -302,7 +324,7 @@
           : sourceCount ? sources.join(" → ") + (sourceCount > sources.length
           ? " (last " + sources.length + " of " + sourceCount + ")" : "") : "none reported",
         elapsed: (provider === "cinesrc" || provider === "vidfast" || provider === "vidlink"
-          || provider === "vidrift" || provider === "vidbolt") ? Math.max(0, Math.floor((now() - startedAt) / 1000))
+          || provider === "vidrift" || provider === "vidbolt" || labProvider(provider)) ? Math.max(0, Math.floor((now() - startedAt) / 1000))
           + "s since iframe launch; confirmed video/audio cannot be observed by Horizon"
           + (provider === "vidrift" ? "; progress event "
             + (riftLastProgressAt === null ? "none" : Math.max(0, Math.floor((now() - riftLastProgressAt) / 1000)) + "s ago")

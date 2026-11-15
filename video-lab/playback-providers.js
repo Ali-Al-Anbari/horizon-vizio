@@ -6,6 +6,13 @@
   var VIDLINK_ORIGIN = "https://vidlink.pro";
   var VIDRIFT_ORIGIN = "https://embed.vidrift.net";
   var VIDBOLT_ORIGIN = "https://vidbolt.xyz";
+  var LAB_ORIGINS = {
+    vidy: "https://www.vidy.st", stellar: "https://stellar.rip",
+    embedwave: "https://embedwave.cc", apiplayer: "https://apiplayer.ru",
+    vidzen: "https://vidzen.fun"
+  };
+  var LAB_LABELS = { vidy: "Vidy", stellar: "Stellar", embedwave: "EmbedWave",
+    apiplayer: "APIPlayer", vidzen: "VidZen" };
   var VIDFAST_MIRRORS = [
     "https://vidfast.vc",
     "https://vidfast.pro",
@@ -24,7 +31,7 @@
   var CINESRC = "cinesrc"; // Preserved for reference; excluded during VidFast testing.
   var PRIMARY = YAPGRID;
   var FALLBACK = YAPGRID;
-  var VISIBLE = [YAPGRID, VIDBOLT];
+  var VISIBLE = [YAPGRID, VIDBOLT, "vidy", "stellar", "embedwave", "apiplayer", "vidzen"];
   var BASELINE = "baseline";
 
   function positive(value) {
@@ -36,7 +43,8 @@
   }
   // Older experiments remain available as reference code, not as active selections.
   function select(value) {
-    return value === VIDLINK || value === VIDFAST || value === VIDRIFT || value === VIDBOLT ? value : PRIMARY;
+    return value === VIDLINK || value === VIDFAST || value === VIDRIFT || value === VIDBOLT
+      || Object.prototype.hasOwnProperty.call(LAB_ORIGINS, value) ? value : PRIMARY;
   }
   function next(value) {
     var index = VISIBLE.indexOf(value);
@@ -44,6 +52,7 @@
   }
   function label(value) {
     var s = select(value);
+    if (LAB_LABELS[s]) return LAB_LABELS[s] + " · experimental";
     if (s === VIDFAST) return "VidFast";
     if (s === VIDLINK) return "VidLink";
     if (s === VIDRIFT) return "VidRift";
@@ -61,6 +70,26 @@
 
   function embedUrl(target, provider, subtitle, pageOrigin, catalog, testMode, startAt, audioLang) {
     if (!target || !catalog) return null;
+    if (Object.prototype.hasOwnProperty.call(LAB_ORIGINS, provider)) {
+      var movie = positive(target.movieId);
+      var tv = positive(target.showId) && positive(target.season) && positive(target.episode);
+      if (!movie && !tv) return null;
+      // APIPlayer documents an internal episode drawer/next-episode prewarm without
+      // a disable option; VidZen does not document an exact TV episode route.
+      if (tv && (provider === "apiplayer" || provider === "vidzen")) return null;
+      var id = movie ? target.movieId : target.showId;
+      var suffix = tv ? "/" + target.season + "/" + target.episode : "";
+      if (provider === "vidy") return LAB_ORIGINS.vidy + (movie ? "/movie/" : "/tv/")
+        + id + suffix + "?autoplay=true&nextEpisode=false&episodeSelector=false&autoplayNextEpisode=false";
+      if (provider === "stellar") return LAB_ORIGINS.stellar + "/en/watch/embed/"
+        + (movie ? "movie/" + id : "tv/" + id + "-" + target.season + "-" + target.episode)
+        + "?autoPlay=true&startAt=0&nextButton=false&autoNext=false";
+      if (provider === "embedwave") return LAB_ORIGINS.embedwave + "/embed/"
+        + (movie ? "movie/" : "tv/") + id + suffix + "?autoplay=1";
+      if (provider === "apiplayer") return LAB_ORIGINS.apiplayer
+        + "/embed/movie/" + id + "?autoplay=1&resume=0";
+      return LAB_ORIGINS.vidzen + "/movie/" + id + "?autoPlay=true";
+    }
     // Preserved CineSrc embed generation for reference only:
     if (provider === CINESRC) {
       var cinesrc = null;
@@ -179,6 +208,29 @@
     try {
       var chosen = provider === VIDFAST ? VIDFAST : select(provider);
       if (!event || !frame || !frame.contentWindow || event.source !== frame.contentWindow) return null;
+
+      if (Object.prototype.hasOwnProperty.call(LAB_ORIGINS, chosen)) {
+        if (event.origin !== LAB_ORIGINS[chosen]) return null;
+        var lab = event.data;
+        if (chosen === "vidy" && typeof lab === "string") {
+          if (lab.length > 2048) return null;
+          try { lab = JSON.parse(lab); } catch (_error) { return null; }
+        }
+        if (!lab || typeof lab !== "object" || Array.isArray(lab)) return null;
+        if (chosen === "stellar" && lab.type === "STELLAR_EMBED_READY")
+          return { type: "lab:ready" };
+        var payload = chosen === "stellar" && lab.type === "PLAYER_EVENT" ? lab.data : lab;
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+        var name = payload.event;
+        if (chosen === "vidy" && lab.type !== "PLAYER_EVENT" && !name) return null;
+        if (["play", "pause", "timeupdate", "ended", "seeked"].indexOf(name) < 0) return null;
+        if (chosen === "stellar" && lab.type !== "PLAYER_EVENT") return null;
+        // Passive diagnostics only: no provider has a documented host transport
+        // bridge, and these events cannot establish content vs advertisement.
+        return { type: "lab:" + name,
+          currentTime: finiteNonnegative(payload.currentTime) ? payload.currentTime : null,
+          duration: finiteNonnegative(payload.duration) ? payload.duration : null };
+      }
 
       if (chosen === VIDRIFT) {
         if (event.origin !== VIDRIFT_ORIGIN) return null;
@@ -469,6 +521,14 @@
     return false;
   }
 
+  function initializeLabFrame(frame, provider) {
+    if (provider !== "stellar" || !frame || !frame.contentWindow) return false;
+    try {
+      frame.contentWindow.postMessage({ type: "STELLAR_EMBED_INIT" }, LAB_ORIGINS.stellar);
+      return true;
+    } catch (_error) { return false; }
+  }
+
   root.HorizonPlaybackProviders = {
     YAPGRID: YAPGRID,
     VIDFAST: VIDFAST,
@@ -483,6 +543,9 @@
     VIDLINK_ORIGIN: VIDLINK_ORIGIN,
     VIDRIFT_ORIGIN: VIDRIFT_ORIGIN,
     VIDBOLT_ORIGIN: VIDBOLT_ORIGIN,
+    LAB_ORIGINS: LAB_ORIGINS,
+    isPlaybackOnly: function (value) { return Object.prototype.hasOwnProperty.call(LAB_ORIGINS, value); },
+    initializeLabFrame: initializeLabFrame,
     select: select,
     next: next,
     label: label,

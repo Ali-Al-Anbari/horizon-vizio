@@ -38,6 +38,15 @@
         ],
         "createdAt": "2026-11-07T04:22:03.700Z",
         "reason": "Agent: this existing Video Lab player intentionally inherits the compact system Arial stack; this subtitle task preserves its approved visual design"
+      },
+      {
+        "rule": "undersized-ui-text",
+        "value": "*",
+        "files": [
+          "video-lab/player-overlay.html"
+        ],
+        "createdAt": "2026-11-15T07:24:30.472Z",
+        "reason": "User explicitly chose to retain the existing 9px Up Next brand label; Phase 5D does not change its styling"
       }
     ]
   }

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.tvmaze.com; frame-src https://yapgrid.com https://cinesrc.st https://vidfast.vc https://vidlink.pro https://embed.vidrift.net https://vidbolt.xyz; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.tvmaze.com; frame-src https://yapgrid.com https://cinesrc.st https://vidfast.vc https://vidlink.pro https://embed.vidrift.net https://vidbolt.xyz https://www.vidy.st https://stellar.rip https://embedwave.cc https://apiplayer.ru https://vidzen.fun; object-src 'none'; form-action 'none'; base-uri 'none'" />
     <meta name="color-scheme" content="dark" />
     <title>Horizon Video Lab · Player Overlay</title>
     <link rel="icon" href="data:," />
@@ -101,6 +101,7 @@
         <section id="diagnostics-panel" class="diagnostics-panel" aria-label="Video Lab diagnostics" hidden>
           <div class="diagnostics-header"><h2>Video Lab diagnostics</h2><button id="diagnostics-close" type="button" tabindex="-1">Close · Back</button></div>
           <p class="diagnostics-note">Local browser probes and experimental provider status. Provider media requests are not inspected.</p>
+          <p id="diag-experimental" class="diagnostics-note" hidden></p>
           <div id="compat-controls" class="compat-controls" hidden>
             <p id="diag-variant">CineSrc test: Baseline</p>
             <button id="compat-quality" type="button" tabindex="-1">Quality 480</button>

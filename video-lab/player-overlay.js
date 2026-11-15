@@ -314,6 +314,8 @@
     var disposed = false;
     var movieLoadTimer = null;
     var diagnosticsTimer = null;
+    var labStatus = "No experimental provider selected.";
+    var labFirstEvent = null;
     var providerReady = false;
     var providerPlaying = false;
     var providerFailed = false;
@@ -335,9 +337,12 @@
     var lastPauseTiming = null;
 
     function providerLabel() { return providers.label(provider); }
+    function playbackOnly() { return providers.isPlaybackOnly(provider); }
     function isCommandProvider() { return provider === providers.VIDRIFT || provider === providers.VIDBOLT; }
     function usesExperimentalRow() { return provider === providers.VIDRIFT; }
     function renderProviderChoice() {
+      if (playbackOnly()) playerShell.classList.add("lab-playback");
+      else playerShell.classList.remove("lab-playback");
       var next = providers.next(provider);
       var choice = get("provider-choice");
       var text = "Provider: " + providerLabel();
@@ -370,11 +375,11 @@
       get("experiment-focus").hidden = provider !== providers.VIDRIFT;
       get("experiment-skip").hidden = provider !== providers.VIDRIFT;
       ["rewind", "play-pause", "forward"].forEach(function (id) {
-        get(id).hidden = usesExperimentalRow();
+        get(id).hidden = usesExperimentalRow() || playbackOnly();
       });
       get("subtitle-mode").textContent = provider === providers.VIDBOLT
         ? independentSubtitles.state().enabled ? "EN" : "OFF" : subtitleMode.toUpperCase();
-      get("subtitles").hidden = isMovie && provider !== providers.VIDBOLT;
+      get("subtitles").hidden = playbackOnly() || isMovie && provider !== providers.VIDBOLT;
       get("subtitles").title = provider === providers.VIDBOLT ? "Horizon subtitles" : "YapGrid subtitles";
       var audioLangBtn = get("audio-language");
       if (audioLangBtn) audioLangBtn.hidden = provider !== providers.VIDBOLT;
@@ -835,11 +840,13 @@
       overlay.setAttribute("aria-hidden", visible ? "false" : "true");
       controls.forEach(function (button, index) {
         if (button) button.tabIndex = visible && !button.hidden
+          && !button.disabled
           && (index < 12 || usesExperimentalRow() || index === 20 && route.fromSearch
             || index === 21 && desktopWatch || index === 22) ? 0 : -1;
       });
     }
     function focusControl(index) {
+      if (playbackOnly() && index <= 2) index = 8;
       if (selected !== index) {
         pendingEpisode = null;
         episodeLookup += 1;
@@ -1073,7 +1080,7 @@
           return controls[index] && !controls[index].hidden && !controls[index].disabled;
         }); }).filter(function (row) { return row.length; });
       var rowIndex = rows.findIndex(function (row) { return row.indexOf(selected) !== -1; });
-      if (rowIndex < 0) { focusControl(1); return true; }
+      if (rowIndex < 0) { focusControl(playbackOnly() ? 8 : 1); return true; }
       var row = rows[rowIndex];
       var column = row.indexOf(selected);
       if (upNextTarget && !leavingUpNextFocus && rowIndex === 1
@@ -2133,6 +2140,13 @@
     }
     function renderDiagnostics() {
       var data = diagnostics.snapshot();
+      var labLine = get("diag-experimental");
+      labLine.hidden = !playbackOnly();
+      if (playbackOnly()) labLine.textContent = providerLabel() + " · TMDB "
+        + (isMovie ? currentEpisode.movieId : currentEpisode.showId + " S" + currentEpisode.season
+          + " E" + currentEpisode.episode) + ": " + labStatus
+        + " First provider event: " + (labFirstEvent || "none")
+        + ". Host play, pause, and seek are undocumented and disabled. Initial click and popup behavior require direct observation.";
       get("diag-user-agent").textContent = data.userAgent;
       get("diag-media-source").textContent = data.mediaSource;
       get("diag-native-hls").textContent = data.nativeHls;
@@ -2298,6 +2312,8 @@
       providerReady = false;
       providerPlaying = false;
       providerFailed = false;
+      labStatus = "Iframe unloaded; playback unverified.";
+      labFirstEvent = null;
       boltPosition = null;
       boltDuration = null;
       get("playback-timeline").hidden = true;
@@ -2364,16 +2380,19 @@
           : provider === providers.VIDBOLT ? (vidBoltAutoplay ? "autoPlayTrue" : "autoPlayOff")
           : compatibilityMode, null, currentAudioLanguage);
       if (!url) {
-        loading(isMovie ? "Invalid movie ID. Press Back to return to Horizon Watch."
+        loading(playbackOnly() ? providerLabel() + " does not document a safe exact-episode embed for this selection. Choose another provider."
+          : isMovie ? "Invalid movie ID. Press Back to return to Horizon Watch."
           : "Invalid episode ID. Press Back to return to Horizon Watch.");
         return;
       }
       frame.title = providerLabel() + " video player";
-      frame.setAttribute("referrerpolicy", provider === providers.VIDRIFT
+      frame.setAttribute("referrerpolicy", provider === "stellar" || provider === providers.VIDRIFT
         ? "strict-origin-when-cross-origin" : "no-referrer");
-      frame.setAttribute("allow", provider === providers.VIDBOLT
+      frame.setAttribute("allow", provider === "vidy" ? "autoplay *; encrypted-media; fullscreen *"
+        : provider === providers.VIDBOLT || playbackOnly()
         ? "autoplay; encrypted-media; picture-in-picture; fullscreen"
         : "autoplay; fullscreen; picture-in-picture");
+      if (playbackOnly()) labStatus = "Iframe requested; initialization and playback unknown.";
       if (isMovie || provider !== providers.PRIMARY) {
         get("player-loading").classList.remove("is-warning");
         loading(provider === providers.YAPGRID ? "Opening movie…" : "Opening " + providerLabel() + "…");
@@ -2440,6 +2459,21 @@
           diagnostics.recordRejected(rejected, event);
           if (state === STATES.DIAGNOSTICS_OPEN) renderDiagnostics();
         }
+        return;
+      }
+      if (playbackOnly()) {
+        diagnostics.record(message);
+        if (!labFirstEvent) labFirstEvent = message.type.slice(4);
+        if (message.type === "lab:ready" && provider === "stellar") {
+          providers.initializeLabFrame(frame, provider);
+          labStatus = "Ready signal received; player initialized only when playback events confirm it.";
+        } else {
+          labStatus = "Provider reported " + message.type.slice(4)
+            + (message.currentTime !== null ? " at " + Math.floor(message.currentTime) + "s" : "")
+            + (message.duration !== null ? " / " + Math.floor(message.duration) + "s" : "")
+            + "; visible frames and sound unverified.";
+        }
+        if (state === STATES.DIAGNOSTICS_OPEN) renderDiagnostics();
         return;
       }
       diagnostics.record(message);
@@ -2651,6 +2685,8 @@
       hideControls(true);
       unloadFrame();
       provider = providers.next(provider);
+      labStatus = "New experimental selection; iframe pending.";
+      labFirstEvent = null;
       compatibilityMode = providers.BASELINE;
       vidFastMode = providers.BASELINE;
       vidLinkMode = "defaultOff";
@@ -2691,6 +2727,14 @@
       if (disposed || activeFrame !== frame || frame.src === "about:blank") return;
       frameLoaded = true;
       diagnostics.recordFrame("load");
+      if (playbackOnly()) {
+        labStatus = "Iframe loaded; player initialization and video unverified.";
+        if (movieLoadTimer !== null) { clock.clearTimeout(movieLoadTimer); movieLoadTimer = null; }
+        if (provider === "stellar") {
+          providers.initializeLabFrame(frame, provider);
+        }
+        loading(providerLabel() + " iframe loaded. Playback and audio unverified; open Diagnostics or choose another provider.");
+      }
       if (provider === providers.VIDBOLT && boltSession) {
         boltSession.loadCount = Math.min(999, boltSession.loadCount + 1);
         boltSession.latestLoadAt = now();
@@ -2714,7 +2758,7 @@
       } else if (provider === providers.CINESRC) {
         if (!providerReady && !providerPlaying && !providerFailed)
           loading("CineSrc frame loaded; awaiting player signals. Video playback is unverified.");
-      } else if (isMovie) {
+      } else if (isMovie && !playbackOnly()) {
         if (movieLoadTimer !== null) { clock.clearTimeout(movieLoadTimer); movieLoadTimer = null; }
         get("player-loading").hidden = true;
         get("screen-reader-status").textContent = "Movie frame loaded. Playback remains unverified. Press Back to return to Horizon Watch.";
@@ -2724,6 +2768,7 @@
       if (disposed || activeFrame !== frame || frame.src === "about:blank") return;
       frameLoaded = false;
       diagnostics.recordFrame("error");
+      if (playbackOnly()) labStatus = "Iframe error; playback unavailable or blocked.";
       if (provider === providers.VIDBOLT && boltSession) boltSession.frameErrorAt = now();
       if (state === STATES.DIAGNOSTICS_OPEN) renderDiagnostics();
       providerFailed = true;

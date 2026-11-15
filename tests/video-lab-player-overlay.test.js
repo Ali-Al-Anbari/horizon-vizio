@@ -21,7 +21,7 @@ const ids = ["player-frame", "player-loading", "remote-capture", "overlay", "see
   "independent-subtitle-setup",
   "audio-language", "audio-language-mode", "audio-language-menu", "audio-language-status",
   "audio-lang-auto", "audio-lang-en", "audio-lang-ja", "audio-lang-de",
-  "command-status", "screen-reader-status", "provider-choice", "unload-provider", "recover-provider", "watch-fullscreen", "watch-exit", "provider-telemetry", "diagnostics-open", "diagnostics-close", "diagnostics-panel", "diag-user-agent", "diag-media-source", "diag-native-hls", "diag-html5", "diag-permissions", "diag-frame-events", "diag-events", "diag-message-checks", "diag-sources", "diag-elapsed", "diag-assessment", "diag-vidbolt-session", "compat-controls", "compat-quality", "compat-play", "compat-autoplay", "compat-reset", "compat-status", "diag-variant", "vidfast-compat-controls", "vidfast-autoplay", "vidfast-reset", "vidfast-compat-status", "diag-vidfast-mode", "vidlink-compat-controls", "vidlink-default-off", "vidlink-default-on", "vidlink-jw-on", "vidlink-focus-default", "vidlink-focus-status", "vidlink-compat-status", "diag-vidlink-mode", "vidbolt-compat-controls", "vidbolt-autoplay-toggle", "vidbolt-auto-recover", "vidbolt-stop", "vidbolt-native-focus", "diag-vidbolt-mode", "vidbolt-compat-status", "experimental-controls", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip", "player-shell"];
+  "command-status", "screen-reader-status", "provider-choice", "unload-provider", "recover-provider", "watch-fullscreen", "watch-exit", "provider-telemetry", "diagnostics-open", "diagnostics-close", "diagnostics-panel", "diag-experimental", "diag-user-agent", "diag-media-source", "diag-native-hls", "diag-html5", "diag-permissions", "diag-frame-events", "diag-events", "diag-message-checks", "diag-sources", "diag-elapsed", "diag-assessment", "diag-vidbolt-session", "compat-controls", "compat-quality", "compat-play", "compat-autoplay", "compat-reset", "compat-status", "diag-variant", "vidfast-compat-controls", "vidfast-autoplay", "vidfast-reset", "vidfast-compat-status", "diag-vidfast-mode", "vidlink-compat-controls", "vidlink-default-off", "vidlink-default-on", "vidlink-jw-on", "vidlink-focus-default", "vidlink-focus-status", "vidlink-compat-status", "diag-vidlink-mode", "vidbolt-compat-controls", "vidbolt-autoplay-toggle", "vidbolt-auto-recover", "vidbolt-stop", "vidbolt-native-focus", "diag-vidbolt-mode", "vidbolt-compat-status", "experimental-controls", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip", "player-shell"];
 const baseUrl = "https://yapgrid.com/embed/tv/2190/13/2";
 const previewOrigin = "https://horizon-video-lab-preview.ali-al-anbari.workers.dev";
 
@@ -1057,7 +1057,7 @@ test("movie provider failure and invalid ID do not claim playback", () => {
   assert.match(invalid.get("player-loading").textContent, /Invalid movie ID/);
 });
 
-test("movie provider cycles YapGrid, VidBolt, YapGrid by D-pad", () => {
+test("movie provider cycles YapGrid, VidBolt, Vidy by D-pad", () => {
   const app = setup({ search: "?type=movie&id=550&from=search&name=Fight%20Club" });
   assert.equal(app.get("player-frame").src, "https://yapgrid.com/embed/movie/550");
   app.key("ArrowDown");
@@ -1072,11 +1072,47 @@ test("movie provider cycles YapGrid, VidBolt, YapGrid by D-pad", () => {
   app.key("ArrowDown"); app.key("ArrowDown"); app.key("ArrowLeft");
   assert.equal(app.document.activeElement.id, "provider-choice");
   app.key("Enter");
-  assert.equal(app.get("player-frame").src, "https://yapgrid.com/embed/movie/550");
-  assert.equal(app.get("provider-choice").textContent, "Provider: YapGrid");
-  assert.equal(app.get("unload-provider").hidden, true);
-  assert.equal(app.get("recover-provider").hidden, false);
-  assert.equal(app.get("recover-provider").textContent, "Reload Player");
+  assert.equal(app.get("player-frame").src, "https://www.vidy.st/movie/550?autoplay=true&nextEpisode=false&episodeSelector=false&autoplayNextEpisode=false");
+  assert.equal(app.get("provider-choice").textContent, "Provider: Vidy · experimental");
+  assert.equal(app.get("unload-provider").hidden, false);
+  assert.equal(app.get("recover-provider").hidden, true);
+  assert.equal(app.get("play-pause").hidden, true);
+});
+
+test("playback-only lab selection disables host controls and never records progress from iframe load", () => {
+  const app = setup({ search: "?type=movie&id=155&provider=stellar&from=search" });
+  assert.equal(app.get("player-frame").src,
+    "https://stellar.rip/en/watch/embed/movie/155?autoPlay=true&startAt=0&nextButton=false&autoNext=false");
+  assert.equal(app.get("play-pause").hidden, true);
+  assert.equal(app.get("rewind").hidden, true);
+  assert.equal(app.get("forward").hidden, true);
+  assert.equal(app.get("subtitles").hidden, true);
+  app.get("player-frame").fire("load");
+  app.key("ArrowDown");
+  assert.equal(app.document.activeElement.id, "provider-choice");
+  app.get("diagnostics-open").click();
+  assert.match(app.get("diag-experimental").textContent, /Iframe loaded; player initialization and video unverified/);
+  assert.match(app.get("diag-experimental").textContent, /Host play, pause, and seek are undocumented/);
+});
+
+test("lab messages are passive and a switched provider ignores the old iframe", () => {
+  const saved = progressStorage();
+  const app = setup({ search: "?type=movie&id=155&provider=stellar", progressStorage: saved });
+  const old = app.get("player-frame");
+  app.message({ type: "PLAYER_EVENT", data: { event: "timeupdate", currentTime: 31, duration: 7200 } },
+    "https://stellar.rip", old.contentWindow);
+  app.key("ArrowDown");
+  app.get("diagnostics-open").click();
+  assert.match(app.get("diag-experimental").textContent, /31s/);
+  app.key("Backspace");
+  app.get("provider-choice").click();
+  assert.notEqual(app.get("player-frame"), old);
+  app.message({ type: "PLAYER_EVENT", data: { event: "timeupdate", currentTime: 99, duration: 7200 } },
+    "https://stellar.rip", old.contentWindow);
+  app.key("ArrowDown");
+  app.get("diagnostics-open").click();
+  assert.doesNotMatch(app.get("diag-experimental").textContent, /99s/);
+  assert.equal(saved.read().items.length, 0);
 });
 
 test("Watch opens VidBolt, pointer reveals controls, and Exit returns to Watch", () => {
@@ -1117,7 +1153,7 @@ test("desktop Watch auto-hides Horizon controls and blocks native iframe clicks"
   assert.equal(app.state(), "CONTROLS_VISIBLE", "pointer movement restores controls");
   app.get("provider-choice").click();
   assert.equal(app.state(), "CONTROLS_VISIBLE", "provider switching restores the visible control row");
-  assert.equal(app.get("player-frame").src, "https://yapgrid.com/embed/movie/550");
+  assert.equal(app.get("player-frame").src, "https://www.vidy.st/movie/550?autoplay=true&nextEpisode=false&episodeSelector=false&autoplayNextEpisode=false");
 });
 
 test("desktop Watch fullscreen lives in the control row, keeps the iframe, and consumes Escape", () => {
@@ -1195,8 +1231,8 @@ test("Watch provider switch remains explicit and Space exposes VidBolt Play", ()
   assert.equal(app.state(), "CONTROLS_VISIBLE");
   assert.equal(app.document.activeElement.id, "play-pause");
   app.get("provider-choice").click();
-  assert.equal(app.get("player-frame").src, "https://yapgrid.com/embed/movie/550");
-  assert.equal(app.get("provider-choice").textContent, "Provider: YapGrid");
+  assert.equal(app.get("player-frame").src, "https://www.vidy.st/movie/550?autoplay=true&nextEpisode=false&episodeSelector=false&autoplayNextEpisode=false");
+  assert.equal(app.get("provider-choice").textContent, "Provider: Vidy · experimental");
   assert.equal(app.get("watch-exit").hidden, false);
 });
 
@@ -1489,16 +1525,16 @@ test("VidBolt captions reject short ad timelines and untrusted source messages",
   assert.match(app.get("horizon-caption-text").textContent, /Local subtitle/);
 });
 
-test("provider switching keeps the same primary buttons and focus entry", () => {
+test("provider switching keeps controls for VidBolt and disables unsupported lab controls", () => {
   const app = setup({ search: "?type=movie&id=550" });
   const primary = ["rewind", "play-pause", "forward"].map(id => app.get(id));
-  for (const name of ["VidBolt", "YapGrid"]) {
+  for (const name of ["VidBolt", "Vidy · experimental"]) {
     app.key("ArrowDown"); app.get("provider-choice").focus(); app.key("Enter");
     assert.equal(app.get("provider-choice").textContent, "Provider: " + name);
     assert.deepEqual(["rewind", "play-pause", "forward"].map(id => app.get(id)), primary);
     assert.equal(app.get("experimental-controls").hidden, true);
     app.key("ArrowDown");
-    assert.equal(app.document.activeElement.id, "play-pause");
+    assert.equal(app.document.activeElement.id, name === "VidBolt" ? "play-pause" : "provider-choice");
     app.key("Backspace");
   }
 });
@@ -2443,7 +2479,7 @@ test("VidBolt episode identity and provider switches never reuse another positio
   assert.equal(next.get("player-frame").src, "https://vidbolt.xyz/tv/1396/1/3?autoPlay=true");
   const old = next.get("player-frame");
   next.key("ArrowDown"); next.get("provider-choice").click();
-  assert.equal(next.get("provider-choice").textContent, "Provider: YapGrid");
+  assert.equal(next.get("provider-choice").textContent, "Provider: Vidy · experimental");
   assert.notEqual(next.get("player-frame"), old);
 });
 
@@ -2692,9 +2728,11 @@ test("VidBolt Auto Recover opt-out survives manual reload and provider switching
   app.key("Backspace");
   app.key("ArrowDown");
   app.get("provider-choice").focus(); app.key("Enter");
-  assert.equal(app.get("provider-choice").textContent, "Provider: YapGrid");
-  app.key("ArrowDown");
-  app.get("provider-choice").focus(); app.key("Enter");
+  assert.equal(app.get("provider-choice").textContent, "Provider: Vidy · experimental");
+  for (let i = 0; i < 6; i += 1) {
+    app.key("ArrowDown");
+    app.get("provider-choice").focus(); app.key("Enter");
+  }
   assert.equal(app.get("provider-choice").textContent, "Provider: VidBolt");
   boltDiagnostics(app);
   assert.match(app.get("vidbolt-auto-recover").textContent, /OFF/);

@@ -18,7 +18,8 @@ test("YapGrid remains fallback and visible selector cycles through VidBolt", () 
   assert.equal(providers.FALLBACK, "yapgrid");
   assert.equal(providers.next("yapgrid"), "vidbolt");
   assert.equal(providers.next("vidrift"), "yapgrid");
-  assert.equal(providers.next("vidbolt"), "yapgrid");
+  assert.equal(providers.next("vidbolt"), "vidy");
+  assert.equal(providers.next("vidzen"), "yapgrid");
   assert.equal(providers.next("vidlink"), "yapgrid");
   assert.equal(providers.select("vidlink"), "vidlink");
   assert.equal(providers.select("unknown"), "yapgrid");
@@ -55,6 +56,48 @@ test("invalid TMDB identifiers do not produce provider URLs", () => {
   }
   assert.equal(catalog.parse("?type=movie&id=0&provider=vidfast").invalid, true);
   assert.equal(catalog.parse("?showId=1396&season=0&episode=2&provider=vidfast").invalid, true);
+});
+
+test("five lab providers use documented movie routes and preserve exact TV identity where supported", () => {
+  const movie = { movieId: 155 };
+  const episode = { showId: 2190, season: 16, episode: 10 };
+  const url = (target, provider) => providers.embedUrl(target, provider, "off", "https://example.test", catalog);
+  assert.equal(url(movie, "vidy"), "https://www.vidy.st/movie/155?autoplay=true&nextEpisode=false&episodeSelector=false&autoplayNextEpisode=false");
+  assert.equal(url(episode, "vidy"), "https://www.vidy.st/tv/2190/16/10?autoplay=true&nextEpisode=false&episodeSelector=false&autoplayNextEpisode=false");
+  assert.equal(url(movie, "stellar"), "https://stellar.rip/en/watch/embed/movie/155?autoPlay=true&startAt=0&nextButton=false&autoNext=false");
+  assert.equal(url(episode, "stellar"), "https://stellar.rip/en/watch/embed/tv/2190-16-10?autoPlay=true&startAt=0&nextButton=false&autoNext=false");
+  assert.equal(url(movie, "embedwave"), "https://embedwave.cc/embed/movie/155?autoplay=1");
+  assert.equal(url(episode, "embedwave"), "https://embedwave.cc/embed/tv/2190/16/10?autoplay=1");
+  assert.equal(url(movie, "apiplayer"), "https://apiplayer.ru/embed/movie/155?autoplay=1&resume=0");
+  assert.equal(url(movie, "vidzen"), "https://vidzen.fun/movie/155?autoPlay=true");
+  assert.equal(url(episode, "apiplayer"), null, "no documented way to disable its internal episode behavior");
+  assert.equal(url(episode, "vidzen"), null, "no documented exact episode route");
+  for (const value of ["vidy", "stellar", "embedwave", "apiplayer", "vidzen"]) {
+    assert.equal(providers.isPlaybackOnly(value), true);
+    assert.equal(providers.sendCommand({ contentWindow: { postMessage() {} } }, "play", [], value), false);
+    assert.equal(catalog.parse("?type=movie&id=155&provider=" + value).provider, value);
+  }
+});
+
+test("lab events are diagnostic only and require active exact origin and iframe", () => {
+  const source = { postMessage() {} };
+  const frame = { contentWindow: source };
+  const stellar = { origin: "https://stellar.rip", source,
+    data: { type: "PLAYER_EVENT", data: { event: "timeupdate", currentTime: 25, duration: 7200 } } };
+  assert.equal(providers.acceptEvent(stellar, frame, "stellar").currentTime, 25);
+  assert.equal(providers.acceptEvent({ ...stellar, origin: "https://other.test" }, frame, "stellar"), null);
+  assert.equal(providers.acceptEvent({ ...stellar, source: {} }, frame, "stellar"), null);
+  assert.equal(providers.acceptEvent(stellar, frame, "vidy"), null);
+  assert.equal(providers.acceptEvent({ ...stellar, data: { type: "PLAYER_EVENT", data: { event: "ended", currentTime: -1 } } }, frame, "stellar").currentTime, null);
+  const vidy = { origin: "https://www.vidy.st", source,
+    data: JSON.stringify({ type: "PLAYER_EVENT", event: "play", currentTime: 0, duration: 7200 }) };
+  assert.equal(providers.acceptEvent(vidy, frame, "vidy").type, "lab:play");
+  assert.equal(providers.acceptEvent({ ...vidy, data: "not json" }, frame, "vidy"), null);
+  assert.equal(providers.acceptEvent(vidy, frame, "stellar"), null);
+  const sent = [];
+  assert.equal(providers.initializeLabFrame({ contentWindow: { postMessage: (...args) => sent.push(args) } }, "stellar"), true);
+  assert.equal(sent[0][1], "https://stellar.rip");
+  assert.equal(providers.initializeLabFrame(frame, "vidy"), false);
 });
 
 test("VidFast autoPlay=true is opt-in and leaves YapGrid and baseline unchanged", () => {

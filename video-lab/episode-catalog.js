@@ -30,7 +30,9 @@
   function providerParameter(search) {
     var value = parameter(search, "provider");
     return value === "yapgrid" || value === "vidrift" || value === "vidbolt"
-      || value === "vidlink" || value === "vidfast" ? value : null;
+      || value === "vidlink" || value === "vidfast" || value === "vidy"
+      || value === "stellar" || value === "embedwave" || value === "apiplayer"
+      || value === "vidzen" ? value : null;
   }
   function parse(search) {
     if (parameter(search, "type") === "movie") {
@@ -92,7 +94,9 @@
       + (showTitle ? "&name=" + encodeURIComponent(showTitle.slice(0, 120)) : "")
       + (positive(tvdbId) ? "&tvdb=" + tvdbId : "")
       + ((provider === "vidrift" || provider === "vidbolt" || provider === "vidlink"
-        || provider === "vidfast" || provider === "yapgrid") && provider !== primary
+        || provider === "vidfast" || provider === "yapgrid" || provider === "vidy"
+        || provider === "stellar" || provider === "embedwave" || provider === "apiplayer"
+        || provider === "vidzen") && provider !== primary
         ? "&provider=" + provider : "");
   }
   function embedUrl(target) {

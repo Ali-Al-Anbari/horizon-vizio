@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self' https://interactive-examples.mdn.mozilla.net https://media.w3.org https://devstreaming-cdn.apple.com; connect-src 'self'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob: data: https://interactive-examples.mdn.mozilla.net https://media.w3.org https://devstreaming-cdn.apple.com; connect-src 'self' https://devstreaming-cdn.apple.com; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'" />
     <title>Horizon Video Lab</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="video-lab.css" />
@@ -52,6 +52,7 @@
           <p id="relay-http"></p>
           <p id="media-state"></p>
           <p id="media-events"></p>
+          <p id="hls-state"></p>
           <p>HTTP status is not exposed by this video element; a media error alone cannot distinguish codec, response, and network failures.</p>
         </div>
         <p class="hint">Arrows move focus · OK activates · Back exits viewport fullscreen first, then returns to Horizon. The 25-minute test has a single continuous timeline and a Next checkpoint control for 5, 10, 15, 20, and 24 minutes.</p>

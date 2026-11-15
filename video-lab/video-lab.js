@@ -111,6 +111,7 @@
     var diagnostics = get("diagnostics");
     var showDiagnostics = /(?:^|[?&])diagnostics=1(?:&|$)/.test(nav.search || "");
     var recentEvents = [];
+    var hls = null, hlsRequest = 0, hlsLibraryPromise = null, hlsFailure = false;
     diagnostics.hidden = !showDiagnostics;
 
     function say(message) { if (!disposed && status.textContent !== message) status.textContent = message; }
@@ -151,15 +152,122 @@
         if (!disposed && selected === name) output.textContent = "Relay HEAD unavailable; check media events.";
       });
     }
+    function hlsReport(message) {
+      if (showDiagnostics) get("hls-state").textContent = message;
+    }
+    function disableNativeSubtitles() {
+      var tracks = video.textTracks;
+      if (!tracks) return;
+      for (var i = 0; i < tracks.length; i++) tracks[i].mode = "disabled";
+    }
+    function destroyHls() {
+      hlsRequest += 1;
+      if (hls) { hls.destroy(); hls = null; }
+      hlsFailure = false;
+      hlsReport("");
+    }
+    function loadHlsLibrary() {
+      if (root.Hls) return Promise.resolve(root.Hls);
+      if (hlsLibraryPromise) return hlsLibraryPromise;
+      hlsLibraryPromise = new Promise(function (resolve, reject) {
+        var script = doc.createElement("script");
+        script.src = "vendor/hls.light.1.5.20.min.js";
+        script.onload = function () { root.Hls ? resolve(root.Hls) : reject(Error("library_unavailable")); };
+        script.onerror = function () { reject(Error("library_load_failed")); };
+        doc.head.appendChild(script);
+      }).catch(function (error) { hlsLibraryPromise = null; throw error; });
+      return hlsLibraryPromise;
+    }
+    function hlsCapability() {
+      var native = video.canPlayType && (video.canPlayType("application/vnd.apple.mpegurl")
+        || video.canPlayType("application/x-mpegURL"));
+      var mse = root.MediaSource || root.WebKitMediaSource;
+      if (mse && typeof mse.isTypeSupported === "function") {
+        var codecs = ['video/mp4; codecs="avc1.42001e, mp4a.40.2"',
+          'video/mp4; codecs="avc1.4d401e, mp4a.40.2"',
+          'video/mp4; codecs="avc1.64001e, mp4a.40.2"'];
+        if (codecs.some(function (type) { return mse.isTypeSupported(type); })) return "mse";
+      }
+      // canPlayType is only a hint; the media element still reports actual errors.
+      return native ? "native" : "unsupported";
+    }
+    function chooseHls(request) {
+      var path = hlsCapability();
+      hlsReport("HLS path: " + path + ".");
+      if (path === "unsupported") {
+        hlsFailure = true;
+        say("HLS unsupported: no native HLS or tested H.264/AAC MediaSource path. Try MP4.");
+        return;
+      }
+      if (path === "native") {
+        video.src = SOURCES.hls.url; video.load(); disableNativeSubtitles();
+        say("Native HLS loading. Press Play after metadata loads; confirm picture and sound.");
+        return;
+      }
+      say("Loading the local HLS adapter. Press Play after media is ready.");
+      loadHlsLibrary().then(function (Hls) {
+        if (disposed || selected !== "hls" || request !== hlsRequest) return;
+        if (!Hls.isSupported()) {
+          if (video.canPlayType && (video.canPlayType("application/vnd.apple.mpegurl")
+            || video.canPlayType("application/x-mpegURL"))) {
+            hlsReport("HLS adapter unavailable; using native HLS hint.");
+            video.src = SOURCES.hls.url; video.load(); disableNativeSubtitles();
+            say("Native HLS loading. Press Play after metadata loads; confirm picture and sound.");
+            return;
+          }
+          hlsFailure = true;
+          say("HLS adapter reports this MediaSource/codec combination unsupported.");
+          return;
+        }
+        hls = new Hls({ enableWorker: false, maxBufferLength: 20, backBufferLength: 10,
+          renderTextTracksNatively: false });
+        hls.on(Hls.Events.MEDIA_ATTACHED, function () {
+          if (request === hlsRequest) hls.loadSource(SOURCES.hls.url);
+        });
+        hls.on(Hls.Events.MANIFEST_PARSED, function (_event, data) {
+          if (request !== hlsRequest) return;
+          disableNativeSubtitles();
+          hlsReport("Manifest parsed; " + (data && data.levels ? data.levels.length : 0) + " levels. No autoplay.");
+          record("hls-manifest");
+          say("HLS manifest parsed. Press Play; confirm moving picture and sound on the TV.");
+        });
+        hls.on(Hls.Events.ERROR, function (_event, data) {
+          if (request !== hlsRequest) return;
+          var details = safeDetail(data && data.details) || "unknown";
+          var type = safeDetail(data && data.type) || "unknown";
+          var code = data && data.response && Number(data.response.code);
+          var stage = /manifest|level/i.test(details) ? "manifest/variant"
+            : /frag|segment/i.test(details) ? "media segment" : "media/decode";
+          var cause = type === "networkError"
+            ? code > 0 ? "HTTP " + code : "network or CORS failure; HTTP status unavailable"
+            : type === "mediaError" ? "stream parsing or decode failure"
+              : "adapter failure";
+          var report = "HLS " + stage + " error: " + type + " / " + details + " (" + cause + ").";
+          hlsReport(report); record("hls-error:" + stage);
+          if (data && data.fatal) {
+            hlsFailure = true;
+            say(report + " Select HLS again to retry; no automatic provider switch.");
+          } else say(report);
+        });
+        hls.attachMedia(video);
+      }).catch(function () {
+        if (disposed || selected !== "hls" || request !== hlsRequest) return;
+        hlsFailure = true;
+        say("Local HLS adapter failed to load. Select HLS again to retry.");
+      });
+    }
     function choose(name) {
-      if (disposed || !SOURCES[name] || selected === name) return;
+      if (disposed || !SOURCES[name] || selected === name && !(name === "hls" && hlsFailure)) return;
       if (selected !== null) video.pause();
+      destroyHls();
       selected = name;
       checkpointIndex = 0;
-      video.loop = name !== "long";
+      video.loop = name !== "long" && name !== "hls";
       say("Loading " + SOURCES[name].name + ". Press Play when ready.");
-      video.src = SOURCES[name].url;
-      video.load();
+      if (name === "hls") {
+        video.removeAttribute("src"); video.load();
+        chooseHls(hlsRequest);
+      } else { video.src = SOURCES[name].url; video.load(); }
       SOURCE_KEYS.forEach(function (key) {
         get("source-" + key).setAttribute("aria-pressed", String(name === key));
       });
@@ -226,6 +334,7 @@
     function cleanup() {
       if (disposed) return;
       disposed = true;
+      destroyHls();
       if (viewportFullscreen) {
         viewportFullscreen = false;
         player.classList.remove("viewport-fullscreen");
@@ -276,7 +385,9 @@
     });
     doc.addEventListener("keydown", onKey);
     video.addEventListener("loadstart", function () { record("loadstart"); });
-    video.addEventListener("loadedmetadata", function () { record("loadedmetadata"); updateTime(); say("Metadata loaded. Press Play and check picture and sound."); });
+    video.addEventListener("loadedmetadata", function () { record("loadedmetadata"); updateTime();
+      if (selected === "hls") disableNativeSubtitles();
+      say("Metadata loaded. Press Play and check picture and sound."); });
     video.addEventListener("canplay", function () { record("canplay"); say("Can play event received. Press Play and check the TV."); });
     video.addEventListener("playing", function () { record("playing"); updatePlay(); say("Playing reported. Confirm picture and audible sound on the TV."); });
     video.addEventListener("pause", updatePlay);

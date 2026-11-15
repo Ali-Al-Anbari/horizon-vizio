@@ -8,7 +8,7 @@ const FLOWER_UPSTREAM = "https://interactive-examples.mdn.mozilla.net/media/cc0-
 
 const source = readFileSync(new URL("../video-lab/video-lab.js", import.meta.url), "utf8");
 
-function setup(search = "", canPlayType, fetchImpl) {
+function setup(search = "", canPlayType, fetchImpl, support = {}) {
   const nodes = new Map();
   const documentListeners = {};
   const windowListeners = {};
@@ -37,7 +37,7 @@ function setup(search = "", canPlayType, fetchImpl) {
   }
   document.body = node("body");
   for (const id of ["video", "player", "status", "progress", "time", "source-label", "capabilities",
-    "diagnostics", "media-hints", "relay-http", "media-state", "media-events", "source-original", "source-mp4", "source-relay", "source-flowerRelay",
+    "diagnostics", "media-hints", "relay-http", "media-state", "media-events", "hls-state", "source-original", "source-mp4", "source-relay", "source-flowerRelay",
     "source-local", "source-faststart", "source-compat", "source-long", "source-hls",
     "seek-back", "play", "seek-forward", "checkpoint", "fullscreen", "exit", "embed-lab"]) nodes.set(id, node(id));
   const video = nodes.get("video");
@@ -50,13 +50,14 @@ function setup(search = "", canPlayType, fetchImpl) {
   video.loadCount = 0;
   video.pauseCount = 0;
   video.playCount = 0;
-  video.canPlayType = canPlayType || (type => type.includes("mpegurl") ? "" : "probably");
+  video.canPlayType = canPlayType || (type => type.toLowerCase().includes("mpegurl") ? "" : "probably");
   video.load = () => { video.loadCount++; };
   video.pause = () => { video.pauseCount++; video.paused = true; video.dispatch("pause"); };
   video.play = () => { video.playCount++; video.paused = false; video.dispatch("playing"); return Promise.resolve(); };
   const player = nodes.get("player");
   const nav = { search, replace(url) { navigation.push(url); } };
-  const window = { fetch: fetchImpl, addEventListener(name, callback) { (windowListeners[name] ||= []).push(callback); } };
+  const window = { fetch: fetchImpl, MediaSource: support.MediaSource, Hls: support.Hls,
+    addEventListener(name, callback) { (windowListeners[name] ||= []).push(callback); } };
   runInNewContext(source, { window, document, location: nav });
   const key = (name, repeat = false, keyCode = 0) => {
     const event = { key: name, repeat, keyCode, prevented: false,
@@ -81,12 +82,12 @@ test("preview package contains only the isolated Video Lab assets", () => {
   assert.deepEqual(config.secrets.required,
     ["TEAM_DOMAIN", "ACCESS_AUD", "OWNER_EMAIL", "PLAYER_BRIDGE_TOKEN", "SUBDL_API_KEY"]);
   assert.equal(config.browser, undefined);
-  assert.match(html, /media-src 'self' https:\/\/interactive-examples\.mdn\.mozilla\.net https:\/\/media\.w3\.org https:\/\/devstreaming-cdn\.apple\.com/);
-  assert.match(html, /connect-src 'self'/);
+  assert.match(html, /media-src 'self' blob: data: https:\/\/interactive-examples\.mdn\.mozilla\.net https:\/\/media\.w3\.org https:\/\/devstreaming-cdn\.apple\.com/);
+  assert.match(html, /connect-src 'self' https:\/\/devstreaming-cdn\.apple\.com/);
   assert.match(html, /id="source-relay"/);
   assert.match(html, /id="source-flowerRelay"/);
   assert.match(html, /id="embed-lab"/);
-  assert.doesNotMatch(html, /<iframe|hls\.js|artplayer|browser-run/i);
+  assert.doesNotMatch(html, /<iframe|artplayer|browser-run/i);
 });
 
 test("experimental embed entry unloads video and stays within isolated preview", () => {
@@ -97,15 +98,16 @@ test("experimental embed entry unloads video and stays within isolated preview",
   assert.equal(app.video.src, "");
 });
 
-test("the existing external samples remain available and loading never autoplays", () => {
+test("the existing external samples remain available and unsupported HLS does not autoplay", () => {
   const app = setup();
   assert.equal(app.video.src, "https://media.w3.org/2010/05/sintel/trailer.mp4");
   assert.equal(app.video.playCount, 0);
   app.get("source-hls").click();
-  assert.equal(app.video.src, "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8");
+  assert.equal(app.video.src, "");
   assert.equal(app.video.playCount, 0);
   assert.equal(app.get("source-hls").attributes["aria-pressed"], "true");
   assert.match(app.get("capabilities").textContent, /native HLS no/);
+  assert.match(app.get("status").textContent, /HLS unsupported/);
 });
 
 test("direct and relayed Sintel select the same fixed upstream without changing player", async () => {
@@ -234,7 +236,67 @@ test("switching sources stops the previous playback before loading HLS", () => {
   app.get("source-hls").click();
   assert.equal(app.video.paused, true);
   assert.equal(app.video.loadCount, previousLoads + 1);
-  assert.match(app.video.src, /bipbop_16x9_variant\.m3u8$/);
+  assert.equal(app.video.src, "");
+});
+
+test("experimental HLS reuses the video element, gates MSE codecs, and never autoplays", async () => {
+  const instances = [];
+  class FakeHls {
+    static Events = { MEDIA_ATTACHED: "attached", MANIFEST_PARSED: "manifest", ERROR: "error" };
+    static isSupported() { return true; }
+    constructor(config) { this.config = config; this.handlers = {}; instances.push(this); }
+    on(name, callback) { this.handlers[name] = callback; }
+    attachMedia(video) { this.video = video; this.handlers.attached(); }
+    loadSource(url) { this.url = url; }
+    destroy() { this.destroyed = true; }
+    emit(name, data) { this.handlers[name]?.(name, data); }
+  }
+  const mse = { isTypeSupported(type) { return type.includes("avc1.4d401e"); } };
+  const app = setup("?diagnostics=1", undefined, undefined, { MediaSource: mse, Hls: FakeHls });
+  const video = app.video;
+  app.get("source-hls").click();
+  await Promise.resolve();
+  assert.equal(instances.length, 1);
+  assert.equal(instances[0].video, video);
+  assert.match(instances[0].url, /bipbop_16x9_variant\.m3u8$/);
+  assert.equal(instances[0].config.enableWorker, false);
+  assert.equal(video.playCount, 0);
+  assert.equal(video.loop, false);
+  instances[0].emit("manifest", { levels: [{}, {}] });
+  assert.match(app.get("hls-state").textContent, /2 levels/);
+  app.get("play").click();
+  assert.equal(video.playCount, 1);
+  instances[0].emit("error", { type: "networkError", details: "fragLoadError",
+    fatal: true, response: { code: 403 }, url: "https://example.invalid/private?token=hidden" });
+  assert.match(app.get("status").textContent, /media segment.*HTTP 403.*Select HLS again to retry/);
+  assert.doesNotMatch(app.get("status").textContent, /token|private/);
+  app.get("source-hls").click();
+  await Promise.resolve();
+  assert.equal(instances[0].destroyed, true);
+  assert.equal(instances.length, 2);
+  app.get("source-mp4").click();
+  assert.equal(instances[1].destroyed, true);
+  assert.equal(video.src, SINTEL_UPSTREAM);
+});
+
+test("native HLS remains a guarded fallback and switching sources invalidates pending adapter work", async () => {
+  const native = setup("", type => type.toLowerCase().includes("mpegurl") ? "maybe" : "probably");
+  native.get("source-hls").click();
+  assert.match(native.video.src, /bipbop_16x9_variant\.m3u8$/);
+  assert.equal(native.video.playCount, 0);
+  const nativeAfterMse = setup("", type => type.toLowerCase().includes("mpegurl") ? "maybe" : "probably",
+    undefined, { MediaSource: { isTypeSupported: () => true }, Hls: { isSupported: () => false } });
+  nativeAfterMse.get("source-hls").click();
+  await Promise.resolve();
+  assert.match(nativeAfterMse.video.src, /bipbop_16x9_variant\.m3u8$/);
+  assert.equal(nativeAfterMse.video.playCount, 0);
+  const pending = setup("", undefined, undefined, { MediaSource: { isTypeSupported: () => true },
+    Hls: { isSupported: () => false } });
+  pending.get("source-hls").click();
+  pending.get("source-mp4").click();
+  await Promise.resolve();
+  assert.equal(pending.video.src, SINTEL_UPSTREAM);
+  assert.doesNotMatch(pending.get("status").textContent, /adapter reports/);
 });
 
 test("remote arrows reach sources and controls; OK plays and pauses once", () => {

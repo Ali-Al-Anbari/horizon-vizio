@@ -10,7 +10,7 @@
     NATIVE_FOCUS: "NATIVE_FOCUS",
   };
   var PREVIEW_ORIGIN = "https://horizon-video-lab-preview.ali-al-anbari.workers.dev";
-  var CONTROL_IDS = ["rewind", "play-pause", "forward", "previous-episode", "subtitles", "episodes", "next-episode", "manual-end", "provider-choice", "unload-provider", "diagnostics-open", "recover-provider", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip", "watch-exit", "watch-fullscreen", "audio-language"];
+  var CONTROL_IDS = ["rewind", "play-pause", "forward", "previous-episode", "subtitles", "episodes", "next-episode", "manual-end", "provider-choice", "unload-provider", "diagnostics-open", "recover-provider", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip", "watch-exit", "watch-fullscreen", "audio-language", "vidzen-server"];
   var COMMANDS = { rewind: "seek_backward", "play-pause": "pause_toggle", forward: "seek_forward" };
   var IDLE_MS = 5000;
   // A watchdog for a future acknowledged adapter, not a delay before sending.
@@ -335,6 +335,12 @@
     var providerOptions = [];
     var providerMenuSelected = 0;
     var providerMenuOpen = false;
+    var vidzenServerOptions = providers.vidzenServers();
+    var vidzenServerLabels = { auto: "Auto", hyperion: "Hyperion", proxima: "Proxima",
+      mars: "Mars", jupiter: "Jupiter" };
+    var currentVidzenServer = "auto";
+    var vidzenServerMenuOpen = false;
+    var vidzenServerSelected = 0;
     var providerReady = false;
     var providerPlaying = false;
     var providerFailed = false;
@@ -378,6 +384,10 @@
       if (label) label.textContent = text;
       else choice.textContent = text;
       get("provider-indicator").textContent = providerLabel();
+      get("vidzen-server").hidden = provider !== "vidzen";
+      get("vidzen-server-label").textContent = vidzenServerLabels[currentVidzenServer];
+      get("vidzen-server").setAttribute("aria-label", "Requested VidZen server: "
+        + vidzenServerLabels[currentVidzenServer] + ". Press OK to choose a server");
       get("playback-timeline").hidden = true;
       var unloadBtn = get("unload-provider");
       if (unloadBtn) {
@@ -446,7 +456,7 @@
     function renderBoltPlayPause() {
       var button = get("play-pause");
       if (provider !== providers.VIDBOLT) {
-        var pending = labPending || vidzenPending;
+        var pending = (labPending && !labPending.playable) || vidzenPending;
         var label = pending ? "Awaiting player" : virtualPaused ? "Resume"
           : labPaused ? "Play" : providerPlaying ? "Pause" : "Play / Pause";
         get("play-pause-label").textContent = label;
@@ -484,7 +494,25 @@
         var pending = labPending;
         if (!pending || pending.generation !== labGeneration || disposed) return;
         clearLabPending();
+        if (pending.kind === "server" && pending.playable) {
+          get("player-loading").hidden = true;
+          get("player-loading").classList.remove("is-warning");
+          get("command-status").textContent = "VidZen playback active (requested "
+            + vidzenServerLabels[currentVidzenServer]
+            + "; actual server and checkpoint unconfirmed).";
+          renderBoltPlayPause(); resetIdle();
+          return;
+        }
         unloadFrame();
+        if (pending.kind === "server") {
+          get("player-loading").classList.add("is-warning");
+          loading("VidZen did not confirm the requested server near the verified checkpoint. Use Reload or Provider.");
+          if (state === STATES.PLAYBACK_HIDDEN) showControls();
+          if (state === STATES.CONTROLS_VISIBLE) focusControl(23);
+          get("command-status").textContent = "Server playback unconfirmed; stored progress is unchanged.";
+          renderBoltPlayPause(); resetIdle();
+          return;
+        }
         virtualPaused = { provider: provider, identity: boltIdentity(),
           position: pending.baseline.verifiedPosition === undefined
             ? pending.baseline.position : pending.baseline.verifiedPosition,
@@ -1039,7 +1067,7 @@
         if (button) button.tabIndex = visible && !button.hidden
           && !button.disabled
             && (index < 12 || usesExperimentalRow() || index === 20
-            || index === 21 && desktopWatch || index === 22) ? 0 : -1;
+            || index === 21 && desktopWatch || index === 22 || index === 23) ? 0 : -1;
       });
     }
     function focusControl(index) {
@@ -1278,7 +1306,7 @@
         focus(upNextButtons[0]);
         return true;
       }
-      var rows = [[0, 1, 2], [3, 5, 6, 8, 11, 7, 9, 4, 22, 10, 21, 20]]
+      var rows = [[0, 1, 2], [3, 5, 6, 8, 23, 11, 7, 9, 4, 22, 10, 21, 20]]
         .map(function (row) { return row.filter(function (index) {
           return controls[index] && !controls[index].hidden && !controls[index].disabled;
         }); }).filter(function (row) { return row.length; });
@@ -1316,6 +1344,7 @@
     }
     function closeMenu() {
       if (state !== STATES.SUBMENU_OPEN) return;
+      if (vidzenServerMenuOpen) { closeVidzenServerMenu(); return; }
       if (providerMenuOpen) { closeProviderMenu(); return; }
       if (audioLanguageMenuOpen) {
         closeAudioLanguageMenu();
@@ -1477,6 +1506,60 @@
       if (!chosen) return;
       closeProviderMenu();
       if (chosen !== provider) switchProvider(chosen);
+    }
+    function openVidzenServerMenu() {
+      if (state !== STATES.CONTROLS_VISIBLE || provider !== "vidzen") return;
+      clearIdle();
+      vidzenServerSelected = Math.max(0, vidzenServerOptions.indexOf(currentVidzenServer));
+      var list = get("vidzen-server-options");
+      var buttons = vidzenServerOptions.map(function (value, index) {
+        var button = doc.createElement("button");
+        button.type = "button";
+        button.textContent = vidzenServerLabels[value] + (value === currentVidzenServer ? "  ✓" : "");
+        button.setAttribute("aria-current", value === currentVidzenServer ? "true" : "false");
+        button.addEventListener("click", function () { vidzenServerSelected = index; chooseVidzenServer(); });
+        return button;
+      });
+      list.replaceChildren.apply(list, buttons);
+      get("vidzen-server-menu").hidden = false;
+      vidzenServerMenuOpen = true;
+      state = STATES.SUBMENU_OPEN;
+      focusVidzenServerOption();
+    }
+    function focusVidzenServerOption() {
+      var list = get("vidzen-server-options");
+      var button = list.children[vidzenServerSelected];
+      if (button) focus(button);
+    }
+    function closeVidzenServerMenu() {
+      if (!vidzenServerMenuOpen) return;
+      get("vidzen-server-menu").hidden = true;
+      vidzenServerMenuOpen = false;
+      state = STATES.CONTROLS_VISIBLE;
+      focusControl(23);
+      resetIdle();
+    }
+    function chooseVidzenServer() {
+      var chosen = vidzenServerOptions[vidzenServerSelected];
+      if (!chosen) return;
+      closeVidzenServerMenu();
+      if (chosen === currentVidzenServer) return;
+      if (labPending || vidzenPending) {
+        get("command-status").textContent = "Wait for the current position request before changing VidZen server.";
+        return;
+      }
+      var saved = readPlayerProgress(boltIdentity());
+      var baseline = labPositionUsable() ? { position: labPosition, duration: labDuration }
+        : saved && !saved.completed ? { position: saved.position, duration: saved.duration } : null;
+      unloadFrame();
+      currentVidzenServer = chosen;
+      renderProviderChoice();
+      loadProviderFrame(baseline && baseline.position, true);
+      if (baseline && baseline.position > 0) armLabPending("server", baseline.position, baseline);
+      get("command-status").textContent = "Requested VidZen " + vidzenServerLabels[chosen]
+        + " (actual server may vary)" + (baseline ? " near " + boltClock(baseline.position)
+          + "; awaiting playback confirmation." : "; playback position unavailable.");
+      focusControl(23);
     }
     function closeAudioLanguageMenu() {
       if (!audioLanguageMenuOpen) return;
@@ -2211,6 +2294,7 @@
       }
       if (id === "diagnostics-open") { openDiagnostics(); return; }
       if (id === "provider-choice") { openProviderMenu(); return; }
+      if (id === "vidzen-server") { openVidzenServerMenu(); return; }
       if (id === "unload-provider") { stopAndUnloadProvider(); return; }
       if (id === "recover-provider") {
         if (provider === providers.YAPGRID) reloadYapGrid();
@@ -2307,6 +2391,15 @@
         return;
       }
       if (state === STATES.SUBMENU_OPEN) {
+        if (vidzenServerMenuOpen) {
+          if (key === "Back") closeVidzenServerMenu();
+          else if (key === "ArrowUp" || key === "ArrowDown") {
+            vidzenServerSelected = Math.max(0, Math.min(vidzenServerOptions.length - 1,
+              vidzenServerSelected + (key === "ArrowDown" ? 1 : -1)));
+            focusVidzenServerOption();
+          } else if (key === "OK" && !event.repeat) chooseVidzenServer();
+          return;
+        }
         if (providerMenuOpen) {
           if (key === "Back") closeProviderMenu();
           else if (key === "ArrowUp" || key === "ArrowDown") {
@@ -2680,7 +2773,7 @@
         nav.origin, catalog, provider === providers.VIDFAST ? vidFastMode
           : provider === providers.VIDLINK ? vidLinkMode
           : provider === providers.VIDBOLT ? (vidBoltAutoplay ? "autoPlayTrue" : "autoPlayOff")
-          : compatibilityMode, labStart, currentAudioLanguage);
+          : compatibilityMode, labStart, currentAudioLanguage, currentVidzenServer);
       labRestoreTarget = playbackOnly() && (provider === "vidy" || provider === "stellar" || provider === "vidzen")
         ? labStart : null;
       if (!url) {
@@ -2782,17 +2875,48 @@
           && message.currentTime <= message.duration + 2;
         if (labPending) {
           if (labPending.generation !== labGeneration || labPending.identity !== boltIdentity()) return;
+          var confirmedType = message.type === "lab:play" || message.type === "lab:timeupdate"
+            || (provider === "vidzen" && message.type === "lab:status" && message.paused === false);
+          if (credible && confirmedType) {
+            labPending.playable = true;
+            get("player-loading").hidden = true;
+          }
           if (!credible || Math.abs(message.currentTime - labPending.target) > LAB_POSITION_TOLERANCE
-              || message.type !== "lab:play" && message.type !== "lab:timeupdate") {
+              || !confirmedType) {
             labStatus += " Requested position not confirmed.";
+            if (provider === "vidzen" && credible
+                && (message.type === "lab:status" || message.type === "lab:timeupdate")) {
+              labPosition = message.currentTime;
+              labDuration = message.duration;
+              labPositionAt = now();
+              if (message.type === "lab:status") {
+                providerPlaying = !message.paused;
+                labPaused = message.paused;
+                vidzenStatusAt = now();
+              } else {
+                providerPlaying = true;
+                labPaused = false;
+              }
+              renderTimeline();
+              renderBoltPlayPause();
+              if (labPending.kind === "server" && labRestoreTarget !== null
+                  && labRestoreTarget > 0 && !vidzenPending) {
+                var serverRestoreAt = labRestoreTarget;
+                labRestoreTarget = null;
+                sendVidzenControl("seek", serverRestoreAt - message.currentTime);
+              }
+            }
             if (state === STATES.DIAGNOSTICS_OPEN) renderDiagnostics();
             return;
           }
           var confirmedSeek = labPending.kind === "seek";
+          var confirmedServer = labPending.kind === "server";
           clearLabPending();
           virtualPaused = null;
           get("command-status").textContent = providerLabel() + " "
-            + (confirmedSeek ? "seek" : "resume") + " confirmed near " + boltClock(message.currentTime) + ".";
+            + (confirmedSeek ? "seek confirmed" : confirmedServer
+              ? "position confirmed after server request" : "resume confirmed")
+            + " near " + boltClock(message.currentTime) + ".";
           get("player-loading").hidden = true;
           if (confirmedSeek) storePlayerProgress(message.currentTime, message.duration, false, true, true);
         }
@@ -3303,7 +3427,8 @@
     playerShell.addEventListener("click", function (event) {
       if (state === STATES.SUBMENU_OPEN) {
         var target = event.target;
-        var menu = providerMenuOpen ? get("provider-menu")
+        var menu = vidzenServerMenuOpen ? get("vidzen-server-menu")
+          : providerMenuOpen ? get("provider-menu")
           : audioLanguageMenuOpen ? get("audio-language-menu")
           : provider === providers.VIDBOLT ? get("independent-subtitle-menu") : get("subtitle-menu");
         if (menu && (target === menu || menu.contains && menu.contains(target))) return;
@@ -3311,6 +3436,7 @@
         var id = control && control.id;
         closeMenu();
         if (id === "provider-choice") openProviderMenu();
+        else if (id === "vidzen-server") openVidzenServerMenu();
         else if (id === "audio-language") openAudioLanguageMenu();
         else if (id === "subtitles" && !get("subtitles").disabled) openMenu();
         return;

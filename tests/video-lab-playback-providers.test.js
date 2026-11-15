@@ -90,7 +90,8 @@ test("lab events are diagnostic only and require active exact origin and iframe"
   assert.equal(providers.acceptEvent(stellar, frame, "vidy"), null);
   assert.equal(providers.acceptEvent({ ...stellar, data: { type: "PLAYER_EVENT", data: { event: "ended", currentTime: -1 } } }, frame, "stellar").currentTime, null);
   const vidy = { origin: "https://www.vidy.st", source,
-    data: JSON.stringify({ type: "PLAYER_EVENT", event: "play", currentTime: 0, duration: 7200 }) };
+    data: JSON.stringify({ type: "PLAYER_EVENT", data: { event: "play", currentTime: 0,
+      duration: 7200, id: "155", mediaType: "movie" } }) };
   assert.equal(providers.acceptEvent(vidy, frame, "vidy").type, "lab:play");
   assert.equal(providers.acceptEvent({ ...vidy, origin: "https://vidy.st" }, frame, "vidy").type, "lab:play");
   assert.equal(providers.acceptEvent({ ...vidy, data: "not json" }, frame, "vidy"), null);
@@ -99,6 +100,54 @@ test("lab events are diagnostic only and require active exact origin and iframe"
   assert.equal(providers.initializeLabFrame({ contentWindow: { postMessage: (...args) => sent.push(args) } }, "stellar"), true);
   assert.equal(sent[0][1], "https://stellar.rip");
   assert.equal(providers.initializeLabFrame(frame, "vidy"), false);
+});
+
+test("Vidy nested playback events require exact iframe, origin, and media identity", () => {
+  const source = { postMessage() {} };
+  const frame = { src: "https://www.vidy.st/movie/155?autoplay=true", contentWindow: source };
+  const event = data => ({ origin: "https://www.vidy.st", source,
+    data: JSON.stringify({ type: "PLAYER_EVENT", data }) });
+  const target = { movieId: 155 };
+  const current = event({ event: "timeupdate", currentTime: 123.4, duration: 7200,
+    id: "155", mediaType: "movie" });
+  assert.equal(providers.acceptEvent(current, frame, "vidy", target).currentTime, 123.4);
+  const alternate = event({ event: "timeupdate", timestamp: 124.2, duration: 7200,
+    progress: 1.7, id: "155", type: "movie" });
+  assert.equal(providers.acceptEvent(alternate, frame, "vidy", target).currentTime, 124.2);
+  assert.equal(providers.acceptEvent(event({ event: "timeupdate", currentTime: 9,
+    duration: 7200, id: "550", mediaType: "movie" }), frame, "vidy", target), null);
+  assert.equal(providers.acceptEvent(event({ event: "timeupdate", currentTime: 9,
+    duration: 7200, mediaType: "movie" }), frame, "vidy", target), null);
+  assert.equal(providers.acceptEvent({ ...current, source: {} }, frame, "vidy", target), null);
+  assert.equal(providers.acceptEvent({ ...current, origin: "https://evil.test" }, frame, "vidy", target), null);
+  assert.equal(providers.acceptEvent({ ...current, data: JSON.stringify({ type: "MEDIA_DATA", data: "{}" }) },
+    frame, "vidy", target), null);
+  const tvFrame = { src: "https://www.vidy.st/tv/1399/1/1?autoplay=true", contentWindow: source };
+  const tv = event({ event: "timeupdate", currentTime: 300, duration: 3600,
+    id: "1399", mediaType: "tv", season: 1, episode: 1 });
+  assert.equal(providers.acceptEvent(tv, tvFrame, "vidy", { showId: 1399, season: 1, episode: 1 }).currentTime, 300);
+  assert.equal(providers.acceptEvent(tv, tvFrame, "vidy", { showId: 1399, season: 1, episode: 2 }), null);
+  assert.equal(providers.diagnosticRejection(event({ event: "timeupdate", currentTime: 9,
+    duration: 7200, id: "550", mediaType: "movie" }), frame, "vidy", target), "identity:mismatch-tmdbId");
+  assert.equal(providers.diagnosticRejection({ ...current, data: JSON.stringify({ type: "MEDIA_DATA", data: "{}" }) },
+    frame, "vidy", target), "media-data");
+  assert.equal(providers.diagnosticRejection({ ...current, origin: "https://evil.test" },
+    frame, "vidy", target), "origin");
+});
+
+test("VidZen server URLs use only verified choices and preserve exact episode routes", () => {
+  assert.deepEqual(Array.from(providers.compatible({ showId: 1399 })),
+    ["yapgrid", "vidbolt", "vidy", "stellar", "vidzen"]);
+  assert.deepEqual(Array.from(providers.vidzenServers()),
+    ["auto", "hyperion", "proxima", "mars", "jupiter"]);
+  const url = (target, server) => providers.embedUrl(target, "vidzen", "off",
+    "https://example.test", catalog, "baseline", 120, "auto", server);
+  assert.equal(url({ movieId: 155 }, "hyperion"),
+    "https://vidzen.fun/movie/155?autoPlay=true&server=hyperion&startAt=120");
+  assert.equal(url({ showId: 1399, season: 1, episode: 1 }, "jupiter"),
+    "https://vidzen.fun/tv/1399/1/1?autoPlay=true&server=jupiter&startAt=120");
+  assert.equal(url({ movieId: 155 }, "titan"),
+    "https://vidzen.fun/movie/155?autoPlay=true&startAt=120");
 });
 
 test("VidFast autoPlay=true is opt-in and leaves YapGrid and baseline unchanged", () => {

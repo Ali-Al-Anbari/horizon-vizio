@@ -13,7 +13,7 @@ const independentScript = readFileSync(new URL("../video-lab/independent-subtitl
 const listHtml = readFileSync(new URL("../video-lab/episode-list-placeholder.html", import.meta.url), "utf8");
 const listScript = readFileSync(new URL("../video-lab/episode-list-placeholder.js", import.meta.url), "utf8");
 const playerScript = readFileSync(new URL("../video-lab/player-overlay.js", import.meta.url), "utf8");
-const ids = ["player-frame", "player-loading", "remote-capture", "overlay", "seek-preview", "playback-timeline", "timeline-current", "timeline-duration", "timeline-fill", "timeline-playhead", "provider-indicator", "rewind", "rewind-label", "play-pause", "play-pause-label", "forward", "forward-label", "subtitles",
+const ids = ["player-frame", "player-loading", "remote-capture", "overlay", "seek-preview", "playback-timeline", "timeline-current", "timeline-duration", "timeline-fill", "timeline-playhead", "provider-indicator", "rewind", "rewind-label", "play-pause", "play-pause-label", "forward", "forward-label", "subtitles", "vidzen-server", "vidzen-server-label", "vidzen-server-menu", "vidzen-server-options",
   "episodes", "previous-episode", "next-episode", "manual-end", "show-title", "metadata-credit", "metadata-provider-credit", "episode-caption", "up-next", "up-next-title", "up-next-identity", "up-next-separator", "up-next-name-viewport", "up-next-name", "up-next-play",
   "subtitle-menu", "subtitle-mode", "menu-title", "menu-description", "menu-cancel", "menu-change",
   "horizon-caption-text", "independent-subtitle-menu", "independent-subtitle-status",
@@ -31,7 +31,7 @@ test("provider menu lists compatible sources and closes without reloading curren
   const oldSrc = frame.src;
   app.get("provider-choice").click();
   assert.equal(app.get("provider-menu").hidden, false);
-  assert.equal(app.get("provider-options").children.length, 7);
+  assert.equal(app.get("provider-options").children.length, 5);
   assert.match(app.get("provider-options").children[3].textContent, /Stellar.*✓/);
   app.key("Enter");
   assert.equal(app.get("provider-menu").hidden, true);
@@ -47,8 +47,9 @@ test("TV provider menu omits sources without exact episode routes", () => {
   const app = setup({ search: "?showId=2190&season=16&episode=10&provider=stellar&from=search", desktop: true });
   app.get("provider-choice").click();
   const labels = app.get("provider-options").children.map(button => button.textContent);
-  assert.equal(labels.length, 6);
+  assert.equal(labels.length, 5);
   assert.equal(labels.some(label => /APIPlayer/.test(label)), false);
+  assert.equal(labels.some(label => /EmbedWave/.test(label)), false);
   assert.equal(labels.some(label => /VidZen/.test(label)), true);
   app.key("Backspace");
   assert.equal(app.get("provider-menu").hidden, true);
@@ -132,7 +133,7 @@ function setup({ search = "?sub=on", adapter = null, animationFrame = true, epis
     let source = "";
     const style = {};
     const element = {
-      id, hidden: id === "subtitle-menu" || id === "independent-subtitle-menu" || id === "audio-language-menu" || id === "provider-menu" || id === "horizon-caption-text" || id === "up-next" || id === "manual-end" || id === "playback-timeline" || id === "diagnostics-panel" || id === "compat-controls" || id === "vidfast-compat-controls" || id === "vidlink-compat-controls" || id === "vidbolt-compat-controls" || id === "experimental-controls", textContent: "", tabIndex: -1, sourceChanges: 0,
+      id, hidden: id === "subtitle-menu" || id === "independent-subtitle-menu" || id === "audio-language-menu" || id === "provider-menu" || id === "vidzen-server-menu" || id === "vidzen-server" || id === "horizon-caption-text" || id === "up-next" || id === "manual-end" || id === "playback-timeline" || id === "diagnostics-panel" || id === "compat-controls" || id === "vidfast-compat-controls" || id === "vidlink-compat-controls" || id === "vidbolt-compat-controls" || id === "experimental-controls", textContent: "", tabIndex: -1, sourceChanges: 0,
       children: [], replaceChildren(...items) { this.children = items; }, contains(other) { return this === other || this.children.includes(other); },
       attributes,
       style,
@@ -1223,8 +1224,9 @@ test("Stellar virtual pause stops iframe and verifies resume before advancing pr
 test("Vidy timestamp seek requires confirmation and failed reload leaves controls available", () => {
   const saved = progressStorage();
   const app = setup({ search: "?type=movie&id=550&provider=vidy", progressStorage: saved });
-  const report = time => app.message({ type: "PLAYER_EVENT", event: "timeupdate",
-    currentTime: time, duration: 7200 }, "https://www.vidy.st");
+  const report = time => app.message(JSON.stringify({ type: "PLAYER_EVENT", data: {
+    event: "timeupdate", currentTime: time, duration: 7200, id: "550", mediaType: "movie" } }),
+    "https://www.vidy.st");
   app.get("player-frame").fire("load");
   report(100);
   app.key("ArrowDown");
@@ -1304,6 +1306,95 @@ test("VidZen commands use exact origin and require player state confirmation", (
   assert.match(app.get("command-status").textContent, /seek confirmed/);
 });
 
+test("VidZen Server menu preserves a verified checkpoint and rejects stale events", () => {
+  const saved = progressStorage();
+  const app = setup({ search: "?type=movie&id=155&provider=vidzen&from=search",
+    progressStorage: saved });
+  const old = app.get("player-frame");
+  old.fire("load");
+  app.message({ type: "vidzen:status", currentTime: 120, duration: 7200,
+    paused: false }, "https://vidzen.fun", old.contentWindow);
+  app.key("ArrowDown");
+  app.get("vidzen-server").click();
+  assert.equal(app.get("vidzen-server-menu").hidden, false);
+  assert.equal(app.get("vidzen-server-options").children.length, 5);
+  assert.match(app.get("vidzen-server-options").children[0].textContent, /Auto.*✓/);
+  app.key("Escape");
+  assert.equal(app.document.activeElement.id, "vidzen-server");
+  app.get("vidzen-server").click();
+  app.get("vidzen-server-options").children[1].click();
+  assert.equal(app.get("vidzen-server-menu").hidden, true);
+  assert.equal(app.document.activeElement.id, "vidzen-server");
+  assert.match(app.get("player-frame").src, /movie\/155\?autoPlay=true&server=hyperion&startAt=120/);
+  assert.notEqual(app.get("player-frame"), old);
+  app.message({ type: "vidzen", event: "timeupdate", currentTime: 900,
+    duration: 7200 }, "https://vidzen.fun", old.contentWindow);
+  assert.equal(saved.read().items[0].position, 120);
+  app.message({ type: "vidzen", event: "timeupdate", currentTime: 2,
+    duration: 7200 }, "https://vidzen.fun");
+  assert.equal(saved.read().items[0].position, 120);
+  app.message({ type: "vidzen", event: "timeupdate", currentTime: 122,
+    duration: 7200 }, "https://vidzen.fun");
+  assert.match(app.get("command-status").textContent, /position confirmed after server request/);
+  app.get("player-frame").fire("load");
+  app.message({ type: "vidzen:status", currentTime: 123, duration: 7200,
+    paused: false }, "https://vidzen.fun");
+  app.get("play-pause").click();
+  assert.equal(app.posted.at(-1).data.command, "pause", "direct commands survive the server reload");
+  app.message({ type: "vidzen:status", currentTime: 123, duration: 7200,
+    paused: true }, "https://vidzen.fun");
+  app.get("vidzen-server").click();
+  const frame = app.get("player-frame"), src = frame.src;
+  app.get("vidzen-server-options").children[1].click();
+  assert.equal(app.get("player-frame"), frame, "selecting active server does not reload");
+  assert.equal(frame.src, src);
+  app.get("vidzen-server").click();
+  app.get("player-shell").click();
+  assert.equal(app.get("vidzen-server-menu").hidden, true, "outside click dismisses Server menu");
+  assert.equal(app.document.activeElement.id, "vidzen-server");
+});
+
+test("VidZen Server menu keeps exact TV episode and failed confirmation recoverable", () => {
+  const app = setup({ search: "?showId=1399&season=1&episode=1&provider=vidzen&from=search" });
+  app.get("player-frame").fire("load");
+  app.message({ type: "vidzen:status", currentTime: 300, duration: 3600,
+    paused: false }, "https://vidzen.fun");
+  app.key("ArrowDown"); app.get("vidzen-server").click();
+  app.key("ArrowDown"); app.key("Enter");
+  assert.match(app.get("player-frame").src, /\/tv\/1399\/1\/1\?autoPlay=true&server=hyperion&startAt=300/);
+  app.advance(25000);
+  assert.equal(app.get("player-frame").src, "about:blank");
+  assert.match(app.get("command-status").textContent, /stored progress is unchanged/);
+  assert.notEqual(app.get("provider-choice").disabled, true);
+  assert.notEqual(app.get("recover-provider").disabled, true);
+  assert.notEqual(app.get("watch-exit").disabled, true);
+});
+
+test("VidZen server switch preserves playable video on checkpoint timeout and keeps direct controls", () => {
+  const app = setup({ search: "?type=movie&id=550&provider=vidzen&from=search" });
+  app.get("player-frame").fire("load");
+  app.message({ type: "vidzen:status", currentTime: 120, duration: 7200,
+    paused: false }, "https://vidzen.fun");
+  app.key("ArrowDown");
+  app.get("vidzen-server").click();
+  app.get("vidzen-server-options").children[4].click();
+  assert.match(app.get("player-frame").src, /movie\/550\?autoPlay=true&server=jupiter&startAt=120/);
+  assert.match(app.get("command-status").textContent, /Requested VidZen Jupiter \(actual server may vary\)/);
+  app.get("player-frame").fire("load");
+  app.message({ type: "vidzen:status", currentTime: 2, duration: 7200,
+    paused: false }, "https://vidzen.fun");
+  assert.equal(app.posted.at(-1).data.command, "seek", "restore seek fires even while server switch is pending");
+  assert.equal(app.posted.at(-1).data.time, 120);
+  app.advance(15000);
+  app.message({ type: "vidzen", event: "timeupdate", currentTime: 17, duration: 7200 }, "https://vidzen.fun");
+  app.advance(10000);
+  assert.notEqual(app.get("player-frame").src, "about:blank", "playable video is not terminated on 25s timeout");
+  assert.match(app.get("command-status").textContent, /playback active.*requested Jupiter.*actual server/i);
+  app.key("ArrowDown");
+  app.get("play-pause").click();
+  assert.equal(app.posted.at(-1).data.command, "pause", "direct play/pause survives 25s timeout");
+});
+
 test("all visible providers share D-pad access to Provider, Reload, and Exit", () => {
   for (const provider of ["yapgrid", "vidbolt", "vidy", "stellar", "embedwave", "apiplayer", "vidzen"]) {
     const app = setup({ search: `?type=movie&id=550&provider=${provider}&from=search` });
@@ -1313,12 +1404,14 @@ test("all visible providers share D-pad access to Provider, Reload, and Exit", (
     app.key("ArrowDown");
     assert.equal(app.document.activeElement.id, "recover-provider", provider);
     app.key("ArrowLeft");
+    if (provider === "vidzen") app.key("ArrowLeft");
     assert.equal(app.document.activeElement.id, "provider-choice", provider);
     app.key("Enter");
     assert.equal(app.get("provider-menu").hidden, false, provider);
     app.key("Escape");
     assert.equal(app.document.activeElement.id, "provider-choice", provider);
     app.key("ArrowRight");
+    if (provider === "vidzen") app.key("ArrowRight");
     assert.equal(app.document.activeElement.id, "recover-provider", provider);
     for (let step = 0; step < 12 && app.document.activeElement.id !== "watch-exit"; step += 1)
       app.key("ArrowRight");

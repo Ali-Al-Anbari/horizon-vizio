@@ -31,7 +31,8 @@
   var CINESRC = "cinesrc"; // Preserved for reference; excluded during VidFast testing.
   var PRIMARY = YAPGRID;
   var FALLBACK = YAPGRID;
-  var VISIBLE = [YAPGRID, VIDBOLT, "vidy", "stellar", "embedwave", "apiplayer", "vidzen"];
+  var VISIBLE = [YAPGRID, VIDBOLT, "vidy", "stellar", "vidzen"];
+  var VIDZEN_SERVERS = ["auto", "hyperion", "proxima", "mars", "jupiter"];
   var BASELINE = "baseline";
 
   function positive(value) {
@@ -51,8 +52,7 @@
     return VISIBLE[(index + 1) % VISIBLE.length];
   }
   function compatible(target) {
-    var tv = target && positive(target.showId);
-    return VISIBLE.filter(function (value) { return !tv || value !== "apiplayer"; });
+    return VISIBLE.slice();
   }
   function label(value) {
     var s = select(value);
@@ -72,7 +72,7 @@
     return value === "defaultOn" || value === "jwOn" ? value : "defaultOff";
   }
 
-  function embedUrl(target, provider, subtitle, pageOrigin, catalog, testMode, startAt, audioLang) {
+  function embedUrl(target, provider, subtitle, pageOrigin, catalog, testMode, startAt, audioLang, server) {
     if (!target || !catalog) return null;
     if (Object.prototype.hasOwnProperty.call(LAB_ORIGINS, provider)) {
       var movie = positive(target.movieId);
@@ -96,7 +96,8 @@
         + "/embed/movie/" + id + "?autoplay=1&resume=0";
       return LAB_ORIGINS.vidzen + (movie ? "/movie/" + id
         : "/tv/" + id + "/" + target.season + "/" + target.episode)
-        + "?autoPlay=true";
+        + "?autoPlay=true" + (VIDZEN_SERVERS.indexOf(server) > 0 ? "&server=" + server : "")
+        + (finiteNonnegative(startAt) && startAt > 0 ? "&startAt=" + Math.floor(startAt) : "");
     }
     // Preserved CineSrc embed generation for reference only:
     if (provider === CINESRC) {
@@ -255,19 +256,26 @@
         if (!lab || typeof lab !== "object" || Array.isArray(lab)) return null;
         if (chosen === "stellar" && lab.type === "STELLAR_EMBED_READY")
           return { type: "lab:ready" };
-        var payload = chosen === "stellar" && lab.type === "PLAYER_EVENT" ? lab.data : lab;
+        var payload = (chosen === "stellar" || chosen === "vidy") && lab.type === "PLAYER_EVENT" ? lab.data : lab;
         if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
         var name = payload.event;
-        if (chosen === "vidy" && lab.type !== "PLAYER_EVENT" && !name) return null;
+        if (chosen === "vidy" && lab.type !== "PLAYER_EVENT") return null;
         if (["play", "pause", "timeupdate", "ended", "seeked"].indexOf(name) < 0) return null;
         if (chosen === "stellar" && lab.type !== "PLAYER_EVENT") return null;
-        var identityIssue = riftIdentityIssue(payload, target, chosen === "vidy");
+        var normalized = chosen === "vidy" ? {
+          tmdbId: payload.id, mediaType: payload.mediaType || payload.type,
+          season: payload.season, episode: payload.episode
+        } : payload;
+        var identityIssue = riftIdentityIssue(normalized, target, false);
         if (identityIssue) return null;
+        var position = chosen === "vidy" && payload.currentTime == null
+          ? payload.timestamp : payload.currentTime;
+        if (chosen === "vidy" && (name === "timeupdate" || name === "seeked")
+            && (!finiteNonnegative(position) || !finiteNonnegative(payload.duration))) return null;
         return { type: "lab:" + name,
-          currentTime: finiteNonnegative(payload.currentTime) ? payload.currentTime : null,
+          currentTime: finiteNonnegative(position) ? position : null,
           duration: finiteNonnegative(payload.duration) ? payload.duration : null,
-          identityVerified: !riftIdentityIssue(payload, target, false)
-            || chosen === "vidy" && exactLabFrame(frame, chosen, target) };
+          identityVerified: !identityIssue && (chosen !== "vidy" || exactLabFrame(frame, chosen, target)) };
       }
 
       if (chosen === VIDRIFT) {
@@ -484,6 +492,26 @@
         return "shape";
       }
       if (event.source !== frame.contentWindow) return null;
+      if (Object.prototype.hasOwnProperty.call(LAB_ORIGINS, chosen)) {
+        if (event.origin !== LAB_ORIGINS[chosen]
+            && !(chosen === "vidy" && event.origin === "https://vidy.st")) return "origin";
+        if ((chosen === "vidy" || chosen === "vidzen") && !exactLabFrame(frame, chosen, target)) return "frame";
+        var lab = event.data;
+        if (chosen === "vidy" && typeof lab === "string") {
+          if (lab.length > 2048) return "shape";
+          try { lab = JSON.parse(lab); } catch (_error) { return "shape"; }
+        }
+        if (!lab || typeof lab !== "object" || Array.isArray(lab)) return "shape";
+        if (chosen === "vidy" && lab.type === "MEDIA_DATA") return "media-data";
+        if (chosen === "vidy" && lab.type === "PLAYER_EVENT" && lab.data && typeof lab.data === "object") {
+          var vIssue = riftIdentityIssue({
+            tmdbId: lab.data.id, mediaType: lab.data.mediaType || lab.data.type,
+            season: lab.data.season, episode: lab.data.episode
+          }, target, false);
+          if (vIssue) return "identity:" + vIssue;
+        }
+        return "shape";
+      }
       if (chosen === VIDBOLT) return event.origin === VIDBOLT_ORIGIN ? "envelope" : "origin";
       if (chosen === VIDLINK) return event.origin === VIDLINK_ORIGIN ? "envelope" : "origin";
       if (chosen === VIDFAST) {
@@ -593,6 +621,7 @@
     VIDRIFT_ORIGIN: VIDRIFT_ORIGIN,
     VIDBOLT_ORIGIN: VIDBOLT_ORIGIN,
     LAB_ORIGINS: LAB_ORIGINS,
+    vidzenServers: function () { return VIDZEN_SERVERS.slice(); },
     isPlaybackOnly: function (value) { return Object.prototype.hasOwnProperty.call(LAB_ORIGINS, value); },
     initializeLabFrame: initializeLabFrame,
     select: select,

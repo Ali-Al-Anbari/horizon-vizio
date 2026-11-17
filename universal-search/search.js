@@ -114,12 +114,12 @@
     var homeCards = Object.create(null);
     var homeCarousels = Object.create(null);
     var visibleRowGroups = [];
-    var homeScrollFrame = 0, homeHeroTimer = 0;
+    var homeScrollFrame = 0, homeHeroTimer = 0, wheelFadeTimer = 0;
     var HERO_PREF_KEY = "horizon-watch-hero-preferences";
     var HERO_DELAYS = [0, 110, 150, 250, 300, 400, 500];
     function defaultAppearance() {
       return { delay: 0, fade: false, glide: true, hold: true,
-        scrollAnimations: true, artworkFade: false };
+        scrollAnimations: true, artworkFade: false, carouselMovement: "instant" };
     }
     function readHeroPreferences() {
       try {
@@ -131,6 +131,8 @@
           if (saved.version === 2) ["glide", "hold", "scrollAnimations", "artworkFade"].forEach(function (key) {
             if (typeof saved[key] === "boolean") result[key] = saved[key];
           });
+          if (saved.carouselMovement === "instant" || saved.carouselMovement === "glide")
+            result.carouselMovement = saved.carouselMovement;
           return result;
         }
       } catch (_error) { /* Unsupported or damaged data uses safe defaults. */ }
@@ -142,7 +144,8 @@
         delay: heroPreferences.delay, fade: heroPreferences.fade,
         glide: heroPreferences.glide, hold: heroPreferences.hold,
         scrollAnimations: heroPreferences.scrollAnimations,
-        artworkFade: heroPreferences.artworkFade }));
+        artworkFade: heroPreferences.artworkFade,
+        carouselMovement: heroPreferences.carouselMovement }));
       doc.body.classList.toggle("watch-artwork-fade", heroPreferences.artworkFade);
     }
     doc.body.classList.toggle("watch-artwork-fade", heroPreferences.artworkFade);
@@ -219,6 +222,7 @@
         homeOpenToken += 1; homeOpenPending = false;
         homeRowMemory = Object.create(null); homeLastContent = null; homeReturnFocus = null;
         get("watch-rows-scroll").scrollTop = 0;
+        clearWheelHeadingFade();
         homeRowOrder.forEach(function (group) { get("watch-" + group + "-row").scrollLeft = 0; });
       }
       state.view = name;
@@ -290,6 +294,23 @@
       } else if (bottom > bounds.bottom - bottomInset) {
         scrollHomeRows(scroller, bottom - bounds.bottom + bottomInset);
       }
+    }
+    function clearWheelHeadingFade() {
+      if (wheelFadeTimer) clock.clearTimeout(wheelFadeTimer);
+      wheelFadeTimer = 0;
+      var heading = get("watch-active-heading");
+      if (heading) heading.classList.remove("is-wheel-fading");
+    }
+    function triggerWheelHeadingFade() {
+      if (state.view !== "watch") return;
+      var heading = get("watch-active-heading");
+      if (heading && !heading.hidden) heading.classList.add("is-wheel-fading");
+      if (wheelFadeTimer) clock.clearTimeout(wheelFadeTimer);
+      wheelFadeTimer = clock.setTimeout(function () {
+        wheelFadeTimer = 0;
+        var currentHeading = get("watch-active-heading");
+        if (currentHeading) currentHeading.classList.remove("is-wheel-fading");
+      }, 180);
     }
     function scrollHomeRows(scroller, delta) {
       var destination = scroller.scrollTop + delta;
@@ -678,7 +699,7 @@
       var controller = motion.controller, track = controller.track;
 
       if (motion.mode === "hold" || motion.mode === "edge") {
-        var next = motion.position + motion.direction * elapsed * (motion.mode === "edge" ? 0.0011 : 0.0048);
+        var next = motion.position + motion.direction * elapsed * (motion.mode === "edge" ? 0.00165 : 0.0048);
         if (motion.direction < 0) next = Math.max(motion.minTarget, next);
         if (motion.direction > 0 && motion.isShort) next = Math.min(motion.maxTarget, next);
         motion.position = next;
@@ -790,6 +811,7 @@
       holdMotion.inactivityTimer = clock.setTimeout(finishHoldMotion, 240);
     }
     function stepHorizontalMotion(groupName, direction, isHold) {
+      if (!isHold && heroPreferences.carouselMovement !== "glide") return false;
       if (homeMotion && homeMotion.mode === "edge") stopEdgeMotion();
       var controller = homeCarousels[groupName];
       if (!controller || controller.cards.length < 1 || state.view !== "watch") return false;
@@ -965,6 +987,7 @@
       var last = track.lastElementChild;
       while (track.childElementCount > controller.capacity
           && last && last !== doc.activeElement
+          && Number(last.dataset.homeOrdinal) > controller.selected + controller.visible + 1
           && controller.gutter + Number(last.dataset.homeOrdinal) * controller.step
             + x > row.clientWidth + controller.step) {
         delete controller.slots[last.dataset.homeOrdinal];
@@ -1020,7 +1043,7 @@
             gutter: gutter, visible: visible, capacity: visible + 7,
             wrapTimer: 0, pool: [], slots: Object.create(null) };
           controller.slots[0] = firstSlot;
-          var initialEnd = Math.min(cards.length - 1, visible + 2);
+          var initialEnd = visible + 2;
           while (controller.end < initialEnd) {
             controller.end += 1;
             var initialSlot = carouselSlot(controller, controller.end);
@@ -1037,6 +1060,7 @@
         var target = Math.max(0, Math.min(cards.length - 1, index));
         var slot = controller.slots[target] || cards[target];
         controller.selected = target;
+        track.style.transitionDuration = "0s";
         if (controller.fits) {
           track.style.transform = "translate3d(0px,0,0)";
         } else {
@@ -1052,7 +1076,7 @@
           : controller.selected % cards.length === index ? controller.selected : index;
       if (cards.length === 1) target = 0;
       if (target % cards.length !== index) target = index;
-      var neededEnd = target + (cards.length > controller.visible ? controller.visible + 2 : 1);
+      var neededEnd = target + (cards.length > 1 ? controller.visible + 2 : 0);
       while (controller.start > target) {
         if (track.childElementCount >= controller.capacity) {
           var oldLast = track.lastElementChild;
@@ -1093,7 +1117,7 @@
       }
       controller.selected = target;
       var now = clock.performance && clock.performance.now ? clock.performance.now() : Date.now();
-      track.style.transitionDuration = direction ? (now - (controller.lastMoveAt || 0) < 90 ? "55ms" : "140ms") : "0s";
+      track.style.transitionDuration = "0s";
       controller.lastMoveAt = now;
       track.style.transform = "translate3d(" + (-target * controller.step) + "px,0,0)";
       if (controller.trimTimer) clock.clearTimeout(controller.trimTimer);
@@ -2414,7 +2438,64 @@
         : "Nothing in Continue Watching yet.");
       focus(results.querySelector("button") || query);
     }
+    function settingsHistoryKey(row) {
+      return row.type + ":" + row.id;
+    }
+    function groupSettingsHistory(rows) {
+      var groups = [], byKey = Object.create(null);
+      rows.forEach(function (row) {
+        var key = settingsHistoryKey(row);
+        var existing = byKey[key];
+        if (!existing) {
+          existing = byKey[key] = {
+            key: key,
+            type: row.type,
+            id: row.id,
+            title: row.title,
+            poster: row.poster || null,
+            backdrop: row.backdrop || null,
+            representative: row,
+            episodeCount: row.type === "tv" ? 1 : 0,
+            seasons: row.type === "tv" && Number.isInteger(row.season) ? [row.season] : []
+          };
+          groups.push(existing);
+        } else {
+          if (!existing.poster && row.poster) existing.poster = row.poster;
+          if (!existing.backdrop && row.backdrop) existing.backdrop = row.backdrop;
+          if (row.type === "tv") {
+            existing.episodeCount += 1;
+            if (Number.isInteger(row.season) && existing.seasons.indexOf(row.season) < 0)
+              existing.seasons.push(row.season);
+          }
+        }
+      });
+      return groups;
+    }
+    function focusSettingsHistoryEntry(preferredKey, fallbackIndex) {
+      var host = get("settings-history");
+      var items = host ? Array.from(host.querySelectorAll(".settings-history-item")) : [];
+      if (!items.length) {
+        focus(get("settings-subpage-back") || get("settings-toggle"));
+        return;
+      }
+      var match = preferredKey ? items.find(function (btn) { return btn.dataset.historyKey === preferredKey; }) : null;
+      var idx = Math.max(0, Math.min(items.length - 1, Number.isInteger(fallbackIndex) ? fallbackIndex : 0));
+      focus(match || items[idx]);
+    }
+    function closeSettingsHistoryActions() {
+      var item = state.settingsHistoryItem;
+      if (!item) return;
+      state.settingsHistoryItem = null;
+      renderSettings();
+      focusSettingsHistoryEntry(item.key, item.index);
+    }
     function renderSettings() {
+      var movementButton = get("settings-carousel-movement");
+      if (movementButton) {
+        var isGlide = heroPreferences.carouselMovement === "glide";
+        movementButton.textContent = isGlide ? "Glide" : "Instant";
+        movementButton.setAttribute("aria-pressed", String(isGlide));
+      }
       var delayButton = get("settings-hero-delay"), fadeButton = get("settings-hero-fade");
       if (delayButton) delayButton.textContent = heroPreferences.delay ? heroPreferences.delay + "ms" : "Immediate";
       if (fadeButton) {
@@ -2434,9 +2515,11 @@
         }
       });
       var rows = core.readHistory(local), visible = core.homepageContinueCandidates(rows, local);
-      var continueHost = get("settings-continue"), historyHost = get("settings-history");
+      var continueHost = get("settings-continue"), historyHost = get("settings-history"),
+        actionsHost = get("settings-history-actions");
       if (continueHost) continueHost.replaceChildren();
       if (historyHost) historyHost.replaceChildren();
+      if (actionsHost) { actionsHost.replaceChildren(); actionsHost.hidden = true; }
       var tasteHost = get("settings-taste");
       if (tasteHost) tasteHost.replaceChildren();
       var tasteRatings = recommendations && recommendations.readFeedback(local).ratings || {};
@@ -2471,39 +2554,103 @@
         });
       }
       if (historyHost) {
-        if (!rows.length) { var noHistory = doc.createElement("p"); noHistory.textContent = "No saved viewing history.";
-          historyHost.appendChild(noHistory); }
-        rows.forEach(function (row) {
-          var line = doc.createElement("div"); line.className = "settings-entry";
-          var name = doc.createElement("span");
-          name.textContent = row.title + (row.type === "tv" ? " · S" + row.season + " E" + row.episode : " · Movie")
-            + (row.progress ? " · " + Math.floor(row.progress.position / 60) + "m / "
-              + Math.floor(row.progress.duration / 60) + "m" : " · Position unavailable");
-          if (row.type === "tv") {
-            var last = core.lastWatchedEpisode(rows, row.id);
-            if (last && last.season === row.season && last.episode === row.episode) name.textContent += " · Last watched";
+        var groupedHistory = groupSettingsHistory(rows);
+        var activeItem = state.settingsHistoryItem;
+        var matchedGroup = activeItem ? groupedHistory.find(function (g) { return g.key === activeItem.key; }) : null;
+        if (activeItem && !matchedGroup) state.settingsHistoryItem = null;
+        if (state.settingsHistoryItem && matchedGroup && actionsHost) {
+          var matchedRow = matchedGroup.representative;
+          historyHost.hidden = true;
+          actionsHost.hidden = false;
+          var head = doc.createElement("div"); head.className = "settings-history-actions-head";
+          var thumb = doc.createElement("span"); thumb.className = "settings-history-thumb";
+          var imgPath = matchedGroup.poster || matchedGroup.backdrop;
+          var img = imgPath ? poster(imgPath, matchedGroup.poster ? "poster" : "backdrop", false) : null;
+          if (img) thumb.appendChild(img);
+          else {
+            var fb = doc.createElement("span"); fb.className = "settings-history-thumb-fallback";
+            fb.textContent = (matchedGroup.title || "?").slice(0, 1).toUpperCase();
+            thumb.appendChild(fb);
           }
-          line.appendChild(name);
-          line.appendChild(button(row.manualWatched === true ? "Mark unfinished" : "Mark finished", function () {
-            core.setHistoryWatched(local, row.type, row.id, row.season, row.episode, row.manualWatched !== true);
-            renderSettings(); focus(get("settings-toggle"));
-          }));
-          function deleteButton(label, allTitle) {
-            var confirm = false;
-            return button(label, function () {
-              if (!confirm) { confirm = true; this.textContent = "Confirm " + label.toLowerCase(); focus(this); return; }
-              core.deleteHistory(local, row.type, row.id, row.season, row.episode, allTitle);
-              renderSettings(); focus(get("settings-toggle"));
-            });
+          var meta = doc.createElement("span"); meta.className = "settings-history-meta";
+          var titleEl = doc.createElement("strong"); titleEl.textContent = matchedGroup.title;
+          var detailEl = doc.createElement("small");
+          detailEl.textContent = matchedGroup.type === "tv"
+            ? ("Series · " + matchedGroup.episodeCount + (matchedGroup.episodeCount === 1 ? " episode" : " episodes"))
+            : "Movie";
+          meta.appendChild(titleEl); meta.appendChild(detailEl);
+          head.appendChild(thumb); head.appendChild(meta);
+          actionsHost.appendChild(head);
+
+          var btnRow = doc.createElement("div"); btnRow.className = "settings-history-actions-buttons";
+          var continueHidden = core.isContinueHidden(local, matchedRow);
+          var continueBtn = button(continueHidden ? "Restore to Continue" : "Hide from Continue", function () {
+            core.setContinueHidden(local, matchedRow, !continueHidden);
+            renderSettings();
+            var nextContinueBtn = actionsHost.querySelector('[data-history-action="continue"]');
+            focus(nextContinueBtn || get("settings-subpage-back"));
+          });
+          continueBtn.dataset.historyAction = "continue";
+          btnRow.appendChild(continueBtn);
+
+          var confirmRemove = false;
+          var removeBtn = button("Remove from History", function () {
+            if (!confirmRemove) {
+              confirmRemove = true;
+              this.textContent = "Confirm remove from history";
+              focus(this);
+              return;
+            }
+            var savedIdx = activeItem.index;
+            core.deleteHistory(local, matchedRow.type, matchedRow.id, matchedRow.season, matchedRow.episode, true);
+            state.settingsHistoryItem = null;
+            renderSettings();
+            focusSettingsHistoryEntry(null, savedIdx);
+          });
+          removeBtn.dataset.historyAction = "remove";
+          btnRow.appendChild(removeBtn);
+          btnRow.appendChild(button("Back to list", closeSettingsHistoryActions));
+          actionsHost.appendChild(btnRow);
+        } else {
+          historyHost.hidden = false;
+          if (!groupedHistory.length) {
+            var noHistory = doc.createElement("p"); noHistory.textContent = "No saved viewing history.";
+            historyHost.appendChild(noHistory);
           }
-          line.appendChild(deleteButton("Delete entry", false));
-          if (row.type === "tv") line.appendChild(deleteButton("Delete all for show", true));
-          historyHost.appendChild(line);
-        });
+          groupedHistory.forEach(function (group, idx) {
+            var itemBtn = button("", function () {
+              state.settingsHistoryItem = { key: group.key, index: idx };
+              renderSettings();
+              var firstAction = actionsHost && actionsHost.querySelector("[data-focus]");
+              if (firstAction) focus(firstAction);
+            }, "settings-history-item");
+            itemBtn.dataset.historyKey = group.key;
+            var thumb = doc.createElement("span"); thumb.className = "settings-history-thumb";
+            var imgPath = group.poster || group.backdrop;
+            var img = imgPath ? poster(imgPath, group.poster ? "poster" : "backdrop", false) : null;
+            if (img) thumb.appendChild(img);
+            else {
+              var fb = doc.createElement("span"); fb.className = "settings-history-thumb-fallback";
+              fb.textContent = (group.title || "?").slice(0, 1).toUpperCase();
+              thumb.appendChild(fb);
+            }
+            var meta = doc.createElement("span"); meta.className = "settings-history-meta";
+            var titleEl = doc.createElement("strong"); titleEl.textContent = group.title;
+            var detailEl = doc.createElement("small");
+            detailEl.textContent = group.type === "tv"
+              ? ("Series · " + group.episodeCount + (group.episodeCount === 1 ? " episode" : " episodes"))
+              : "Movie";
+            meta.appendChild(titleEl); meta.appendChild(detailEl);
+            itemBtn.appendChild(thumb); itemBtn.appendChild(meta);
+            itemBtn.setAttribute("aria-label", group.title + " · " + detailEl.textContent);
+            historyHost.appendChild(itemBtn);
+          });
+        }
       }
       var appSummary = get("settings-summary-appearance");
       if (appSummary) {
-        appSummary.textContent = "Glide " + (heroPreferences.glide ? "On" : "Off")
+        appSummary.textContent = (heroPreferences.carouselMovement === "glide" ? "Glide" : "Instant")
+          + " · Poster Glide " + (heroPreferences.glide ? "On" : "Off")
           + " · Hold " + (heroPreferences.hold ? "On" : "Off")
           + " · Animations " + (heroPreferences.scrollAnimations ? "On" : "Off")
           + " · Fade " + (heroPreferences.fade ? "On" : "Off");
@@ -2558,6 +2705,7 @@
       focus(firstBtn || get("settings-subpage-back"));
     }
     function closeSettingsCategory() {
+      state.settingsHistoryItem = null;
       state.settingsCategory = null;
       get("settings-subpage").hidden = true;
       get("settings-landing").hidden = false;
@@ -2570,6 +2718,7 @@
     }
     function showSettings() {
       state.previousView = state.view === "settings" ? state.previousView : state.view;
+      state.settingsHistoryItem = null;
       state.settingsCategory = null;
       get("settings-subpage").hidden = true;
       get("settings-landing").hidden = false;
@@ -3232,7 +3381,14 @@
           if (railPosition >= 0 && key === "ArrowRight") {
             focus(subButtons[0]);
           } else if (subIdx >= 0) {
-            if (key === "ArrowDown") focus(subButtons[Math.min(subButtons.length - 1, subIdx + 1)]);
+            var actionsWrap = state.settingsHistoryItem ? get("settings-history-actions") : null;
+            var actionBtns = actionsWrap && !actionsWrap.hidden
+              ? Array.from(actionsWrap.querySelectorAll("[data-focus]")) : [];
+            var actIdx = actionBtns.indexOf(current);
+            if (actIdx >= 0 && (key === "ArrowLeft" || key === "ArrowRight")) {
+              if (key === "ArrowRight" && actIdx < actionBtns.length - 1) focus(actionBtns[actIdx + 1]);
+              else if (key === "ArrowLeft") focus(actIdx > 0 ? actionBtns[actIdx - 1] : get("settings-subpage-back"));
+            } else if (key === "ArrowDown") focus(subButtons[Math.min(subButtons.length - 1, subIdx + 1)]);
             else if (key === "ArrowUp") focus(subButtons[Math.max(0, subIdx - 1)]);
             else if (key === "ArrowLeft") {
               if (current === get("settings-subpage-back")) focus(get("settings-toggle"));
@@ -3662,6 +3818,10 @@
           returnWithinWatch(leaveHistory);
         }
         else if (state.view === "settings") {
+          if (state.settingsHistoryItem) {
+            closeSettingsHistoryActions();
+            return;
+          }
           if (state.settingsCategory) {
             closeSettingsCategory();
             return;
@@ -3753,6 +3913,18 @@
       saveHeroPreferences();
       this.textContent = heroPreferences.fade ? "Fade On" : "Fade Off";
       this.setAttribute("aria-pressed", String(heroPreferences.fade));
+      focus(this);
+    });
+    var movementBtn = get("settings-carousel-movement");
+    if (movementBtn) movementBtn.addEventListener("click", function () {
+      heroPreferences.carouselMovement = heroPreferences.carouselMovement === "glide" ? "instant" : "glide";
+      saveHeroPreferences();
+      if (heroPreferences.carouselMovement === "instant" && homeMotion && !homeMotion.passive) {
+        finishHorizontalMotion();
+      }
+      var isGlide = heroPreferences.carouselMovement === "glide";
+      this.textContent = isGlide ? "Glide" : "Instant";
+      this.setAttribute("aria-pressed", String(isGlide));
       focus(this);
     });
     [
@@ -3897,6 +4069,12 @@
       if (state.view === "watch" && doc.activeElement.dataset.homeGroup)
         syncActiveHomeHeading(doc.activeElement, true);
     });
+    get("watch-rows-scroll").addEventListener("wheel", function (event) {
+      if (state.view !== "watch" || event.ctrlKey || event.metaKey
+          || event.target.closest("#watch-filter-menu")) return;
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      triggerWheelHeadingFade();
+    }, { passive: true });
     // The persistent hero is a sibling of the row scroller, so native wheel
     // bubbling cannot reliably reach it. Route only its vertical gestures.
     get("watch-hero").addEventListener("wheel", function (event) {
@@ -3904,6 +4082,7 @@
           || event.target.closest("#watch-filter-menu")) return;
       if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
       event.preventDefault();
+      triggerWheelHeadingFade();
       var scroller = get("watch-rows-scroll");
       var unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? scroller.clientHeight : 1;
       scroller.scrollTop += event.deltaY * unit;

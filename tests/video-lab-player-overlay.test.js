@@ -1594,10 +1594,10 @@ test("YapGrid and VidBolt render the same control rows and D-pad targets", () =>
   const paths = [
     ["play-pause", []], ["rewind", ["ArrowLeft"]], ["forward", ["ArrowRight"]],
     ["previous-episode", ["ArrowLeft", "ArrowDown"]],
-    ["episodes", ["ArrowDown"]],
+    ["episodes", ["ArrowLeft", "ArrowDown", "ArrowRight"]],
     ["next-episode", ["ArrowRight", "ArrowDown"]],
-    ["provider-choice", ["ArrowDown", "ArrowRight", "ArrowRight"]],
-    ["recover-provider", ["ArrowDown", "ArrowRight", "ArrowRight", "ArrowRight"]],
+    ["provider-choice", ["ArrowDown", "ArrowLeft"]],
+    ["recover-provider", ["ArrowDown"]],
   ];
   const ids = paths.map(item => item[0]);
   for (const [provider, search] of [["YapGrid", "?sub=on"], ["VidBolt", "?sub=on&provider=vidbolt"]]) {
@@ -3893,4 +3893,29 @@ test("Phase 5H: manual Next Episode works across Vidy, VidZen, and YapGrid witho
   movie.message({ type: "vidzen", event: "ended", currentTime: 7200, duration: 7200 }, "https://vidzen.fun");
   await flush();
   assert.equal(movie.get("up-next").hidden, true, "movies never show Next Episode");
+});
+
+test("Video Lab: ArrowDown from active control bar focuses Retry directly and falls back when unavailable", () => {
+  for (const search of ["?type=movie&id=550&provider=vidbolt&from=search", "?showId=2190&season=13&episode=2&provider=vidbolt&from=search"]) {
+    const app = setup({ search });
+    app.key("ArrowDown");
+    assert.equal(app.document.activeElement.id, "play-pause", search);
+    app.key("ArrowDown");
+    assert.equal(app.document.activeElement.id, "recover-provider", search);
+    const oldFrame = app.get("player-frame");
+    app.key("Enter");
+    assert.notEqual(app.get("player-frame"), oldFrame, "OK triggers Retry");
+    app.key("ArrowUp");
+    assert.ok(["rewind", "play-pause", "forward"].includes(app.document.activeElement.id), "ArrowUp returns to playback row");
+    app.key("Backspace");
+    assert.equal(app.state(), "PLAYBACK_HIDDEN", "Back hides controls");
+  }
+
+  const fallback = setup({ search: "?showId=2190&season=13&episode=2&provider=vidbolt&from=search" });
+  fallback.get("recover-provider").hidden = true;
+  fallback.key("ArrowDown");
+  assert.equal(fallback.document.activeElement.id, "play-pause");
+  fallback.key("ArrowDown");
+  assert.notEqual(fallback.document.activeElement.id, "recover-provider", "hidden Retry is not focused");
+  assert.equal(fallback.get(fallback.document.activeElement.id).hidden, false, "falls back to valid visible control");
 });

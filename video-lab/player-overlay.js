@@ -1335,7 +1335,7 @@
         if (nextRow) {
           var target = Math.round(column * (nextRow.length - 1) / Math.max(1, row.length - 1));
           if (rowIndex === 0 && key === "ArrowDown" && !isMovie) {
-            var preferred = [3, 5, 6][column];
+            var preferred = [3, 11, 6][column];
             if (nextRow.indexOf(preferred) !== -1) target = nextRow.indexOf(preferred);
           }
           if (rowIndex === 0 && key === "ArrowDown" && isMovie) {

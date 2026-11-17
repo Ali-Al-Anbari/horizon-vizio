@@ -22,7 +22,7 @@ test("Finished remains data but has no visible Discover filter", () => {
 
 test("visible recommendation rows initialize their poster window before input", () => {
   assert.match(source, /activeOrder\.forEach\(function \(group\) \{[\s\S]*?revealHomeWindow\(homeCards\[group\]\[0\]\)/);
-  assert.match(source, /var initialEnd = Math\.min\(cards\.length - 1, visible \+ 2\)/);
+  assert.match(source, /var initialEnd = visible \+ 2;/);
 });
 
 test("held navigation has a release and missing-keyup stop", () => {

@@ -27,16 +27,25 @@ button:disabled { opacity: .45; cursor: default; }
   background: #000000;
 }
 .watch-rail {
-  position: sticky;
-  top: 0;
-  height: 100vh;
+  position: fixed;
+  left: clamp(14px, 1.5vw, 28px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 54px;
+  height: auto;
+  min-height: 0;
+  z-index: 5;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1.1rem;
-  padding: clamp(30px, 4.2vh, 48px) .35rem;
-  background: #000000;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  gap: clamp(10px, 1.3vh, 15px);
+  padding: 4px 0;
+  background: transparent;
+  border: 0;
+}
+.watch-content {
+  grid-column: 2;
+  min-width: 0;
 }
 .rail-action {
   width: 52px;
@@ -45,18 +54,18 @@ button:disabled { opacity: .45; cursor: default; }
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1.5px solid transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 50%;
-  background: transparent;
-  color: var(--muted);
-  transition: box-shadow 90ms ease-out, border-color 90ms ease-out, background-color 90ms ease-out;
+  background: rgba(7, 10, 19, 0.48);
+  color: #fff;
+  transition: transform 90ms ease, box-shadow 90ms ease-out, border-color 90ms ease-out, background-color 90ms ease-out;
 }
 .rail-action img {
   display: block;
-  width: 24px;
-  height: 24px;
+  width: 25px;
+  height: 25px;
   filter: invert(1);
-  opacity: .65;
+  opacity: .94;
 }
 .rail-action span {
   position: absolute;
@@ -1066,7 +1075,9 @@ body.watch-active .watch-home.has-row-scroll::after { height: calc(var(--watch-r
 body.watch-active .watch-active-heading { position: absolute; z-index: 4; top: calc(var(--watch-hero-height) + 7px);
   left: var(--watch-gutter); right: var(--watch-gutter); margin: 0; color: #fff;
   font-size: clamp(24px, 1.9vw, 32px); line-height: 1.1; font-weight: 650;
-  letter-spacing: -.025em; text-shadow: 0 2px 12px #000; pointer-events: none; }
+  letter-spacing: -.025em; text-shadow: 0 2px 12px #000; pointer-events: none;
+  transition: opacity 175ms ease-out; }
+body.watch-active .watch-active-heading.is-wheel-fading { opacity: 0; }
 body.watch-active .watch-active-heading[hidden] { display: none; }
 body.watch-active .watch-home-section.is-active-home-section > h2 { opacity: 0; }
 body.watch-active .watch-rows-scroll { flex: 1; min-height: 0; width: 100%; overflow-x: hidden; overflow-y: auto;
@@ -1175,6 +1186,7 @@ body.watch-active .home-card-poster strong {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;
 }
 .settings-view { min-height: 0; flex: 1; overflow-y: auto; padding: 14px 28px 48px; }
+body.settings-active .watch-content { height: 100vh; min-height: 0; overflow: hidden; }
 body.watch-desktop-pointer.settings-active .watch-content { height: 100vh; min-height: 0; overflow: hidden; }
 .settings-view h1 { margin: 0 0 6px; font-size: clamp(28px, 2.6vw, 42px); font-weight: 600; color: #ffffff; }
 
@@ -1299,6 +1311,69 @@ body.watch-desktop-pointer.settings-active .watch-content { height: 100vh; min-h
   background: rgba(255, 255, 255, 0.2);
   border-color: #fff;
 }
+.settings-history-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-history-item:focus, .settings-history-item.is-focused {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+  box-shadow: 0 0 14px rgba(138, 186, 255, 0.45);
+  background: rgba(255, 255, 255, 0.16);
+  border-color: #fff;
+}
+.settings-history-thumb {
+  flex: 0 0 42px;
+  width: 42px;
+  height: 62px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-history-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.settings-history-thumb-fallback { font-size: 14px; font-weight: 600; color: rgba(255, 255, 255, 0.7); }
+.settings-history-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.settings-history-meta strong { font-size: 15px; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.settings-history-meta small { font-size: 13px; color: rgba(255, 255, 255, 0.62); }
+.settings-history-actions {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.settings-history-actions-head { display: flex; align-items: center; gap: 14px; }
+.settings-history-actions-buttons { display: flex; flex-wrap: wrap; gap: 10px; }
+.settings-history-actions-buttons button {
+  padding: 8px 16px;
+  border: 1.5px solid rgba(255, 255, 255, 0.24);
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: .88rem;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+}
+.settings-history-actions-buttons button:focus, .settings-history-actions-buttons button.is-focused {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+  box-shadow: 0 0 14px rgba(138, 186, 255, 0.45);
+  background: rgba(255, 255, 255, 0.2);
+  border-color: #fff;
+}
 .settings-about-container { display: grid; gap: 16px; }
 .settings-about-card, .settings-credits-card {
   padding: 20px 24px;
@@ -1331,9 +1406,10 @@ body.watch-desktop-pointer.settings-active .watch-content { height: 100vh; min-h
 .settings-credits img { display: block; width: 110px; height: auto; margin: 12px 0; }
 .settings-credits p { max-width: 68ch; color: #c6cbd2; font-size: .85rem; line-height: 1.45; }
 @media (max-width: 900px) {
+  .shell { grid-template-columns: 66px minmax(0, 1fr); }
+  .watch-rail, body.watch-active .watch-rail { left: 8px; }
+  .rail-action, body.watch-active .rail-action { width: 48px; height: 48px; min-height: 48px; }
   body.watch-active .shell { grid-template-columns: 66px minmax(0, 1fr); }
-  body.watch-active .watch-rail { left: 8px; }
-  body.watch-active .rail-action { width: 48px; height: 48px; min-height: 48px; }
   body.watch-active .watch-hero-copy { width: 88%; }
   body.watch-active .home-card { flex-basis: 275px; }
   body.watch-active .home-card-poster { flex-basis: 170px; }

@@ -227,9 +227,13 @@
       }
       state.view = name;
       ["watch", "search", "details", "episodes", "history", "settings"].forEach(function (view) { get(view + "-view").hidden = view !== name; });
+      if (name === "details" || name === "episodes") {
+        get("details-view").hidden = false;
+        get("episodes-view").hidden = !(state.title && state.title.type === "tv");
+      }
       get("keyboard").hidden = name !== "search" || !keyboardOpen;
       get("keyboard-toggle").textContent = keyboardOpen ? "Hide Keyboard" : "Show Keyboard";
-      doc.body.classList.toggle("details-active", name === "details");
+      doc.body.classList.toggle("details-active", name === "details" || name === "episodes");
       doc.body.classList.toggle("episodes-active", name === "episodes");
       doc.body.classList.toggle("settings-active", name === "settings");
       doc.body.classList.toggle("watch-active", name === "watch");
@@ -380,7 +384,14 @@
       var resultScroll = element.closest("#results, #history-list, #settings-view");
       var homeScroll = element.closest(".watch-home-row");
       if (seasonStrip) revealInScroller(element, seasonStrip, true, 14);
-      else if (episodeScroll) revealInScroller(element, episodeScroll, false, 18);
+      else if (episodeScroll) {
+        revealInScroller(element, episodeScroll, false, 18);
+        revealInScroller(element, episodeScroll, true, 24);
+      }
+      var detailScroller = element.closest("#detail-scroller");
+      if (detailScroller && !seasonStrip) {
+        revealInScroller(element, detailScroller, false, 48);
+      }
       else if (homeScroll && !homeScroll.classList.contains("is-virtualized")) {
         var railEdge = get("watch-toggle").getBoundingClientRect().right;
         revealInScroller(element, homeScroll, true, 18,
@@ -3014,8 +3025,9 @@
         return;
       }
       if (state.title.type === "tv") {
-        var canonical = core.canonicalEpisodeTarget(core.readHistory(local), state.title.id, state.detail || local, local);
-        var recent = canonical ? (canonical.baseEpisode || canonical) : core.lastWatchedEpisode(core.readHistory(local), state.title.id);
+        var historyRows = previewRows || core.readHistory(local);
+        var canonical = core.canonicalEpisodeTarget(historyRows, state.title.id, state.detail || local, local);
+        var recent = canonical ? (canonical.baseEpisode || canonical) : core.lastWatchedEpisode(historyRows, state.title.id);
         var resumable = canonical && !canonical.isNextUnwatched && canonical.progress && canonical.manualWatched !== true
           && (!canonical.progress.completed || canonical.manualWatched === false)
           ? canonical.progress : null;
@@ -3132,14 +3144,93 @@
             ? browsed : latest && seasons.some(function (entry) { return entry.number === latest.season; })
               ? latest.season : seasons.length ? seasons[0].number : null;
           renderActions();
+          loadDetailRecommendations(state.title);
+          var rail = get("seasons"); rail.replaceChildren();
+          seasons.forEach(function (entry) {
+            var sBtn = button(entry.name || "Season " + entry.number, function () { selectSeason(entry.number); },
+              state.season === entry.number ? "is-current" : "");
+            sBtn.dataset.season = String(entry.number);
+            sBtn.setAttribute("role", "option");
+            rail.appendChild(sBtn);
+          });
           if (episodeTarget || state.view === "episodes") browseEpisodes();
           else if (state.season !== null) loadSeason(state.season);
+        } else {
+          loadDetailRecommendations(state.title);
         }
         saveView();
       }, function () {
         if (disposed || token !== detailToken) return;
         text("detail-status", "More details unavailable; search result information remains visible.");
       });
+    }
+    function openSeasonDropdown() {
+      var dropdown = get("seasons-dropdown");
+      var btn = get("season-selector-btn");
+      if (!dropdown || !btn) return;
+      dropdown.hidden = false;
+      btn.setAttribute("aria-expanded", "true");
+      var current = get("seasons").querySelector(".is-current") || get("seasons").querySelector("button");
+      if (current) focus(current);
+    }
+    function closeSeasonDropdown(restoreFocus) {
+      var dropdown = get("seasons-dropdown");
+      var btn = get("season-selector-btn");
+      if (!dropdown || dropdown.hidden) return;
+      dropdown.hidden = true;
+      if (btn) btn.setAttribute("aria-expanded", "false");
+      if (restoreFocus && btn) focus(btn);
+    }
+    function selectSeason(number) {
+      closeSeasonDropdown(false);
+      loadSeason(number, true);
+      var btn = get("season-selector-btn");
+      if (btn) focus(btn);
+    }
+    function updateFocusedEpisodeInfo(ep, seasonNumber) {
+      if (!ep) return;
+      var titleEl = get("focused-episode-title");
+      var summaryEl = get("focused-episode-summary");
+      var metaEl = get("focused-episode-meta");
+      if (!titleEl || !summaryEl || !metaEl) return;
+      titleEl.textContent = ep.number + ". " + (ep.title || ("Episode " + ep.number));
+      summaryEl.textContent = ep.overview || (state.detail && state.detail.overview) || "No episode synopsis available.";
+      metaEl.replaceChildren();
+      var chips = [];
+      if (state.detail && state.detail.rating) chips.push(state.detail.rating);
+      if (ep.runtime || (state.detail && state.detail.episodeRuntime)) {
+        chips.push((ep.runtime || state.detail.episodeRuntime) + " min");
+      }
+      if (ep.date) chips.push(ep.date.slice(0, 4));
+      chips.push("S" + seasonNumber + " E" + ep.number);
+      chips.forEach(function (text) {
+        var pill = doc.createElement("span");
+        pill.className = "episode-meta-pill";
+        pill.textContent = text;
+        metaEl.appendChild(pill);
+      });
+    }
+    function loadDetailRecommendations(row) {
+      var recContainer = get("detail-recommendations");
+      var recList = get("detail-rec-list");
+      if (!recContainer || !recList) return;
+      recList.replaceChildren();
+      recContainer.hidden = true;
+      var engine = root.HorizonDiscoverEngine;
+      if (!engine || !engine.related) return;
+      engine.related(local, row, 10).then(function (results) {
+        if (disposed || !results || !results.length || !state.title || state.title.id !== row.id) return;
+        recList.replaceChildren();
+        results.slice(0, 8).forEach(function (candidate) {
+          var card = button("", function () { openDetails(candidate); }, "home-card home-card-landscape detail-rec-card");
+          card.appendChild(landscapeArt(candidate, true));
+          var label = doc.createElement("strong");
+          label.textContent = candidate.title;
+          card.appendChild(label);
+          recList.appendChild(card);
+        });
+        recContainer.hidden = false;
+      }).catch(function () {});
     }
     function browseEpisodes() {
       if (!state.title || state.title.type !== "tv") return;
@@ -3150,9 +3241,11 @@
       }) : [];
       var rail = get("seasons"); rail.replaceChildren();
       seasons.forEach(function (entry) {
-        var seasonButton = button(entry.name || "Season " + entry.number, function () { loadSeason(entry.number, true); },
+        var seasonButton = button(entry.name || "Season " + entry.number, function () { selectSeason(entry.number); },
           state.season === entry.number ? "is-current" : "");
-        seasonButton.dataset.season = String(entry.number); rail.appendChild(seasonButton);
+        seasonButton.dataset.season = String(entry.number);
+        seasonButton.setAttribute("role", "option");
+        rail.appendChild(seasonButton);
       });
       if (!seasons.length) text("episode-status", state.detail
         ? "No season metadata available. Return to Details and retry."
@@ -3169,7 +3262,14 @@
         var currentSeason = rail.querySelector(".is-current"), firstSeason = rail.querySelector("button");
         if (currentSeason && firstSeason) rail.scrollLeft = Math.max(0, currentSeason.offsetLeft - firstSeason.offsetLeft);
       }
-      focus(get("episodes-back")); saveView();
+      var scroller = get("detail-scroller");
+      if (scroller) {
+        var epSection = get("episodes-view");
+        if (epSection) scroller.scrollTop = epSection.offsetTop - 30;
+      }
+      var targetCard = get("episode-list").querySelector(".is-focused")
+        || get("episode-list").querySelector(".episode-play");
+      focus(targetCard || get("season-selector-btn") || get("episodes-back")); saveView();
     }
     function loadSeason(number, remember) {
       if (!state.title || !state.detail || !state.detail.seasons.some(function (s) { return s.number === number; })) return;
@@ -3179,6 +3279,9 @@
       get("seasons").querySelectorAll("button").forEach(function (button) {
         button.classList.toggle("is-current", Number(button.dataset.season) === number);
       });
+      var currentSeasonObj = state.detail.seasons.find(function (s) { return s.number === number; });
+      var seasonLabel = currentSeasonObj && currentSeasonObj.name ? currentSeasonObj.name : ("Season " + number);
+      text("season-selector-label", seasonLabel);
       text("episode-status", "Loading Season " + number + "…");
       get("episode-list").replaceChildren();
       api("/api/season/tv/" + state.title.id + "/" + number).then(function (value) {
@@ -3194,13 +3297,19 @@
         renderActions();
         var primary = get("detail-actions").querySelector(".detail-primary");
         if (doc.activeElement === get("details-back") && primary && !primary.disabled) focus(primary);
+        var initialEp = state.episodes.length ? state.episodes[0] : null;
         if (pendingEpisodeFocus && pendingEpisodeFocus.season === number) {
           var selected = Array.from(list.querySelectorAll(".episode-play")).find(function (card) {
             return card.dataset.episode === String(pendingEpisodeFocus.episode);
           });
-          pendingEpisodeFocus = null;
-          if (selected) focus(selected);
+          if (selected) {
+            initialEp = selected.episodeData || initialEp;
+            pendingEpisodeFocus = null;
+            focus(selected);
+            revealInScroller(selected, list, true, 24);
+          }
         }
+        if (initialEp) updateFocusedEpisodeInfo(initialEp, number);
       }, function () {
         if (disposed || token !== seasonToken) return;
         text("episode-status", "Episodes unavailable. Select the season to retry.");
@@ -3211,6 +3320,7 @@
       var card = button("", function () { launchEpisode(seasonNumber, ep.number); }, "episode-play");
       card.dataset.season = String(seasonNumber);
       card.dataset.episode = String(ep.number);
+      card.episodeData = ep;
       var artwork = doc.createElement("span");
       artwork.className = "episode-art";
       artwork.textContent = "Episode " + ep.number;
@@ -3223,6 +3333,11 @@
         });
         artwork.replaceChildren(still);
       }
+      var badge = doc.createElement("span");
+      badge.className = "episode-badge-overlay";
+      badge.textContent = "S" + seasonNumber + " E" + ep.number;
+      artwork.appendChild(badge);
+
       var heading = doc.createElement("strong");
       heading.textContent = "E" + ep.number + " · " + ep.title;
       var subtitle = doc.createElement("small");
@@ -3230,6 +3345,10 @@
       card.appendChild(artwork); card.appendChild(heading); card.appendChild(subtitle);
       card.setAttribute("aria-label", "Season " + seasonNumber + ", episode " + ep.number + ": " + ep.title);
       updateEpisodeProgress(card, core.readHistory(local));
+
+      card.addEventListener("focus", function () {
+        updateFocusedEpisodeInfo(ep, seasonNumber);
+      });
       return card;
     }
     function updateEpisodeProgress(card, history) {
@@ -3648,7 +3767,7 @@
           return;
         }
       }
-      if (state.view === "details") {
+      if (state.view === "details" || state.view === "episodes") {
         var actions = Array.from(get("detail-actions").querySelectorAll("button")).filter(function (item) {
           return !item.disabled;
         });
@@ -3656,6 +3775,17 @@
         var railToggle = state.detailSource === "watch"
           ? (state.detailSourceTab === "tv" ? get("tv-toggle") : state.detailSourceTab === "movies" ? get("movies-toggle") : state.detailSourceTab === "discover" ? get("discover-toggle") : get("watch-toggle"))
           : state.detailSource === "history" ? get("history-toggle") : get("search-toggle");
+        var seasonButtons = Array.from(get("seasons").querySelectorAll("button"));
+        var plays = Array.from(get("episode-list").querySelectorAll(".episode-play"));
+        var recs = Array.from(get("detail-rec-list").querySelectorAll("button"));
+        var seasonBtn = get("season-selector-btn");
+        var seasonDropdown = get("seasons-dropdown");
+        var seasonIndex = seasonButtons.indexOf(current), playIndex = plays.indexOf(current), recIndex = recs.indexOf(current);
+        var offset = key === "ArrowRight" ? 1 : -1;
+        var columns = plays.filter(function (item) {
+          return plays.length && Math.abs(item.getBoundingClientRect().top - plays[0].getBoundingClientRect().top) < 2;
+        }).length || 3;
+
         if (current === get("details-back")) {
           if (key === "ArrowDown") focus(actions[0] || credits);
           else if (key === "ArrowLeft") focus(railToggle);
@@ -3665,33 +3795,43 @@
           if (key === "ArrowUp") focus(get("details-back"));
           else if (key === "ArrowLeft") focus(actions[actionIndex - 1] || railToggle);
           else if (key === "ArrowRight") focus(actions[actionIndex + 1]);
-          else if (key === "ArrowDown") focus(credits);
+          else if (key === "ArrowDown") {
+            if (state.title && state.title.type === "tv" && !get("episodes-view").hidden) {
+              var targetDown = seasonBtn || plays.find(function (p) { return p.classList.contains("is-focused"); }) || plays[0] || credits;
+              focus(targetDown);
+              var sc = get("detail-scroller");
+              if (sc && targetDown !== credits) { var epSec = get("episodes-view"); if (epSec) sc.scrollTop = epSec.offsetTop - 30; }
+            } else {
+              focus(credits);
+            }
+          }
           return;
         }
-        if (current === credits) {
-          if (key === "ArrowUp") focus(actions[actions.length - 1] || get("details-back"));
+        if (current === seasonBtn) {
+          if (key === "ArrowUp") {
+            focus(actions[actions.length - 1] || actions[0] || get("details-back"));
+            var scTop = get("detail-scroller"); if (scTop) scTop.scrollTop = 0;
+          } else if (key === "ArrowDown") {
+            var firstOrActive = plays.find(function (p) { return p.classList.contains("is-focused"); }) || plays[0];
+            if (firstOrActive) {
+              focus(firstOrActive);
+              revealInScroller(firstOrActive, get("episode-list"), true, 24);
+            }
+          } else if (key === "ArrowLeft") focus(railToggle);
           return;
         }
-        if (current.closest(".watch-rail") && key === "ArrowRight") {
-          focus(get("details-back")); return;
+        if (seasonDropdown && !seasonDropdown.hidden && seasonIndex >= 0) {
+          if (key === "ArrowDown") focus(seasonButtons[Math.min(seasonButtons.length - 1, seasonIndex + 1)]);
+          else if (key === "ArrowUp") focus(seasonButtons[Math.max(0, seasonIndex - 1)]);
+          else if (key === "Back" || key === "Escape") closeSeasonDropdown(true);
+          return;
         }
-      }
-      if (state.view === "episodes") {
-        var seasonButtons = Array.from(get("seasons").querySelectorAll("button"));
-        var plays = Array.from(get("episode-list").querySelectorAll(".episode-play"));
-        var seasonIndex = seasonButtons.indexOf(current), playIndex = plays.indexOf(current);
-        var offset = key === "ArrowRight" ? 1 : -1;
-        var columns = plays.filter(function (item) {
-          return plays.length && Math.abs(item.getBoundingClientRect().top - plays[0].getBoundingClientRect().top) < 2;
-        }).length || 3;
-        var railToggle = state.detailSource === "watch"
-          ? (state.detailSourceTab === "tv" ? get("tv-toggle") : state.detailSourceTab === "movies" ? get("movies-toggle") : state.detailSourceTab === "discover" ? get("discover-toggle") : get("watch-toggle"))
-          : state.detailSource === "history" ? get("history-toggle") : get("search-toggle");
         if (current === get("episodes-back")) {
           if (key === "ArrowDown") focus(seasonButtons.find(function (item) {
             return item.classList.contains("is-current");
           }) || seasonButtons[0] || plays[0]);
           else if (key === "ArrowLeft") focus(railToggle);
+          else if (key === "ArrowUp") focus(actions[0] || get("details-back"));
           return;
         }
         if (seasonIndex >= 0) {
@@ -3701,19 +3841,59 @@
           return;
         }
         if (playIndex >= 0) {
-          if (key === "ArrowUp") focus(playIndex >= columns ? plays[playIndex - columns]
-            : seasonButtons.find(function (item) { return item.classList.contains("is-current"); }) || seasonButtons[0]);
-          else if (key === "ArrowDown") {
-            var nextRow = Math.floor(playIndex / columns) + 1;
-            if (nextRow * columns < plays.length) focus(plays[Math.min(nextRow * columns + playIndex % columns, plays.length - 1)]);
-          } else {
-            var rowStart = Math.floor(playIndex / columns) * columns;
-            focus(plays[Math.max(rowStart, Math.min(plays.length - 1, rowStart + columns - 1, playIndex + offset))]);
+          if (key === "ArrowUp") {
+            focus(seasonBtn || actions[0] || (seasonButtons.find(function (item) { return item.classList.contains("is-current"); }) || seasonButtons[0]) || get("details-back"));
+            var scRoll = get("detail-scroller"); if (scRoll) scRoll.scrollTop = 0;
+          } else if (key === "ArrowDown") {
+            if (recs.length) {
+              focus(recs[0]);
+              revealInScroller(recs[0], get("detail-rec-list"), true, 24);
+            } else {
+              var nextRow = Math.floor(playIndex / columns) + 1;
+              if (nextRow * columns < plays.length) focus(plays[Math.min(nextRow * columns + playIndex % columns, plays.length - 1)]);
+            }
+          } else if (key === "ArrowRight") {
+            if (playIndex < plays.length - 1) {
+              var nextCard = plays[playIndex + 1];
+              focus(nextCard);
+              revealInScroller(nextCard, get("episode-list"), true, 24);
+              if (nextCard.episodeData) updateFocusedEpisodeInfo(nextCard.episodeData, Number(nextCard.dataset.season));
+            }
+          } else if (key === "ArrowLeft") {
+            if (playIndex > 0) {
+              var prevCard = plays[playIndex - 1];
+              focus(prevCard);
+              revealInScroller(prevCard, get("episode-list"), true, 24);
+              if (prevCard.episodeData) updateFocusedEpisodeInfo(prevCard.episodeData, Number(prevCard.dataset.season));
+            } else {
+              focus(railToggle);
+            }
           }
           return;
         }
+        if (recIndex >= 0) {
+          if (key === "ArrowUp") {
+            var activePlayCard = plays.find(function (p) { return p.classList.contains("is-focused"); }) || plays[0];
+            if (activePlayCard) focus(activePlayCard);
+          } else if (key === "ArrowLeft") {
+            if (recIndex > 0) {
+              focus(recs[recIndex - 1]);
+              revealInScroller(recs[recIndex - 1], get("detail-rec-list"), true, 24);
+            } else focus(railToggle);
+          } else if (key === "ArrowRight") {
+            if (recIndex < recs.length - 1) {
+              focus(recs[recIndex + 1]);
+              revealInScroller(recs[recIndex + 1], get("detail-rec-list"), true, 24);
+            }
+          }
+          return;
+        }
+        if (current === credits) {
+          if (key === "ArrowUp") focus(actions[actions.length - 1] || get("details-back"));
+          return;
+        }
         if (current.closest(".watch-rail") && key === "ArrowRight") {
-          focus(get("episodes-back")); return;
+          focus(get("details-back")); return;
         }
       }
       if (state.view === "search") {
@@ -3828,8 +4008,24 @@
           }
           returnWithinWatch(function () { showWatch(); });
         }
-        else if (state.view === "episodes") returnWithinWatch(backToDetails);
-        else if (state.view === "details") returnWithinWatch(backToResults);
+        else if (state.view === "episodes" || state.view === "details") {
+          var sdd = get("seasons-dropdown");
+          if (sdd && !sdd.hidden) {
+            closeSeasonDropdown(true);
+            return;
+          }
+          var act = doc.activeElement;
+          var inEp = act && (act.closest("#episodes-view") || act.closest("#detail-recommendations") || act === get("season-selector-btn"));
+          if (inEp) {
+            var primBtn = get("detail-actions").querySelector(".detail-primary") || get("details-back");
+            focus(primBtn);
+            var sc = get("detail-scroller");
+            if (sc) sc.scrollTop = 0;
+            return;
+          }
+          if (state.view === "episodes") returnWithinWatch(backToDetails);
+          else returnWithinWatch(backToResults);
+        }
         else if (state.view === "search" && state.query) {
           query.value = ""; state.query = ""; scheduleSearch(0); focus(query); saveView();
         } else if (state.view === "search") showWatch();
@@ -3983,6 +4179,14 @@
     });
     get("details-back").addEventListener("click", function () { returnWithinWatch(backToResults); });
     get("episodes-back").addEventListener("click", function () { returnWithinWatch(backToDetails); });
+    var seasonSelBtn = get("season-selector-btn");
+    if (seasonSelBtn) {
+      seasonSelBtn.addEventListener("click", function () {
+        var dd = get("seasons-dropdown");
+        if (dd && !dd.hidden) closeSeasonDropdown(true);
+        else openSeasonDropdown();
+      });
+    }
     ["seed", "mode", "media", "style", "genre", "length", "rating", "year", "sort"].forEach(function (t) {
       var b = get("filter-btn-" + t);
       if (b) b.addEventListener("click", function () { openFilterMenu(t); });
@@ -4264,5 +4468,5 @@
   root.HorizonUniversalSearch = { createApp: createApp, nativeEditingKey: nativeEditingKey,
     adjacentHomeRow: adjacentHomeRow, nextHomeRowIndex: nextHomeRowIndex, circularIndex: circularIndex,
     isRowShort: isRowShort };
-  if (typeof document !== "undefined") createApp(document, location, root);
+  if (typeof document !== "undefined") root.HorizonUniversalSearch.app = createApp(document, location, root);
 })(typeof window !== "undefined" ? window : globalThis);

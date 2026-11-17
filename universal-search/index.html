@@ -185,25 +185,46 @@
       <div class="detail-art" id="detail-art" aria-hidden="true"></div>
       <div class="detail-shade" aria-hidden="true"></div>
       <button id="details-back" class="details-back" data-focus type="button" aria-label="Back to results">← Results</button>
-      <div class="detail-copy">
-        <p id="detail-kind" class="detail-kind"></p>
-        <h1 id="detail-title"></h1>
-        <p id="detail-year" class="detail-meta"></p>
-        <p id="detail-summary" class="detail-summary"></p>
-        <div id="detail-actions" class="detail-actions"></div>
-        <p id="detail-status" class="detail-status" role="status"></p>
+      <div class="detail-scroller" id="detail-scroller">
+        <div class="detail-hero-section" id="detail-hero-section">
+          <div class="detail-copy" id="detail-copy">
+            <p id="detail-kind" class="detail-kind"></p>
+            <h1 id="detail-title"></h1>
+            <p id="detail-year" class="detail-meta"></p>
+            <p id="detail-summary" class="detail-summary"></p>
+            <div id="detail-actions" class="detail-actions"></div>
+            <p id="detail-status" class="detail-status" role="status"></p>
+          </div>
+          <section id="detail-information" class="detail-information" aria-label="Title information" hidden></section>
+        </div>
+        <section id="episodes-view" class="view episodes-view" aria-label="Episodes" hidden>
+          <div class="episodes-header" id="episodes-header">
+            <button id="episodes-back" class="back-button" data-focus type="button">← Details</button>
+            <h1 id="episodes-heading" class="episodes-heading"></h1>
+            <div class="season-selector-container" id="season-selector-container">
+              <button id="season-selector-btn" class="season-selector-btn" data-focus type="button" aria-haspopup="listbox" aria-expanded="false">
+                <span id="season-selector-label">Season 1</span>
+                <span class="season-selector-chevron" aria-hidden="true">▾</span>
+              </button>
+              <div id="seasons-dropdown" class="seasons-dropdown" role="listbox" hidden>
+                <div id="seasons" class="seasons" aria-label="Seasons"></div>
+              </div>
+            </div>
+          </div>
+          <div class="focused-episode-panel" id="focused-episode-panel">
+            <h2 id="focused-episode-title" class="focused-episode-title"></h2>
+            <p id="focused-episode-summary" class="focused-episode-summary"></p>
+            <div id="focused-episode-meta" class="focused-episode-meta"></div>
+          </div>
+          <p id="episode-status" class="status" role="status"></p>
+          <div id="episode-list" class="episode-list" aria-label="Episodes"></div>
+          <div id="detail-recommendations" class="detail-recommendations" hidden>
+            <h3 class="detail-rec-heading">Customers also watched</h3>
+            <div id="detail-rec-list" class="detail-rec-list" aria-label="Related Titles"></div>
+          </div>
+        </section>
       </div>
-      <section id="detail-information" class="detail-information" aria-label="Title information" hidden></section>
       <p class="detail-credits">Credits · Metadata: <a href="https://www.themoviedb.org/" data-focus aria-label="The Movie Database">TMDB</a></p>
-    </section>
-    <section id="episodes-view" class="view episodes-view" hidden>
-      <div class="episodes-header">
-        <button id="episodes-back" class="back-button" data-focus type="button">← Details</button>
-        <h1 id="episodes-heading"></h1>
-        <div id="seasons" class="seasons" aria-label="Seasons"></div>
-      </div>
-      <p id="episode-status" class="status" role="status"></p>
-      <div id="episode-list" class="episode-list" aria-label="Episodes"></div>
     </section>
     <section id="history-view" class="view history-view" hidden>
       <div id="history-overview">

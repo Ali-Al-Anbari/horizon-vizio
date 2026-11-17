@@ -383,7 +383,11 @@
       var episodeScroll = element.closest("#episode-list");
       var resultScroll = element.closest("#results, #history-list, #settings-view");
       var homeScroll = element.closest(".watch-home-row");
-      if (seasonStrip) revealInScroller(element, seasonStrip, true, 14);
+      if (seasonStrip) {
+        revealInScroller(element, seasonStrip, true, 14);
+        var dropdown = element.closest("#seasons-dropdown");
+        if (dropdown) revealInScroller(element, dropdown, false, 8);
+      }
       else if (episodeScroll) {
         revealInScroller(element, episodeScroll, false, 18);
         revealInScroller(element, episodeScroll, true, 24);
@@ -3083,6 +3087,17 @@
       if (focusAction) pendingActionFocus = focusAction;
       detailToken += 1; seasonToken += 1;
       if (episodeTarget && row.type === "tv") pendingEpisodeFocus = { season: episodeTarget.season, episode: episodeTarget.episode };
+      state.userExplicitlyBrowsedEpisodes = false;
+      state.lastFocusedEpisodeCard = null;
+      if (episodeTarget && row.type === "tv") state.activeEpisodeTarget = episodeTarget.episode;
+      else if (row.type === "tv") {
+        var hRows = previewRows || core.readHistory(local);
+        var canonTarget = core.canonicalEpisodeTarget(hRows, row.id, state.detail || local, local);
+        if (canonTarget) {
+          pendingEpisodeFocus = { season: canonTarget.season, episode: canonTarget.episode };
+          state.activeEpisodeTarget = canonTarget.episode;
+        }
+      }
       state.detailSource = state.view === "history" ? "history" : state.view === "watch" ? "watch" : "search";
       state.detailSourceTab = state.watchTab || "for-you";
       state.title = row; state.detail = null; state.season = null; nextContinue = null;
@@ -3136,13 +3151,21 @@
         renderInformation(detail);
         text("detail-status", "");
         if (row.type === "tv") {
-          var latest = core.lastWatchedEpisode(core.readHistory(local), state.title.id);
+          var historyRows = previewRows || core.readHistory(local);
+          var canonical = core.canonicalEpisodeTarget(historyRows, state.title.id, state.detail || local, local);
+          var latest = core.lastWatchedEpisode(historyRows, state.title.id);
           var seasons = Array.isArray(detail.seasons) ? detail.seasons : [];
           var browsed = core.readBrowsedSeason(local, state.title.id);
-          state.season = episodeTarget && seasons.some(function (entry) { return entry.number === episodeTarget.season; })
-            ? episodeTarget.season : browsed !== null && seasons.some(function (entry) { return entry.number === browsed; })
+          var targetSeason = episodeTarget && seasons.some(function (entry) { return entry.number === episodeTarget.season; })
+            ? episodeTarget.season : (!state.userExplicitlyBrowsedEpisodes && canonical && seasons.some(function (entry) { return entry.number === canonical.season; }))
+            ? canonical.season : browsed !== null && seasons.some(function (entry) { return entry.number === browsed; })
             ? browsed : latest && seasons.some(function (entry) { return entry.number === latest.season; })
               ? latest.season : seasons.length ? seasons[0].number : null;
+          state.season = targetSeason;
+          if (!pendingEpisodeFocus && !state.userExplicitlyBrowsedEpisodes && canonical && canonical.season === targetSeason) {
+            pendingEpisodeFocus = { season: canonical.season, episode: canonical.episode };
+            state.activeEpisodeTarget = canonical.episode;
+          }
           renderActions();
           loadDetailRecommendations(state.title);
           var rail = get("seasons"); rail.replaceChildren();
@@ -3182,6 +3205,9 @@
       if (restoreFocus && btn) focus(btn);
     }
     function selectSeason(number) {
+      state.userExplicitlyBrowsedEpisodes = true;
+      state.activeEpisodeTarget = null;
+      state.lastFocusedEpisodeCard = null;
       closeSeasonDropdown(false);
       loadSeason(number, true);
       var btn = get("season-selector-btn");
@@ -3251,13 +3277,20 @@
         ? "No season metadata available. Return to Details and retry."
         : "Loading season metadata…");
       else {
-        var latest = core.lastWatchedEpisode(core.readHistory(local), state.title.id);
+        var historyRows = previewRows || core.readHistory(local);
+        var latest = core.lastWatchedEpisode(historyRows, state.title.id);
+        var canonical = core.canonicalEpisodeTarget(historyRows, state.title.id, state.detail || local, local);
         var browsed = core.readBrowsedSeason(local, state.title.id);
         var chosen = pendingEpisodeFocus && seasons.some(function (s) { return s.number === pendingEpisodeFocus.season; })
-          ? pendingEpisodeFocus.season : browsed !== null && seasons.some(function (s) { return s.number === browsed; }) ? browsed
+          ? pendingEpisodeFocus.season : (!state.userExplicitlyBrowsedEpisodes && canonical && seasons.some(function (s) { return s.number === canonical.season; }))
+          ? canonical.season : browsed !== null && seasons.some(function (s) { return s.number === browsed; }) ? browsed
           : state.season !== null && seasons.some(function (s) { return s.number === state.season; }) ? state.season
             : latest && seasons.some(function (s) { return s.number === latest.season; }) ? latest.season : seasons[0].number;
         if (pendingEpisodeFocus && pendingEpisodeFocus.season !== chosen) pendingEpisodeFocus = null;
+        if (!pendingEpisodeFocus && !state.userExplicitlyBrowsedEpisodes && canonical && canonical.season === chosen) {
+          pendingEpisodeFocus = { season: canonical.season, episode: canonical.episode };
+          state.activeEpisodeTarget = canonical.episode;
+        }
         loadSeason(chosen);
         var currentSeason = rail.querySelector(".is-current"), firstSeason = rail.querySelector("button");
         if (currentSeason && firstSeason) rail.scrollLeft = Math.max(0, currentSeason.offsetLeft - firstSeason.offsetLeft);
@@ -3267,8 +3300,11 @@
         var epSection = get("episodes-view");
         if (epSection) scroller.scrollTop = epSection.offsetTop - 30;
       }
-      var targetCard = get("episode-list").querySelector(".is-focused")
+      var targetCard = (state.activeEpisodeTarget && Array.from(get("episode-list").querySelectorAll(".episode-play")).find(function (c) {
+        return c.dataset.episode === String(state.activeEpisodeTarget);
+      })) || get("episode-list").querySelector(".is-focused")
         || get("episode-list").querySelector(".episode-play");
+      if (targetCard) revealInScroller(targetCard, get("episode-list"), true, 24);
       focus(targetCard || get("season-selector-btn") || get("episodes-back")); saveView();
     }
     function loadSeason(number, remember) {
@@ -3812,10 +3848,13 @@
             focus(actions[actions.length - 1] || actions[0] || get("details-back"));
             var scTop = get("detail-scroller"); if (scTop) scTop.scrollTop = 0;
           } else if (key === "ArrowDown") {
-            var firstOrActive = plays.find(function (p) { return p.classList.contains("is-focused"); }) || plays[0];
-            if (firstOrActive) {
-              focus(firstOrActive);
-              revealInScroller(firstOrActive, get("episode-list"), true, 24);
+            var targetEpisodeCard = (state.lastFocusedEpisodeCard && plays.includes(state.lastFocusedEpisodeCard))
+              ? state.lastFocusedEpisodeCard
+              : (state.activeEpisodeTarget && plays.find(function (p) { return p.dataset.episode === String(state.activeEpisodeTarget); }))
+              || plays.find(function (p) { return p.classList.contains("is-focused"); }) || plays[0];
+            if (targetEpisodeCard) {
+              focus(targetEpisodeCard);
+              revealInScroller(targetEpisodeCard, get("episode-list"), true, 24);
             }
           } else if (key === "ArrowLeft") focus(railToggle);
           return;
@@ -3843,7 +3882,6 @@
         if (playIndex >= 0) {
           if (key === "ArrowUp") {
             focus(seasonBtn || actions[0] || (seasonButtons.find(function (item) { return item.classList.contains("is-current"); }) || seasonButtons[0]) || get("details-back"));
-            var scRoll = get("detail-scroller"); if (scRoll) scRoll.scrollTop = 0;
           } else if (key === "ArrowDown") {
             if (recs.length) {
               focus(recs[0]);
@@ -3858,6 +3896,7 @@
               focus(nextCard);
               revealInScroller(nextCard, get("episode-list"), true, 24);
               if (nextCard.episodeData) updateFocusedEpisodeInfo(nextCard.episodeData, Number(nextCard.dataset.season));
+              state.lastFocusedEpisodeCard = nextCard;
             }
           } else if (key === "ArrowLeft") {
             if (playIndex > 0) {
@@ -3865,6 +3904,7 @@
               focus(prevCard);
               revealInScroller(prevCard, get("episode-list"), true, 24);
               if (prevCard.episodeData) updateFocusedEpisodeInfo(prevCard.episodeData, Number(prevCard.dataset.season));
+              state.lastFocusedEpisodeCard = prevCard;
             } else {
               focus(railToggle);
             }
@@ -4014,17 +4054,7 @@
             closeSeasonDropdown(true);
             return;
           }
-          var act = doc.activeElement;
-          var inEp = act && (act.closest("#episodes-view") || act.closest("#detail-recommendations") || act === get("season-selector-btn"));
-          if (inEp) {
-            var primBtn = get("detail-actions").querySelector(".detail-primary") || get("details-back");
-            focus(primBtn);
-            var sc = get("detail-scroller");
-            if (sc) sc.scrollTop = 0;
-            return;
-          }
-          if (state.view === "episodes") returnWithinWatch(backToDetails);
-          else returnWithinWatch(backToResults);
+          returnWithinWatch(backToResults);
         }
         else if (state.view === "search" && state.query) {
           query.value = ""; state.query = ""; scheduleSearch(0); focus(query); saveView();

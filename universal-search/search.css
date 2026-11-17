@@ -691,9 +691,7 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
 .details-back:focus, .details-back.is-focused,
 .detail-actions button:focus, .detail-actions button.is-focused,
 .episodes-view .back-button:focus, .episodes-view .back-button.is-focused,
-.episodes-view .seasons button:focus, .episodes-view .seasons button.is-focused,
 .episodes-view .episode-list button:focus, .episodes-view .episode-list button.is-focused,
-.season-selector-btn:focus, .season-selector-btn.is-focused,
 .detail-rec-card:focus, .detail-rec-card.is-focused {
   outline: 2px solid #fff;
   outline-offset: 2px;
@@ -728,7 +726,7 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
 .detail-copy {
   position: relative;
   z-index: 3;
-  width: min(56vw, 840px);
+  width: min(70vw, 1100px);
   max-height: none;
   overflow: visible;
 }
@@ -781,29 +779,29 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
 .detail-actions {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: clamp(10px, 1.2vw, 20px);
-  min-height: 52px;
+  flex-wrap: nowrap;
+  gap: clamp(8px, 0.75vw, 14px);
+  min-height: 48px;
   margin: 0;
-  padding: 10px 0 15px;
+  padding: 8px 0 14px;
 }
 .detail-actions button {
   position: relative;
-  min-height: 48px;
-  padding: .7rem 1.35rem;
+  min-height: 44px;
+  padding: .55rem 1.15rem;
   border: 1px solid rgba(255,255,255,.28);
   border-radius: 999px;
   background: rgba(255,255,255,.14);
   color: #fff;
-  font-size: clamp(15px, 1.05vw, 19px);
+  font-size: clamp(14px, .95vw, 17px);
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
   transition: transform 120ms ease-out, box-shadow 120ms ease-out, background 120ms ease-out;
 }
 .detail-actions .detail-primary {
-  min-width: 195px;
-  padding: .75rem 1.6rem .85rem;
+  min-width: 175px;
+  padding: .6rem 1.45rem .7rem;
   border: 2px solid #fff;
   background: #fff;
   color: #0d1117;
@@ -837,13 +835,13 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
   display: inline-flex;
   align-items: center;
   gap: .45rem;
-  min-height: 44px;
-  padding: .5rem .85rem;
+  min-height: 42px;
+  padding: .45rem .85rem;
   border: 1px solid rgba(255,255,255,.24);
   border-radius: 999px;
   background: rgba(255,255,255,.12);
   color: rgba(255,255,255,.86);
-  font-size: clamp(13px, .88vw, 16px);
+  font-size: clamp(13px, .85vw, 15px);
 }
 .detail-actions .detail-feedback.is-selected {
   border-color: rgba(255,255,255,.68);
@@ -930,33 +928,49 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
 .season-selector-btn {
   display: inline-flex;
   align-items: center;
-  gap: .65rem;
-  min-height: 44px;
-  padding: .55rem 1.25rem;
-  border: 1px solid rgba(255,255,255,.28);
+  gap: .55rem;
+  min-height: 40px;
+  padding: .45rem 1.15rem;
+  border: 1px solid rgba(255,255,255,.22);
   border-radius: 999px;
-  background: rgba(255,255,255,.16);
+  background: rgba(22, 26, 34, .76);
   color: #ffffff;
-  font-size: clamp(15px, 1.05vw, 19px);
+  font-size: clamp(14px, .95vw, 17px);
   font-weight: 600;
   cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,.35);
   transition: all 120ms ease-out;
 }
+.season-selector-btn:hover {
+  background: rgba(36, 42, 54, .85);
+  border-color: rgba(255,255,255,.35);
+}
+.season-selector-btn:focus,
+.season-selector-btn.is-focused {
+  background: rgba(36, 42, 54, .95);
+  border-color: #ffffff;
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.4), 0 0 12px rgba(255,255,255,.25);
+}
 .season-selector-chevron {
-  font-size: 13px;
-  opacity: .85;
+  font-size: 11px;
+  opacity: .75;
+  margin-left: 2px;
+  transform: translateY(1px);
 }
 .seasons-dropdown {
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
-  min-width: 190px;
-  max-height: 280px;
+  min-width: 180px;
+  max-width: 260px;
+  max-height: 260px;
   overflow-y: auto;
-  background: #10141a;
-  border: 1px solid rgba(255,255,255,.24);
-  border-radius: 8px;
-  box-shadow: 0 12px 36px rgba(0,0,0,.85);
+  background: #141820;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 12px;
+  box-shadow: 0 14px 40px rgba(0,0,0,.88), 0 2px 8px rgba(0,0,0,.4);
   padding: 6px;
   z-index: 50;
   scrollbar-width: none;
@@ -973,27 +987,35 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
   display: block;
   width: 100%;
   text-align: left;
-  min-height: 40px;
-  padding: .5rem .95rem;
+  min-height: 38px;
+  padding: .45rem .85rem;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
-  color: #fff;
-  font-size: 15px;
+  color: rgba(255,255,255,.88);
+  font-size: 14px;
   font-weight: 500;
   cursor: pointer;
+  transition: background 100ms ease-out, color 100ms ease-out;
 }
 .episodes-view .seasons .is-current {
-  border-color: rgba(255,255,255,.45);
-  background: rgba(255,255,255,.14);
+  color: #ffffff;
+  background: rgba(255,255,255,.12);
+  font-weight: 600;
+}
+.episodes-view .seasons button:hover {
+  background: rgba(255,255,255,.18);
+  color: #fff;
 }
 .episodes-view .seasons button:focus,
 .episodes-view .seasons button.is-focused {
   background: #ffffff;
   color: #0d1117;
   font-weight: 700;
+  border-color: #ffffff;
   outline: 2px solid #fff;
   outline-offset: 1px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.5);
 }
 
 /* Focused Episode Panel */
@@ -1002,13 +1024,21 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
   z-index: 2;
   margin: 0 0 clamp(14px, 2vh, 22px);
   max-width: min(58vw, 860px);
+  min-height: 165px;
+  box-sizing: border-box;
 }
 .focused-episode-title {
   margin: 0 0 .45rem;
   color: #fff;
-  font-size: clamp(24px, 2.2vw, 36px);
+  font-size: clamp(22px, 2vw, 32px);
   font-weight: 700;
-  line-height: 1.15;
+  line-height: 1.2;
+  min-height: 2.4em;
+  max-height: 2.4em;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 .focused-episode-summary {
   display: -webkit-box;
@@ -1016,6 +1046,8 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
   color: rgba(255,255,255,.88);
   font-size: clamp(14px, 1.05vw, 18px);
   line-height: 1.45;
+  min-height: 4.35em;
+  max-height: 4.35em;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   overflow: hidden;
@@ -1025,6 +1057,8 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
   align-items: center;
   gap: .55rem;
   flex-wrap: wrap;
+  min-height: 28px;
+  height: 28px;
 }
 .episode-meta-pill {
   display: inline-block;

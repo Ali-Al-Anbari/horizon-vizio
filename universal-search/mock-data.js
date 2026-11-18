@@ -3,11 +3,13 @@
   var titles = [
     { type: "tv", id: 2190, title: "South Park", date: "1997-08-13", overview: "Four friends navigate life in the small town of South Park.", poster: null, backdrop: null },
     { type: "tv", id: 1396, title: "Breaking Bad", date: "2008-01-20", overview: "A chemistry teacher makes a life-changing choice.", poster: null, backdrop: null },
-    { type: "movie", id: 550, title: "Fight Club", date: "1999-10-15", overview: "An insomniac meets a charismatic stranger.", poster: null, backdrop: null }
+    { type: "movie", id: 550, title: "Fight Club", date: "1999-10-15", overview: "An insomniac meets a charismatic stranger.", poster: null, backdrop: null },
+    { type: "tv", id: 62715, title: "Dragon Ball Super", date: "2015-07-05", overview: "Seven years after the defeat of Majin Buu, Earth has become a peaceful place once more. Goku has given up fighting and now works as a radish farmer to support his family. Meanwhile, Goten and Trunks are searching for a present for Videl, and Gohan is set to marry her.", poster: "/qB4q5Q3C5p1xQfP6H2B5rUo5w8.jpg", backdrop: "/6tl05q9wNqK8iE6nK0j6V6T9Y6.jpg" }
   ];
   // Preview-only rows. Read by search.js only on loopback with ?mock=1&preview-history=1.
   // These illustrative playback positions never enter localStorage or Home sync.
   var previewTitles = [
+    ["tv", 62715, "Dragon Ball Super", "/qB4q5Q3C5p1xQfP6H2B5rUo5w8.jpg", "/6tl05q9wNqK8iE6nK0j6V6T9Y6.jpg", 1, 1, 420, 1440, false],
     ["tv", 2190, "South Park", "/k7n2EVge7G77eMr3brztRGG1fFU.jpg", "/3UviYOlhn8EgXMBuiT6MnUuo1w9.jpg", 13, 2, 820, 1320, false],
     ["tv", 70523, "Dark", "/wiiyc3m6HKaQhFBYeuM7ySCNQsG.jpg", "/3jDXL4Xvj3AzDOF6UH1xeyHW8MH.jpg", 2, 4, 980, 3600, false],
     ["tv", 1396, "Breaking Bad", "/anFx9aTOOYqgS3v7x3R84Kz67ly.jpg", "/tsRy63Mu5cu8etL1X7ZLyf7UP1M.jpg", 3, 7, 1640, 2700, false],
@@ -250,6 +252,26 @@
         if (recommended) row = recommended; }
       if (!row) return null;
       var recMatch = recommendationCandidates().find(function (v) { return v.type === type && v.id === id; });
+      if (id === 62715) {
+        return Object.assign({}, row, {
+          runtime: null,
+          episodeRuntime: 24,
+          rating: "TV-14",
+          seasons: [
+            { number: 1, count: 14, name: "Season 1" },
+            { number: 2, count: 13, name: "Season 2" },
+            { number: 3, count: 19, name: "Season 3" },
+            { number: 4, count: 30, name: "Season 4" },
+            { number: 5, count: 55, name: "Season 5" }
+          ],
+          cast: ["Masako Nozawa", "Ryo Horikawa", "Hiromi Tsuru", "Takeshi Kusao"],
+          creators: ["Akira Toriyama"],
+          genres: ["Animation", "Action & Adventure", "Sci-Fi & Fantasy"],
+          networks: ["Fuji TV"],
+          status: "Ended",
+          originalLanguage: "ja"
+        });
+      }
       return Object.assign({}, row, {
         runtime: (recMatch && recMatch.runtime) || (row.type === "movie" ? (row.runtime || null) : null),
         episodeRuntime: (recMatch && recMatch.episodeRuntime) || (row.type === "tv" ? (row.episodeRuntime || null) : null),
@@ -260,7 +282,18 @@
     providers: function () { return { link: "https://www.themoviedb.org/tv/2190/watch?locale=US",
       stream: [{ id: 9, name: "Amazon Prime Video", logo: null },
       { id: 337, name: "Disney Plus", logo: null }], free: [], rent: [], buy: [], source: "TMDB / JustWatch" }; },
-    season: function (id, number) { return { number: number, episodes: number === 13 && id === 2190
+    season: function (id, number) {
+      if (id === 62715) {
+        var dbsEps = [
+          { number: 1, title: "A Peacetime Reward: Who Gets the 100 Million Zeni?!", date: "2015-07-05", overview: "With Majin Buu defeated, Earth is at peace and Goku is working as a radish farmer.", still: null },
+          { number: 2, title: "To the Promised Resort! Vegeta Goes on a Family Trip?!", date: "2015-07-12", overview: "Vegeta, Bulma, and Trunks take a family trip to a resort.", still: null },
+          { number: 3, title: "Where Does the Dream Pick Up? Find the Super Saiyan God!", date: "2015-07-19", overview: "Beerus searches the universe for the legendary Super Saiyan God.", still: null },
+          { number: 4, title: "Bid for the Dragon Balls! Pilaf and Crew's Impossible Mission!", date: "2015-08-02", overview: "Pilaf and his gang try to steal the Dragon Balls from Bulma's cruise ship.", still: null },
+          { number: 5, title: "Showdown on King Kai's Planet! Goku vs. God of Destruction Beerus", date: "2015-08-09", overview: "Beerus arrives on King Kai's planet and challenges Goku to a fight.", still: null }
+        ];
+        return { number: number, episodes: dbsEps };
+      }
+      return { number: number, episodes: number === 13 && id === 2190
       ? [{ number: 1, title: "The Ring", date: "2009-03-11", overview: "", still: null },
         { number: 2, title: "The Coon", date: "2009-03-18", overview: "", still: null },
         { number: 3, title: "Margaritaville", date: "2009-03-25", overview: "", still: null },

@@ -1374,12 +1374,8 @@
       if (!entry || homeOpenPending || state.view !== "watch") return;
       var row = entry.row;
       if (row.type === "movie") { openDetails(row); return; }
-      function openEpisode(target) {
-        if (state.view !== "watch") return;
-        homeOpenPending = false;
-        openDetails(row, target || { season: row.season, episode: row.episode });
-      }
-      openEpisode(null);
+      homeOpenPending = false;
+      openDetails(row, row.season ? { season: row.season, episode: row.episode } : null);
     }
     function isFilterActive(tab) {
       if (tab === "discover") {
@@ -3104,6 +3100,12 @@
       state.episodes = [];
       state.subtitle = core.readSubtitlePref(local);
       setView("details");
+      var detailScroller = get("detail-scroller");
+      if (detailScroller) {
+        detailScroller.style.scrollBehavior = "auto";
+        detailScroller.scrollTop = 0;
+        detailScroller.style.scrollBehavior = "";
+      }
       get("detail-information").hidden = true;
       get("detail-information").replaceChildren();
       text("detail-kind", row.type === "tv" ? "TV Show" : "Movie");
@@ -3176,7 +3178,7 @@
             sBtn.setAttribute("role", "option");
             rail.appendChild(sBtn);
           });
-          if (episodeTarget || state.view === "episodes") browseEpisodes();
+          if (state.view === "episodes") browseEpisodes();
           else if (state.season !== null) loadSeason(state.season);
         } else {
           loadDetailRecommendations(state.title);
@@ -3332,7 +3334,9 @@
         text("episode-status", state.episodes.length ? "" : "No aired episodes returned for this season.");
         renderActions();
         var primary = get("detail-actions").querySelector(".detail-primary");
-        if (doc.activeElement === get("details-back") && primary && !primary.disabled) focus(primary);
+        if ((!doc.activeElement || doc.activeElement === get("details-back") || doc.activeElement === doc.body) && primary && !primary.disabled) {
+          focus(primary);
+        }
         var initialEp = state.episodes.length ? state.episodes[0] : null;
         if (pendingEpisodeFocus && pendingEpisodeFocus.season === number) {
           var selected = Array.from(list.querySelectorAll(".episode-play")).find(function (card) {
@@ -3341,8 +3345,12 @@
           if (selected) {
             initialEp = selected.episodeData || initialEp;
             pendingEpisodeFocus = null;
-            focus(selected);
+            state.lastFocusedEpisodeCard = selected;
+            state.activeEpisodeTarget = selected.dataset.episode;
             revealInScroller(selected, list, true, 24);
+            if (state.view === "episodes") {
+              focus(selected);
+            }
           }
         }
         if (initialEp) updateFocusedEpisodeInfo(initialEp, number);
@@ -3833,10 +3841,24 @@
           else if (key === "ArrowRight") focus(actions[actionIndex + 1]);
           else if (key === "ArrowDown") {
             if (state.title && state.title.type === "tv" && !get("episodes-view").hidden) {
-              var targetDown = seasonBtn || plays.find(function (p) { return p.classList.contains("is-focused"); }) || plays[0] || credits;
-              focus(targetDown);
+              var targetEpisodeCard = (state.lastFocusedEpisodeCard && plays.includes(state.lastFocusedEpisodeCard))
+                ? state.lastFocusedEpisodeCard
+                : (state.activeEpisodeTarget && plays.find(function (p) { return p.dataset.episode === String(state.activeEpisodeTarget); }))
+                || plays.find(function (p) { return p.classList.contains("is-focused"); }) || plays[0];
+              var targetDown = targetEpisodeCard || seasonBtn || credits;
               var sc = get("detail-scroller");
-              if (sc && targetDown !== credits) { var epSec = get("episodes-view"); if (epSec) sc.scrollTop = epSec.offsetTop - 30; }
+              if (sc && targetDown !== credits) {
+                var epSec = get("episodes-view");
+                if (epSec) sc.scrollTop = epSec.offsetTop - 20;
+              }
+              if (targetEpisodeCard && targetDown === targetEpisodeCard) {
+                focus(targetEpisodeCard);
+                revealInScroller(targetEpisodeCard, get("episode-list"), true, 24);
+                if (targetEpisodeCard.episodeData) updateFocusedEpisodeInfo(targetEpisodeCard.episodeData, Number(targetEpisodeCard.dataset.season));
+                state.lastFocusedEpisodeCard = targetEpisodeCard;
+              } else {
+                focus(targetDown);
+              }
             } else {
               focus(credits);
             }
@@ -3845,8 +3867,10 @@
         }
         if (current === seasonBtn) {
           if (key === "ArrowUp") {
+            var scTop = get("detail-scroller");
+            if (scTop) scTop.scrollTop = 0;
             focus(actions[actions.length - 1] || actions[0] || get("details-back"));
-            var scTop = get("detail-scroller"); if (scTop) scTop.scrollTop = 0;
+            if (scTop) scTop.scrollTop = 0;
           } else if (key === "ArrowDown") {
             var targetEpisodeCard = (state.lastFocusedEpisodeCard && plays.includes(state.lastFocusedEpisodeCard))
               ? state.lastFocusedEpisodeCard

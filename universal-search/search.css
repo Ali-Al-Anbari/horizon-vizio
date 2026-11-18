@@ -715,9 +715,9 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
 
 .detail-hero-section {
   position: relative;
-  min-height: 94vh;
+  min-height: 100vh;
   box-sizing: border-box;
-  padding: clamp(86px, 11vh, 128px) clamp(36px, 4.8vw, 88px) clamp(30px, 4vh, 50px);
+  padding: clamp(72px, 8.5vh, 96px) clamp(36px, 4.8vw, 88px) clamp(24px, 3vh, 36px);
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
@@ -731,23 +731,14 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
   overflow: visible;
 }
 .detail-kind {
-  display: inline-block;
-  margin: 0 0 .5rem;
-  padding: 3px 9px;
-  border-radius: 4px;
-  background: rgba(255,255,255,.14);
-  color: #fff;
-  font-size: clamp(12px, .82vw, 14px);
-  font-weight: 700;
-  letter-spacing: .08em;
-  text-transform: uppercase;
+  display: none;
 }
 .detail-copy h1 {
   max-width: 100%;
-  margin: 0 0 .55rem;
+  margin: 0 0 clamp(10px, 1.2vh, 16px);
   overflow: hidden;
   color: #fff;
-  font-size: clamp(38px, 3.8vw, 68px);
+  font-size: clamp(38px, 3.8vw, 64px);
   font-weight: 700;
   line-height: 1.05;
   letter-spacing: -.03em;
@@ -756,7 +747,7 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
   text-shadow: 0 2px 18px rgba(0,0,0,.6);
 }
 .detail-meta {
-  margin: 0 0 clamp(12px, 1.6vh, 20px);
+  margin: 0 0 clamp(12px, 1.5vh, 18px);
   color: rgba(255,255,255,.82);
   font-size: clamp(15px, 1.1vw, 20px);
   line-height: 1.35;
@@ -767,7 +758,7 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
 .detail-summary {
   display: -webkit-box;
   max-width: 100%;
-  margin: 0 0 clamp(16px, 2.1vh, 25px);
+  margin: 0 0 clamp(14px, 1.8vh, 22px);
   overflow: hidden;
   color: rgba(255,255,255,.92);
   font-size: clamp(15px, 1.14vw, 21px);
@@ -783,7 +774,7 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
   gap: clamp(8px, 0.75vw, 14px);
   min-height: 48px;
   margin: 0;
-  padding: 8px 0 14px;
+  padding: 4px 0 12px;
 }
 .detail-actions button {
   position: relative;
@@ -868,14 +859,20 @@ body.episodes-active .topbar, body.episodes-active footer { display: none; }
   color: rgba(255,255,255,.73);
   font-size: clamp(11px, .75vw, 14px);
 }
+.detail-status:empty {
+  display: none;
+  min-height: 0;
+  margin: 0;
+}
 
 .detail-information {
   position: relative;
   z-index: 2;
-  margin-top: 1.5rem;
+  margin-top: clamp(14px, 1.8vh, 22px);
+  transform: translateY(120px);
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: clamp(12px, 1.7vh, 22px) clamp(24px, 4vw, 76px);
+  gap: clamp(10px, 1.4vh, 18px) clamp(24px, 4vw, 76px);
   max-width: 980px;
 }
 .detail-fact { min-width: 0; }

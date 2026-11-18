@@ -27,8 +27,8 @@
     if (!Number.isFinite(position) || position <= 0 || !Number.isFinite(duration) || duration <= 0 || duration > 10000000
         || position > duration + 2 || !Number.isFinite(updatedAt) || updatedAt <= 0
         || updatedAt > 8640000000000000
-        || ["vidbolt", "vidy", "stellar", "vidzen"].indexOf(value.provider) < 0
-        || value.provider !== "vidbolt" && duration < 600) return null;
+        || ["vidbolt", "vidy", "stellar", "vidzen", "roya_tv", "youtube_official", "archive_pd"].indexOf(value.provider) < 0
+        || ["vidbolt", "roya_tv", "youtube_official", "archive_pd"].indexOf(value.provider) < 0 && duration < 600) return null;
     return { position: Math.min(position, duration), duration: duration, updatedAt: updatedAt,
       provider: value.provider, completed: value.completed === true };
   }
@@ -186,7 +186,7 @@
   function lastWatchedEpisode(rows, showId) {
     var episodes = rows.filter(function (row) { return row.type === "tv" && row.id === showId; });
     var confirmed = episodes.filter(function (row) { return row.progress
-      && ["vidbolt", "vidy", "stellar", "vidzen"].indexOf(row.progress.provider) >= 0; });
+      && ["vidbolt", "vidy", "stellar", "vidzen", "roya_tv", "youtube_official", "archive_pd"].indexOf(row.progress.provider) >= 0; });
     var candidates = confirmed.length ? confirmed : episodes;
     return candidates.sort(function (a, b) { return (b.progress ? b.progress.updatedAt : b.at)
       - (a.progress ? a.progress.updatedAt : a.at) || b.at - a.at; })[0] || null;
@@ -566,7 +566,7 @@
       + (typeof handoff === "string" && /^[A-Za-z0-9_-]{8,80}$/.test(handoff) ? "&handoff=" + handoff : "");
   }
   function imageUrl(path, size) {
-    if (typeof path === "string" && /^https:\/\/(image\.tmdb\.org|i\.ytimg\.com|btttr\.cc|d3mfc5qyv0pefp\.cloudfront\.net)\//i.test(path)) {
+    if (typeof path === "string" && /^https:\/\/(image\.tmdb\.org|i\.ytimg\.com|btttr\.cc|d3mfc5qyv0pefp\.cloudfront\.net|img\.roya\.tv)\//i.test(path)) {
       return path;
     }
     return imagePath(path)

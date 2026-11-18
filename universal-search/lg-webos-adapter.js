@@ -111,6 +111,49 @@
     return ytApiPromise;
   }
 
+  var hlsLibPromise = null;
+  function loadHlsLibrary(doc) {
+    if (root.Hls) return Promise.resolve(root.Hls);
+    if (hlsLibPromise) return hlsLibPromise;
+    hlsLibPromise = new Promise(function (resolve, reject) {
+      var timer = setTimeout(function () { reject(new Error("HLS library load timed out")); }, 8000);
+      var script = doc.createElement("script");
+      script.src = "vendor/hls.light.1.5.20.min.js";
+      script.async = true;
+      script.onload = function () {
+        clearTimeout(timer);
+        if (root.Hls) resolve(root.Hls);
+        else reject(new Error("window.Hls unavailable after script load"));
+      };
+      script.onerror = function () {
+        clearTimeout(timer);
+        reject(new Error("Failed to load vendor/hls.light.1.5.20.min.js"));
+      };
+      (doc.head || doc.body || doc.documentElement).appendChild(script);
+    }).catch(function (err) {
+      hlsLibPromise = null;
+      throw err;
+    });
+    return hlsLibPromise;
+  }
+
+  function detectHlsCapability(video) {
+    var nativeHls = video && video.canPlayType && (
+      video.canPlayType("application/vnd.apple.mpegurl")
+      || video.canPlayType("application/x-mpegURL")
+    );
+    var mse = root.MediaSource || root.WebKitMediaSource;
+    if (mse && typeof mse.isTypeSupported === "function") {
+      var codecs = [
+        'video/mp4; codecs="avc1.42001e, mp4a.40.2"',
+        'video/mp4; codecs="avc1.4d401e, mp4a.40.2"',
+        'video/mp4; codecs="avc1.64001e, mp4a.40.2"'
+      ];
+      if (codecs.some(function (t) { return mse.isTypeSupported(t); })) return "mse";
+    }
+    return nativeHls ? "native" : "unsupported";
+  }
+
   var isLG = !!root.__HORIZON_LG_MODE__;
   var core = root.HorizonSearchCore;
   var arabic = root.HorizonArabicCatalog;
@@ -423,6 +466,7 @@
       if (primaryBtn) {
         if (resolved && resolved.availability === "playable") {
           if (resolved.format === "mp4") primaryBtn.textContent = "Play MP4 (Archive.org)";
+          else if (resolved.format === "hls") primaryBtn.textContent = "Watch (" + resolved.providerShortLabel + ")";
           else primaryBtn.textContent = "Watch (YouTube Official)";
         } else if (resolved && resolved.availability === "external-app") {
           primaryBtn.textContent = "Open in " + (resolved.officialApp ? resolved.officialApp.appName : "Official App");
@@ -473,12 +517,44 @@
     var btnBack = doc.getElementById("lg-player-back");
 
     var ytPlayer = null;
+    var hlsPlayer = null;
     var videoEl = null;
     var progressTimer = 0;
+    var controlsHideTimer = 0;
     var returnFocusNode = null;
 
+    function clearControlsHideTimer() {
+      if (controlsHideTimer) { clearTimeout(controlsHideTimer); controlsHideTimer = 0; }
+    }
+
+    function scheduleControlsHide() {
+      clearControlsHideTimer();
+      var sess = state.playerSession;
+      if (!state.playerOpen || !sess || (sess.mode !== "hls" && sess.mode !== "mp4" && sess.mode !== "youtube")) return;
+      if (stage && stage.querySelector(".lg-player-status-card")) return;
+      if (videoEl && videoEl.paused) return;
+      controlsHideTimer = setTimeout(function () {
+        if (!state.playerOpen || !state.playerSession) return;
+        if (videoEl && videoEl.paused) return;
+        if (stage && stage.querySelector(".lg-player-status-card")) return;
+        chrome.hidden = true;
+      }, 10000);
+    }
+
+    function showControls() {
+      if (!state.playerOpen) return;
+      if (stage && stage.querySelector(".lg-player-status-card")) return;
+      chrome.hidden = false;
+      scheduleControlsHide();
+    }
+
     function clearOverlayMedia() {
+      clearControlsHideTimer();
       if (progressTimer) { clearInterval(progressTimer); progressTimer = 0; }
+      if (hlsPlayer) {
+        try { if (typeof hlsPlayer.destroy === "function") hlsPlayer.destroy(); } catch (_e) {}
+        hlsPlayer = null;
+      }
       if (ytPlayer) {
         try { if (typeof ytPlayer.destroy === "function") ytPlayer.destroy(); } catch (_e) {}
         ytPlayer = null;
@@ -493,13 +569,14 @@
     function saveObservedProgress() {
       var sess = state.playerSession;
       if (!sess || !sess.item || !sess.observedPlayback) return;
-      if (sess.mode !== "youtube" && sess.mode !== "mp4") return;
+      if (sess.mode !== "youtube" && sess.mode !== "mp4" && sess.mode !== "hls") return;
       var pos = Math.floor(sess.positionSec || 0);
       var dur = Math.floor(sess.durationSec || 0);
       if (pos <= 0 || dur <= 0) return;
       var completed = dur > 30 && pos / dur >= 0.92;
       var subChoice = core.readSubtitlePref(root.localStorage);
-      var rec = core.progressRecord({ position: pos, duration: dur, updatedAt: Date.now(), provider: "vidbolt", completed: completed });
+      var providerId = sess.providerId || (sess.mode === "mp4" ? "archive_pd" : (sess.mode === "youtube" ? "youtube_official" : "vidbolt"));
+      var rec = core.progressRecord({ position: pos, duration: dur, updatedAt: Date.now(), provider: providerId, completed: completed });
       var entry = core.item(
         sess.item.type,
         sess.item.id,
@@ -578,6 +655,76 @@
       if (first) focusEl(first);
     }
 
+    function disableNativeTextTracks(v) {
+      if (!v || !v.textTracks) return;
+      for (var i = 0; i < v.textTracks.length; i++) {
+        try { v.textTracks[i].mode = "disabled"; } catch (_e) {}
+      }
+    }
+
+    function attachHtml5VideoListeners(option, arItem, sess, startSec, errHeading, retryFn) {
+      videoEl.addEventListener("loadedmetadata", function () {
+        if (!state.playerOpen || state.playerSession !== sess) return;
+        disableNativeTextTracks(videoEl);
+        if (startSec > 0 && videoEl.duration > startSec + 2) {
+          try { videoEl.currentTime = startSec; } catch (_e) {}
+        }
+        updateTimeBar(videoEl.currentTime || 0, videoEl.duration || sess.durationSec);
+      });
+      videoEl.addEventListener("play", function () {
+        if (!state.playerOpen || state.playerSession !== sess) return;
+        sess.observedPlayback = true;
+        btnPlay.textContent = "Pause";
+        scheduleControlsHide();
+      });
+      videoEl.addEventListener("pause", function () {
+        if (!state.playerOpen || state.playerSession !== sess) return;
+        btnPlay.textContent = "Play";
+        showControls();
+        clearControlsHideTimer();
+        saveObservedProgress();
+      });
+      videoEl.addEventListener("timeupdate", function () {
+        if (!state.playerOpen || state.playerSession !== sess) return;
+        if (videoEl.currentTime > 0) sess.observedPlayback = true;
+        updateTimeBar(videoEl.currentTime || 0, videoEl.duration || sess.durationSec);
+      });
+      videoEl.addEventListener("seeked", function () {
+        if (!state.playerOpen || state.playerSession !== sess) return;
+        sess.observedPlayback = true;
+        updateTimeBar(videoEl.currentTime || 0, videoEl.duration || sess.durationSec);
+        saveObservedProgress();
+      });
+      videoEl.addEventListener("ended", function () {
+        if (!state.playerOpen || state.playerSession !== sess) return;
+        btnPlay.textContent = "Play";
+        showControls();
+        clearControlsHideTimer();
+        saveObservedProgress();
+        if (sess.nextEpisode && !btnNext.hidden) focusEl(btnNext);
+      });
+      videoEl.addEventListener("error", function () {
+        if (!state.playerOpen || state.playerSession !== sess) return;
+        var code = videoEl && videoEl.error ? videoEl.error.code : "unknown";
+        var btns = [];
+        if (typeof retryFn === "function") btns.push({ label: "Retry", onClick: retryFn });
+        btns.push({
+          label: "Choose Another Provider",
+          onClick: function () {
+            closePlayerOverlay();
+            openProviderMenu(arItem, doc.getElementById("lg-provider-select-btn"));
+          }
+        });
+        btns.push({ label: "Back to Horizon", onClick: closePlayerOverlay });
+        showStatusCard(
+          errHeading + " (" + option.providerShortLabel + ")",
+          "The HTML5 <video> element could not decode or load the stream (MediaError code " + code + "). Current selection kept; no silent provider switch performed.",
+          "Stream: " + (option.streamUrl || option.ticketUrl || ""),
+          btns
+        );
+      });
+    }
+
     function openHtml5VideoPlayback(option, arItem, startSec) {
       chrome.hidden = false;
       btnNative.hidden = true;
@@ -598,47 +745,47 @@
       stage.appendChild(videoEl);
 
       var sess = state.playerSession;
-      videoEl.addEventListener("loadedmetadata", function () {
+      attachHtml5VideoListeners(option, arItem, sess, startSec, "MP4 Playback Error", null);
+
+      var p = videoEl.play();
+      if (p && typeof p.catch === "function") p.catch(function () { btnPlay.textContent = "Play"; });
+      focusEl(btnPlay);
+      scheduleControlsHide();
+    }
+
+    function openHlsPlayback(option, arItem, startSec) {
+      var sess = state.playerSession;
+      chrome.hidden = false;
+      btnNative.hidden = true;
+      btnNext.hidden = !(sess && sess.nextEpisode);
+      btnPlay.textContent = "Pause";
+      pTitle.textContent = arItem.titleAr + (sess && sess.season ? (" · S" + sess.season + " E" + sess.episode) : (" · " + arItem.titleEn));
+      pSub.textContent = (sess && sess.episodeTitle ? sess.episodeTitle + " · " : "") + "Authorizing Roya TV HLS stream…";
+      pBadge.textContent = option.providerLabel;
+      syncSubtitleButton();
+      updateTimeBar(startSec || 0, option.durationSec || (arItem.episodeRuntime || 43) * 60);
+
+      videoEl = doc.createElement("video");
+      videoEl.id = "lg-html5-video";
+      videoEl.autoplay = true;
+      videoEl.playsInline = true;
+      videoEl.controls = false;
+      stage.appendChild(videoEl);
+
+      function retryHls() {
+        clearOverlayMedia();
+        state.playerSession = sess;
+        openHlsPlayback(option, arItem, sess.positionSec || startSec || 0);
+      }
+
+      function showHlsError(title, detail, meta) {
         if (!state.playerOpen || state.playerSession !== sess) return;
-        if (startSec > 0 && videoEl.duration > startSec + 2) {
-          try { videoEl.currentTime = startSec; } catch (_e) {}
-        }
-        updateTimeBar(videoEl.currentTime || 0, videoEl.duration || sess.durationSec);
-      });
-      videoEl.addEventListener("play", function () {
-        if (!state.playerOpen || state.playerSession !== sess) return;
-        sess.observedPlayback = true;
-        btnPlay.textContent = "Pause";
-      });
-      videoEl.addEventListener("pause", function () {
-        if (!state.playerOpen || state.playerSession !== sess) return;
-        btnPlay.textContent = "Play";
-        saveObservedProgress();
-      });
-      videoEl.addEventListener("timeupdate", function () {
-        if (!state.playerOpen || state.playerSession !== sess) return;
-        if (videoEl.currentTime > 0) sess.observedPlayback = true;
-        updateTimeBar(videoEl.currentTime || 0, videoEl.duration || sess.durationSec);
-      });
-      videoEl.addEventListener("seeked", function () {
-        if (!state.playerOpen || state.playerSession !== sess) return;
-        sess.observedPlayback = true;
-        updateTimeBar(videoEl.currentTime || 0, videoEl.duration || sess.durationSec);
-        saveObservedProgress();
-      });
-      videoEl.addEventListener("ended", function () {
-        if (!state.playerOpen || state.playerSession !== sess) return;
-        btnPlay.textContent = "Play";
-        saveObservedProgress();
-      });
-      videoEl.addEventListener("error", function () {
-        if (!state.playerOpen || state.playerSession !== sess) return;
-        var code = videoEl && videoEl.error ? videoEl.error.code : "unknown";
         showStatusCard(
-          "MP4 Playback Error (" + option.providerShortLabel + ")",
-          "The HTML5 <video> element could not decode or load the stream (MediaError code " + code + ").",
-          "Stream: " + option.streamUrl,
+          title,
+          detail + " Preserved S" + (sess.season || "?") + " E" + (sess.episode || "?") + "; no automatic provider switch.",
+          meta,
           [
+            { label: "Retry", onClick: retryHls },
             {
               label: "Choose Another Provider",
               onClick: function () {
@@ -649,11 +796,88 @@
             { label: "Back to Horizon", onClick: closePlayerOverlay }
           ]
         );
-      });
+      }
 
-      var p = videoEl.play();
-      if (p && typeof p.catch === "function") p.catch(function () { btnPlay.textContent = "Play"; });
+      attachHtml5VideoListeners(option, arItem, sess, startSec, "HLS Playback Error", retryHls);
+
+      var cap = detectHlsCapability(videoEl);
+      if (cap === "unsupported") {
+        showHlsError(
+          "HLS Playback Unsupported",
+          "This browser engine lacks native HLS and H.264/AAC MediaSource support.",
+          "Provider: " + option.providerId + " · Video " + option.royaEpisodeId
+        );
+        return;
+      }
+
+      fetch(option.ticketUrl, { method: "GET" })
+        .then(function (resp) {
+          if (!resp.ok) throw new Error("Playback ticket HTTP " + resp.status);
+          return resp.json();
+        })
+        .then(function (payload) {
+          if (!state.playerOpen || state.playerSession !== sess) return null;
+          var m3u8Url = payload && payload.data && payload.data.secured_url;
+          if (!m3u8Url) throw new Error("Ticket response missing data.secured_url");
+          sess.hlsUrl = m3u8Url;
+          pSub.textContent = (sess.episodeTitle ? sess.episodeTitle + " · " : "") + option.authorizationNote;
+          if (cap === "native") {
+            videoEl.src = m3u8Url;
+            videoEl.load();
+            var np = videoEl.play();
+            if (np && typeof np.catch === "function") np.catch(function () { btnPlay.textContent = "Play"; });
+            return null;
+          }
+          return loadHlsLibrary(doc).then(function (Hls) {
+            if (!state.playerOpen || state.playerSession !== sess) return;
+            if (!Hls || typeof Hls.isSupported !== "function" || !Hls.isSupported()) {
+              var nat = videoEl.canPlayType && (videoEl.canPlayType("application/vnd.apple.mpegurl") || videoEl.canPlayType("application/x-mpegURL"));
+              if (nat) {
+                videoEl.src = m3u8Url;
+                videoEl.load();
+                var fp = videoEl.play();
+                if (fp && typeof fp.catch === "function") fp.catch(function () { btnPlay.textContent = "Play"; });
+                return;
+              }
+              showHlsError("HLS Unsupported", "hls.light reports MediaSource is unsupported on this runtime.", option.ticketUrl);
+              return;
+            }
+            hlsPlayer = new Hls({
+              enableWorker: false,
+              maxBufferLength: 20,
+              backBufferLength: 10,
+              renderTextTracksNatively: false
+            });
+            hlsPlayer.on(Hls.Events.MEDIA_ATTACHED, function () {
+              if (!state.playerOpen || state.playerSession !== sess || !hlsPlayer) return;
+              hlsPlayer.loadSource(m3u8Url);
+            });
+            hlsPlayer.on(Hls.Events.MANIFEST_PARSED, function () {
+              if (!state.playerOpen || state.playerSession !== sess) return;
+              disableNativeTextTracks(videoEl);
+              var ap = videoEl.play();
+              if (ap && typeof ap.catch === "function") ap.catch(function () { btnPlay.textContent = "Play"; });
+            });
+            hlsPlayer.on(Hls.Events.ERROR, function (_ev, data) {
+              if (!state.playerOpen || state.playerSession !== sess) return;
+              if (!data || !data.fatal) return;
+              var code = data.response && Number(data.response.code);
+              var reason = (data.type || "hlsError") + " / " + (data.details || "unknown") + (code > 0 ? (" (HTTP " + code + ")") : "");
+              showHlsError("Roya TV HLS Fatal Error", "Stream interrupted: " + reason + ".", m3u8Url);
+            });
+            hlsPlayer.attachMedia(videoEl);
+          });
+        })
+        .catch(function (err) {
+          showHlsError(
+            "Roya TV Stream Unavailable",
+            err && err.message ? err.message : "Failed to load Roya playback ticket.",
+            option.ticketUrl
+          );
+        });
+
       focusEl(btnPlay);
+      scheduleControlsHide();
     }
 
     function openYouTubePlayback(target, startSec) {
@@ -914,6 +1138,7 @@
       if (option.format === "mp4" && option.streamUrl) {
         state.playerSession = {
           mode: "mp4",
+          providerId: option.providerId,
           item: arItem,
           season: null,
           episode: null,
@@ -927,10 +1152,35 @@
         return true;
       }
 
+      if (option.format === "hls" && option.ticketUrl) {
+        var hlsTarget = arabic.getPlayableTarget(type, Number(id), season, episode);
+        var hlsSeason = type === "tv" ? Number(season || (hlsTarget && hlsTarget.season) || 1) : null;
+        var hlsEpisode = type === "tv" ? Number(episode || (hlsTarget && hlsTarget.episode) || 1) : null;
+        var hlsEpObj = (type === "tv" && arItem.seasonEpisodes && arItem.seasonEpisodes[hlsSeason])
+          ? arItem.seasonEpisodes[hlsSeason].find(function (row) { return row.number === hlsEpisode; })
+          : null;
+        var hlsNextEp = type === "tv" ? arabic.findNextVerifiedEpisode(id, hlsSeason, hlsEpisode) : null;
+        state.playerSession = {
+          mode: "hls",
+          providerId: option.providerId,
+          item: arItem,
+          season: hlsSeason,
+          episode: hlsEpisode,
+          episodeTitle: hlsEpObj ? hlsEpObj.title : "",
+          nextEpisode: hlsNextEp,
+          positionSec: resumeSec,
+          durationSec: option.durationSec || (hlsEpObj && hlsEpObj.durationSec) || 0,
+          observedPlayback: false
+        };
+        openHlsPlayback(option, arItem, resumeSec);
+        return true;
+      }
+
       var target = arabic.getPlayableTarget(type, Number(id), season, episode);
       var nextEp = type === "tv" ? arabic.findNextVerifiedEpisode(id, target.season, target.episode) : null;
       state.playerSession = {
         mode: "youtube",
+        providerId: option.providerId,
         item: arItem,
         season: target.season || null,
         episode: target.episode || null,
@@ -976,11 +1226,18 @@
           return;
         }
         if (key === "MediaPlayPause" || key === "MediaPlay" || key === "MediaPause") {
+          showControls();
           btnPlay.click();
           return;
         }
-        if (key === "MediaRewind") { btnRew.click(); return; }
-        if (key === "MediaFastForward") { btnFf.click(); return; }
+        if (key === "MediaRewind") { showControls(); btnRew.click(); return; }
+        if (key === "MediaFastForward") { showControls(); btnFf.click(); return; }
+        if (chrome.hidden && (key === "OK" || key === "ArrowLeft" || key === "ArrowRight" || key === "ArrowUp" || key === "ArrowDown")) {
+          showControls();
+          focusEl(btnPlay);
+          return;
+        }
+        scheduleControlsHide();
         var pBtns = Array.prototype.slice.call(overlay.querySelectorAll("button")).filter(function (b) {
           return !b.hidden && !b.disabled && !b.closest("[hidden]");
         });

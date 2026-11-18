@@ -19,6 +19,14 @@
       supportedFormats: ["youtube-iframe"]
     },
     {
+      id: "roya_tv",
+      label: "Roya TV (Authorized HLS)",
+      shortLabel: "Roya TV",
+      requiresAuth: false,
+      authNote: "Authorized Roya TV playback ticket -> KWIKmotion HLS",
+      supportedFormats: ["hls"]
+    },
+    {
       id: "official_app_handoff",
       label: "Official Partner App (LG webOS)",
       shortLabel: "Official LG App",
@@ -189,6 +197,47 @@
         season: query.season || null,
         episode: query.episode || null,
         failureReason: "No verified official YouTube broadcast is available for " + item.titleEn + (ep ? " S" + query.season + "E" + ep.number : "") + "."
+      });
+    }
+
+    if (providerId === "roya_tv") {
+      var royaSeriesId = item.royaSeriesId ? Number(item.royaSeriesId) : null;
+      var royaEpId = ep && ep.royaEpisodeId ? Number(ep.royaEpisodeId) : null;
+      if (royaSeriesId && royaEpId) {
+        if (ep.plus) {
+          return buildOption(providerMeta, {
+            matchedTitle: item.titleAr + " · " + item.titleEn,
+            mediaId: item.id,
+            season: query.season || null,
+            episode: query.episode || null,
+            authRequired: true,
+            failureReason: "Roya TV Plus subscription required for Roya video ID " + royaEpId + "."
+          });
+        }
+        return buildOption(providerMeta, {
+          matchedTitle: item.titleAr + " · " + item.titleEn,
+          mediaId: item.id,
+          season: query.season || null,
+          episode: query.episode || null,
+          format: "hls",
+          audioLanguage: "ar",
+          quality: "HLS Adaptive (up to 1080p)",
+          authRequired: false,
+          availability: "playable",
+          royaSeriesId: royaSeriesId,
+          royaEpisodeId: royaEpId,
+          durationSec: ep.durationSec || null,
+          ticketUrl: "https://ticket.roya-tv.com/api/v5/video/" + royaEpId + "/ticket?device_type=1&_rtv_lang=ar",
+          streamUrl: "https://roya.tv/videos/" + royaEpId,
+          authorizationNote: "Roya TV Authorized Partner PoC · Series " + royaSeriesId + " · Video " + royaEpId
+        });
+      }
+      return buildOption(providerMeta, {
+        matchedTitle: item.titleAr + " · " + item.titleEn,
+        mediaId: item.id,
+        season: query.season || null,
+        episode: query.episode || null,
+        failureReason: "No authorized Roya TV series/episode identifier is mapped for " + item.titleEn + (ep ? " S" + query.season + "E" + ep.number : "") + "."
       });
     }
 

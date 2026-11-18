@@ -80,6 +80,66 @@
       overview: "رائعة المخرج شادي عبد السلام؛ في صعيد مصر عام ١٨٨١، يكتشف شاب من قبيلة الحروبات سر مقبرة المومياوات الملكية في الدير البحري وصراعه بين تقاليد القبيلة وحماية التراث. (Shadi Abdel Salam's 1969 Egyptian masterpiece set in Upper Egypt.)"
     },
     {
+      id: 901714,
+      externalCatalogId: true,
+      royaSeriesId: 1714,
+      type: "tv",
+      title: "السبع",
+      titleAr: "السبع",
+      titleEn: "Al-Sabea",
+      aliases: ["al sabea", "el sabe3", "sabe3", "السبع 2025", "رمضان 2025", "رؤيا", "roya"],
+      date: "2025-03-01",
+      country: "SY",
+      countryLabel: "سوريا · Syria (Roya TV)",
+      regionGroup: "levant",
+      originalLanguage: "ar",
+      rating: "TV-14",
+      episodeRuntime: 43,
+      genres: ["Drama", "Action & Adventure"],
+      cast: ["Bassem Yakhour", "Abdel Moneim Amayri", "Amal Arafa", "Taysir Idris"],
+      network: "Roya TV (Authorized Partner PoC)",
+      status: "Ended",
+      availability: "in-app",
+      availabilityLabel: "Play In-App · Roya TV HLS",
+      availabilityDetail: "Authorized Roya TV series playback using Roya Series ID 1714 and KWIKmotion HLS stream tickets.",
+      poster: "https://img.roya.tv/imagechanger/Size02Q40R169/storage/app/public/episodes/stream/1714/8c2A25AiWchdNRdivPyWXEVimtCinOVFc6Qm7GpJ.jpg",
+      backdrop: "https://img.roya.tv/imagechanger/Size02Q40R169/storage/app/public/episodes/stream/1714/8c2A25AiWchdNRdivPyWXEVimtCinOVFc6Qm7GpJ.jpg",
+      overview: "في إطار خيالي، يتناول العمل حياة الغجر، ويسلط الضوء على الصراعات بين عائلتين بسبب المال والنفوذ، حيث يقع حادث مأساوي يؤثر على الجميع. (Levantine Ramadan 2025 drama streaming via Roya TV.)",
+      seasons: [
+        { number: 1, name: "Season 1 · الموسم الأول (Roya TV Verified)", episodeCount: 2 }
+      ],
+      seasonEpisodes: {
+        1: [
+          {
+            number: 1,
+            royaEpisodeId: 108094,
+            title: "الحلقة الأولى · Episode 1",
+            date: "2025-03-01",
+            runtime: 43,
+            durationSec: 2559,
+            plus: false,
+            still: "https://img.roya.tv/imagechanger/Size02Q40R169/storage/app/public/episodes/stream/1714/8c2A25AiWchdNRdivPyWXEVimtCinOVFc6Qm7GpJ.jpg",
+            channel: "Roya TV",
+            availability: "in-app",
+            overview: "الحلقة الأولى من مسلسل السبع — صراع عائلتين وحادث مأساوي في حياة الغجر."
+          },
+          {
+            number: 2,
+            royaEpisodeId: 108106,
+            title: "الحلقة الثانية · Episode 2",
+            date: "2025-03-02",
+            runtime: 43,
+            durationSec: 2572,
+            plus: false,
+            still: "https://img.roya.tv/imagechanger/Size02Q40R169/storage/app/public/episodes/stream/1714/OpjhM0ZYrDzkpyl6FhaW6DwWzD6jox1wGnbTu1wB.jpg",
+            channel: "Roya TV",
+            availability: "in-app",
+            overview: "يقوم فرّاس بتوجيه السبع للقيام بإحدى العمليات الليلية بينما ينقل السبع شكوى الرجال."
+          }
+        ]
+      }
+    },
+    {
       id: 111075,
       type: "tv",
       title: "لن أعيش في جلباب أبي",
@@ -821,6 +881,7 @@
       availabilityDetail: item.availabilityDetail,
       officialApp: item.officialApp || null,
       youtubeId: item.youtubeId || null,
+      royaSeriesId: item.royaSeriesId || null,
       channel: item.channel || ""
     };
   }
@@ -838,9 +899,11 @@
           title: ep.title,
           date: ep.date || "",
           runtime: ep.runtime || item.episodeRuntime || 45,
+          durationSec: ep.durationSec || null,
           overview: ep.overview || "",
           still: ep.still || item.backdrop || null,
           youtubeId: ep.youtubeId || null,
+          royaEpisodeId: ep.royaEpisodeId || null,
           channel: ep.channel || item.network || "",
           availability: ep.availability || item.availability
         };
@@ -971,7 +1034,7 @@
     var eNum = Number(episode);
     var eps = item.seasonEpisodes[sNum] || [];
     for (var i = 0; i < eps.length; i++) {
-      if (eps[i].number === eNum && i + 1 < eps.length && eps[i + 1].youtubeId) {
+      if (eps[i].number === eNum && i + 1 < eps.length && (eps[i + 1].youtubeId || eps[i + 1].royaEpisodeId)) {
         return { season: sNum, episode: eps[i + 1].number };
       }
     }
@@ -979,7 +1042,7 @@
     for (var s = 0; s < seasonKeys.length; s++) {
       if (seasonKeys[s] > sNum) {
         var nextEps = item.seasonEpisodes[seasonKeys[s]] || [];
-        if (nextEps.length && nextEps[0].youtubeId) {
+        if (nextEps.length && (nextEps[0].youtubeId || nextEps[0].royaEpisodeId)) {
           return { season: seasonKeys[s], episode: nextEps[0].number };
         }
       }

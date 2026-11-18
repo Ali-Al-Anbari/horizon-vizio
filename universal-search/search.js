@@ -67,11 +67,13 @@
       watchTab: "for-you", detailSourceTab: "for-you",
       historyMode: "overview", historyFilter: "all", historyQuery: "",
       settingsCategory: null, lastSettingsCategory: "appearance" };
-    var finePointer = !!(clock.matchMedia && clock.matchMedia("(pointer: fine)").matches)
-      && !/Vizio|SmartCast/i.test(clock.navigator && clock.navigator.userAgent || "");
+    var isSmartTvRuntime = /Vizio|SmartCast|Web0S|webOS|SmartTV|NetCast/i.test((clock.navigator && clock.navigator.userAgent) || "")
+      || /(?:^\?|&)lg=1(?:&|$)/.test((nav && nav.search) || "");
+    var finePointer = !!(clock.matchMedia && clock.matchMedia("(pointer: fine)").matches) && !isSmartTvRuntime;
     var hoverPointer = finePointer && !!clock.matchMedia("(hover: hover)").matches;
     doc.body.classList.toggle("watch-desktop-pointer", finePointer);
-    var keyboardOpen = !finePointer;
+    var keyboardLang = contentLibrary === "arabic" ? "ar" : "en";
+    var keyboardOpen = !finePointer || contentLibrary === "arabic";
     var historyReady = false, restoringHistory = false, historyBackPending = false, historyDepth = 0;
     var searchTimer = null, searchToken = 0, detailToken = 0, seasonToken = 0, activeAbort = null;
     var cache = new Map(), disposed = false, returningHome = false, pendingEpisodeFocus = null,
@@ -227,12 +229,16 @@
         clearWheelHeadingFade();
         homeRowOrder.forEach(function (group) { get("watch-" + group + "-row").scrollLeft = 0; });
       }
+      if (changed && name === "search" && contentLibrary === "arabic") {
+        keyboardOpen = true;
+      }
       state.view = name;
       ["watch", "search", "details", "episodes", "history", "settings"].forEach(function (view) { get(view + "-view").hidden = view !== name; });
       if (name === "details" || name === "episodes") {
         get("details-view").hidden = false;
         get("episodes-view").hidden = !(state.title && state.title.type === "tv");
       }
+      if (query) query.setAttribute("dir", contentLibrary === "arabic" ? "auto" : "ltr");
       get("keyboard").hidden = name !== "search" || !keyboardOpen;
       get("keyboard-toggle").textContent = keyboardOpen ? "Hide Keyboard" : "Show Keyboard";
       doc.body.classList.toggle("details-active", name === "details" || name === "episodes");
@@ -3550,11 +3556,50 @@
       get("keyboard-toggle").textContent = "Show Keyboard";
       focus(query);
     }
+    var ARABIC_KEYBOARD_CHARS = [
+      "ا", "أ", "إ", "ب", "ت", "ث", "ج", "ح", "خ", "د", "ذ", "ر", "ز",
+      "س", "ش", "ص", "ض", "ط", "ظ", "ع", "غ", "ف", "ق", "ك", "ل", "م",
+      "ن", "ه", "ة", "و", "ي", "ى", "ء", "ئ", "ؤ", "لا"
+    ];
+    function syncKeyboardLanguageToggle() {
+      var kb = get("keyboard");
+      var keysHost = get("keyboard-keys");
+      if (!kb || !keysHost) return null;
+      var langBtn = get("lg-kb-lang-toggle");
+      if (!langBtn) {
+        langBtn = doc.createElement("button");
+        langBtn.type = "button";
+        langBtn.id = "lg-kb-lang-toggle";
+        langBtn.className = "lg-kb-lang-btn";
+        langBtn.setAttribute("data-focus", "");
+        langBtn.addEventListener("click", function () {
+          keyboardLang = keyboardLang === "ar" ? "en" : "ar";
+          buildKeyboard();
+          focus(langBtn);
+        });
+        kb.insertBefore(langBtn, keysHost);
+      }
+      var arLibrary = contentLibrary === "arabic";
+      langBtn.hidden = !arLibrary;
+      langBtn.textContent = keyboardLang === "ar"
+        ? "لوحة المفاتيح: العربية -> Switch to English"
+        : "Keyboard: English -> Switch to العربية";
+      return langBtn;
+    }
     function buildKeyboard() {
       var host = get("keyboard-keys");
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890".split("").forEach(function (char) {
+      if (!host) return;
+      host.replaceChildren();
+      var useArabic = contentLibrary === "arabic" && keyboardLang === "ar";
+      syncKeyboardLanguageToggle();
+      host.setAttribute("dir", useArabic ? "rtl" : "ltr");
+      if (query) query.setAttribute("dir", contentLibrary === "arabic" ? "auto" : "ltr");
+      var chars = useArabic ? ARABIC_KEYBOARD_CHARS : "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890".split("");
+      chars.forEach(function (char) {
         host.appendChild(button(char, function () {
-          query.value += char.toLowerCase(); state.query = query.value; scheduleSearch(300);
+          query.value += (useArabic ? char : char.toLowerCase());
+          state.query = query.value;
+          scheduleSearch(300);
         }));
       });
       host.appendChild(button("Space", function () { query.value += " "; state.query = query.value; scheduleSearch(300); }, "wide"));
@@ -4301,6 +4346,9 @@
       state.watchTab = "for-you";
       state.query = "";
       if (query) query.value = "";
+      keyboardLang = mode === "arabic" ? "ar" : "en";
+      keyboardOpen = mode === "arabic" ? true : !finePointer;
+      buildKeyboard();
       state.settingsCategory = null;
       state.settingsHistoryItem = null;
       if (get("settings-landing")) get("settings-landing").hidden = false;

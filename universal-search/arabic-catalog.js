@@ -1027,6 +1027,32 @@
     };
   }
 
+  function findPrevVerifiedEpisode(id, season, episode) {
+    var item = findByKey("tv", id);
+    if (!item || !item.seasonEpisodes) return null;
+    var sNum = Number(season);
+    var eNum = Number(episode);
+    var eps = item.seasonEpisodes[sNum] || [];
+    for (var i = 0; i < eps.length; i++) {
+      if (eps[i].number === eNum && i - 1 >= 0 && (eps[i - 1].youtubeId || eps[i - 1].royaEpisodeId)) {
+        return { season: sNum, episode: eps[i - 1].number };
+      }
+    }
+    var seasonKeys = Object.keys(item.seasonEpisodes).map(Number).sort(function (a, b) { return b - a; });
+    for (var s = 0; s < seasonKeys.length; s++) {
+      if (seasonKeys[s] < sNum) {
+        var prevEps = item.seasonEpisodes[seasonKeys[s]] || [];
+        if (prevEps.length) {
+          var lastEp = prevEps[prevEps.length - 1];
+          if (lastEp && (lastEp.youtubeId || lastEp.royaEpisodeId)) {
+            return { season: seasonKeys[s], episode: lastEp.number };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   function findNextVerifiedEpisode(id, season, episode) {
     var item = findByKey("tv", id);
     if (!item || !item.seasonEpisodes) return null;
@@ -1211,6 +1237,7 @@
     filterDiscover: filterDiscover,
     similarTitles: similarTitles,
     getPlayableTarget: getPlayableTarget,
+    findPrevVerifiedEpisode: findPrevVerifiedEpisode,
     findNextVerifiedEpisode: findNextVerifiedEpisode
   };
 })(typeof window !== "undefined" ? window : globalThis);

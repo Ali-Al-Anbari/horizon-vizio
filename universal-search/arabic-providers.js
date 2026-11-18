@@ -71,7 +71,7 @@
     // 2. Normalized Arabic / English title match + year check
     var qAr = normalizeText(query.titleAr);
     var qEn = normalizeText(query.titleEn);
-    var titles = cat.ARABIC_TITLES || [];
+    var titles = (typeof cat.getCombinedTitles === "function" ? cat.getCombinedTitles() : cat.ARABIC_TITLES) || [];
     for (var i = 0; i < titles.length; i++) {
       var candidate = titles[i];
       if (query.type && candidate.type !== query.type) continue;
@@ -201,21 +201,36 @@
     }
 
     if (providerId === "roya_tv") {
-      var royaSeriesId = item.royaSeriesId ? Number(item.royaSeriesId) : null;
-      var royaEpId = ep && ep.royaEpisodeId ? Number(ep.royaEpisodeId) : null;
+      var displayMatch = (item.titleEn && item.titleEn !== item.titleAr)
+        ? (item.titleAr + " · " + item.titleEn)
+        : (item.titleAr || item.title || "");
+      var royaSeriesId = (ep && ep.royaSeriesId ? Number(ep.royaSeriesId) : null)
+        || (item.royaSeriesId ? Number(item.royaSeriesId) : null);
+      var royaEpId = item.type === "movie"
+        ? (item.movieRoyaEpisodeId ? Number(item.movieRoyaEpisodeId) : (item.royaEpisodeId ? Number(item.royaEpisodeId) : null))
+        : (ep && ep.royaEpisodeId ? Number(ep.royaEpisodeId) : null);
       if (royaSeriesId && royaEpId) {
-        if (ep.plus) {
+        if ((ep && ep.plus) || item.plus || (item.type === "movie" && item.moviePlus)) {
           return buildOption(providerMeta, {
-            matchedTitle: item.titleAr + " · " + item.titleEn,
+            matchedTitle: displayMatch,
             mediaId: item.id,
             season: query.season || null,
             episode: query.episode || null,
             authRequired: true,
-            failureReason: "Roya TV Plus subscription required for Roya video ID " + royaEpId + "."
+            failureReason: "Roya TV Plus subscription required for Roya video ID " + royaEpId + " (unauthorized playback disabled)."
+          });
+        }
+        if (ep && ep.video_type === "youtube") {
+          return buildOption(providerMeta, {
+            matchedTitle: displayMatch,
+            mediaId: item.id,
+            season: query.season || null,
+            episode: query.episode || null,
+            failureReason: "This Roya episode uses YouTube broadcast hosting rather than KWIKmotion HLS."
           });
         }
         return buildOption(providerMeta, {
-          matchedTitle: item.titleAr + " · " + item.titleEn,
+          matchedTitle: displayMatch,
           mediaId: item.id,
           season: query.season || null,
           episode: query.episode || null,
@@ -226,18 +241,18 @@
           availability: "playable",
           royaSeriesId: royaSeriesId,
           royaEpisodeId: royaEpId,
-          durationSec: ep.durationSec || null,
+          durationSec: (item.type === "movie" ? item.movieDurationSec : (ep && ep.durationSec)) || null,
           ticketUrl: "https://ticket.roya-tv.com/api/v5/video/" + royaEpId + "/ticket?device_type=1&_rtv_lang=ar",
           streamUrl: "https://roya.tv/videos/" + royaEpId,
-          authorizationNote: "Roya TV Authorized Partner PoC · Series " + royaSeriesId + " · Video " + royaEpId
+          authorizationNote: "Roya TV Live Catalog · ID " + royaSeriesId + " · Video " + royaEpId
         });
       }
       return buildOption(providerMeta, {
-        matchedTitle: item.titleAr + " · " + item.titleEn,
+        matchedTitle: displayMatch,
         mediaId: item.id,
         season: query.season || null,
         episode: query.episode || null,
-        failureReason: "No authorized Roya TV series/episode identifier is mapped for " + item.titleEn + (ep ? " S" + query.season + "E" + ep.number : "") + "."
+        failureReason: "No authorized Roya TV " + (item.type === "movie" ? "film" : "series/episode") + " identifier is available for " + (item.titleEn || item.titleAr) + (ep ? " S" + query.season + "E" + ep.number : "") + "."
       });
     }
 
@@ -284,6 +299,8 @@
   }
 
   function preferredDefaultProvider(query) {
+    var item = deterministicMatch(query);
+    if (item && item.royaSeriesId) return "roya_tv";
     var options = resolveAll(query);
     for (var i = 0; i < options.length; i++) {
       if (options[i].availability === "playable") return options[i].providerId;

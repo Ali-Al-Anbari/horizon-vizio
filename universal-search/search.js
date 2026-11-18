@@ -443,17 +443,42 @@
         var arUrl = new URL(path, "https://example.invalid");
         var arBits = arUrl.pathname.split("/");
         if (arBits[2] === "title") {
-          var arTitle = arabicCatalog.findByKey(arBits[3], Number(arBits[4]));
-          if (arTitle) return Promise.resolve(arabicCatalog.toDetailPayload(arTitle));
+          var reqId = Number(arBits[4]);
+          var arTitle = arabicCatalog.findByKey(arBits[3], reqId);
+          var isRoyaSynth = contentLibrary === "arabic" && root.HorizonRoyaCatalog
+            && typeof root.HorizonRoyaCatalog.toRoyaIdFromWatchId === "function"
+            && root.HorizonRoyaCatalog.toRoyaIdFromWatchId(reqId);
+          if (arTitle || isRoyaSynth) {
+            if (typeof arabicCatalog.fetchDetailAsync === "function") {
+              return arabicCatalog.fetchDetailAsync(arBits[3], reqId, signal);
+            }
+            if (arTitle) return Promise.resolve(arabicCatalog.toDetailPayload(arTitle));
+          }
         }
         if (arBits[2] === "season" && arBits[3] === "tv") {
-          var arSeason = arabicCatalog.toSeasonPayload(Number(arBits[4]), Number(arBits[5]));
-          if (arSeason) return Promise.resolve(arSeason);
+          var sReqId = Number(arBits[4]);
+          var sTitle = arabicCatalog.findByKey("tv", sReqId);
+          var sIsRoya = contentLibrary === "arabic" && root.HorizonRoyaCatalog
+            && typeof root.HorizonRoyaCatalog.toRoyaIdFromWatchId === "function"
+            && root.HorizonRoyaCatalog.toRoyaIdFromWatchId(sReqId);
+          if (sTitle || sIsRoya) {
+            if (typeof arabicCatalog.fetchSeasonAsync === "function") {
+              return arabicCatalog.fetchSeasonAsync(sReqId, Number(arBits[5]), signal);
+            }
+            var arSeason = arabicCatalog.toSeasonPayload(sReqId, Number(arBits[5]));
+            if (arSeason) return Promise.resolve(arSeason);
+          }
         }
         if (contentLibrary === "arabic") {
           if (arBits[2] === "search") {
+            var qParam = arUrl.searchParams.get("q") || "";
+            var tParam = arUrl.searchParams.get("type") || "all";
+            var pParam = Number(arUrl.searchParams.get("page")) || 1;
+            if (typeof arabicCatalog.searchAsync === "function") {
+              return arabicCatalog.searchAsync(qParam, tParam, { page: pParam, pageSize: 24, signal: signal });
+            }
             return Promise.resolve({
-              results: arabicCatalog.search(arUrl.searchParams.get("q") || "", arUrl.searchParams.get("type") || "all")
+              results: arabicCatalog.search(qParam, tParam)
             });
           }
           if (arBits[2] === "discover" && typeof arabicCatalog.filterDiscover === "function") {
@@ -2090,6 +2115,17 @@
         recommendationLoadedSignature = signature;
         recommendationPayload = null;
         paintRecommendationRows(arabicCatalog.selectHomeRows(rows, feedback));
+        if (typeof arabicCatalog.ensureLiveCatalogAsync === "function"
+            && !(root.HorizonRoyaCatalog && root.HorizonRoyaCatalog.isLoaded())) {
+          arabicCatalog.ensureLiveCatalogAsync().then(function () {
+            if (!disposed && contentLibrary === "arabic") {
+              paintRecommendationRows(arabicCatalog.selectHomeRows(
+                previewRows || core.readHistory(local),
+                recommendations.readFeedback(local)
+              ));
+            }
+          }, function () {});
+        }
         return;
       }
       if (recommendationPayload) paintRecommendationRows(recommendations.selectRows(rows, feedback, recommendationPayload, { runtimes: knownRuntimes }));
@@ -2399,9 +2435,14 @@
       image.src = backdropUrl || posterUrl;
       art.appendChild(image);
     }
-    function renderResults(rows) {
-      results.replaceChildren();
-      results.scrollTop = 0;
+    function renderResults(rows, appendMode) {
+      if (!appendMode) {
+        results.replaceChildren();
+        results.scrollTop = 0;
+      } else {
+        var oldMore = results.querySelector(".lg-search-load-more");
+        if (oldMore && oldMore.parentNode) oldMore.parentNode.removeChild(oldMore);
+      }
       rows.forEach(function (row) {
         var card = button("", function () { openDetails(row); }, "poster-card search-card home-card-poster");
         card.dataset.mediaType = row.type;
@@ -2427,7 +2468,8 @@
             + (row.resume.progress && !row.resume.progress.completed
               ? " · " + Math.round(row.resume.progress.position / row.resume.progress.duration * 100) + "% watched"
               : row.resume.progress && row.resume.progress.completed ? " · completed" : "")
-          : (row.type === "tv" ? "TV" : "Movie") + (row.date ? " · " + row.date.slice(0, 4) : "");
+          : (row.type === "tv" ? "TV" : "Movie") + (row.date ? " · " + row.date.slice(0, 4) : "")
+            + (row.plus ? " · Roya Plus" : "");
         meta.appendChild(title); meta.appendChild(info); card.appendChild(art); card.appendChild(meta);
         card.setAttribute("aria-label", row.title + ", " + info.textContent);
         results.appendChild(card);
@@ -2459,35 +2501,63 @@
       }
       showWatch(true);
     }
-    function searchNow(explicit) {
+    function searchNow(explicit, pageArg) {
       if (disposed || state.continueMode) return;
       syncRail();
       if (searchTimer !== null) { clock.clearTimeout(searchTimer); searchTimer = null; }
       var q = state.query.trim(), token = ++searchToken;
+      var page = Math.max(1, Number(pageArg) || 1);
       if (activeAbort) activeAbort.abort();
       if (q.length < (explicit ? 1 : 2)) { renderResults([]); text("search-status", "Enter at least two characters to search, or press OK to submit."); return; }
-      text("search-status", "Searching…");
-      var key = state.filter + ":" + q.toLowerCase();
+      text("search-status", contentLibrary === "arabic" ? "Searching Roya catalog…" : "Searching…");
+      var key = contentLibrary + ":" + state.filter + ":" + q.toLowerCase();
       var cached = cache.get(key);
-      if (cached && Date.now() - cached.at < 420000) {
-          renderResults(cached.rows); text("search-status", cached.rows.length ? cached.rows.length + " results" : "No titles found.");
+      if (page === 1 && cached && Date.now() - cached.at < 420000) {
+        renderResults(cached.rows);
+        if (cached.hasMore) appendLoadMoreButton(cached.totalResults, 2);
+        text("search-status", cached.rows.length
+          ? (cached.totalResults > cached.rows.length ? ("Showing " + cached.rows.length + " of " + cached.totalResults + " results") : (cached.rows.length + " results"))
+          : "No titles found.");
         return;
       }
       activeAbort = new AbortController();
-      api("/api/search?q=" + encodeURIComponent(q) + "&type=" + state.filter, activeAbort.signal)
+      var searchUrl = "/api/search?q=" + encodeURIComponent(q) + "&type=" + state.filter
+        + (contentLibrary === "arabic" && page > 1 ? "&page=" + page : "");
+      api(searchUrl, activeAbort.signal)
         .then(function (value) {
           if (disposed || token !== searchToken) return;
-          var rows = core.rankResults(Array.isArray(value.results) ? value.results : [], q);
-          if (cache.size >= 40) cache.delete(cache.keys().next().value);
-          cache.set(key, { at: Date.now(), rows: rows });
-          renderResults(rows); text("search-status", rows.length ? rows.length + " results" : "No titles found.");
+          var rawRows = Array.isArray(value.results) ? value.results : [];
+          var rows = value.preRanked ? rawRows : core.rankResults(rawRows, q);
+          var totalResults = Number(value.totalResults) || rows.length;
+          var hasMore = Boolean(value.hasMore);
+          if (page === 1) {
+            if (cache.size >= 40) cache.delete(cache.keys().next().value);
+            cache.set(key, { at: Date.now(), rows: rows, totalResults: totalResults, hasMore: hasMore });
+            renderResults(rows, false);
+          } else {
+            var prevCached = cache.get(key);
+            var combined = prevCached ? prevCached.rows.concat(rows) : rows;
+            cache.set(key, { at: Date.now(), rows: combined, totalResults: totalResults, hasMore: hasMore });
+            renderResults(rows, true);
+            rows = combined;
+          }
+          if (hasMore) appendLoadMoreButton(totalResults, page + 1);
+          text("search-status", rows.length
+            ? (totalResults > rows.length ? ("Showing " + rows.length + " of " + totalResults + " results") : (rows.length + " results"))
+            : "No titles found.");
         }, function (error) {
           if (disposed || token !== searchToken || error.name === "AbortError") return;
           renderResults([]); text("search-status", error.status === 429
             ? "Search is rate limited. Try again" + (error.retryAfter ? " in about " + error.retryAfter + " seconds." : " shortly.")
             : "Search unavailable. Press Retry or edit the query.");
-          results.appendChild(button("Retry", function () { searchNow(true); }));
+          results.appendChild(button("Retry", function () { searchNow(true, page); }));
         });
+    }
+    function appendLoadMoreButton(totalResults, nextPage) {
+      var moreBtn = button("Load More Results (Total " + totalResults + ")", function () {
+        searchNow(true, nextPage);
+      }, "lg-search-load-more detail-secondary");
+      results.appendChild(moreBtn);
     }
     function scheduleSearch(delay) {
       state.continueMode = false;
@@ -3248,6 +3318,7 @@
           if (state.view === "episodes") browseEpisodes();
           else if (state.season !== null) loadSeason(state.season);
         } else {
+          renderActions();
           loadDetailRecommendations(state.title);
         }
         saveView();

@@ -199,7 +199,7 @@
             '<div class="player-dock">' +
               '<div id="lg-playback-timeline" class="playback-timeline" aria-label="Reported playback progress" hidden>' +
                 '<span id="lg-timeline-current">0:00</span>' +
-                '<div id="lg-timeline-track" class="timeline-track" aria-hidden="true">' +
+                '<div id="lg-timeline-track" class="timeline-track" tabindex="-1" role="slider" aria-label="Seek timeline" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">' +
                   '<span id="lg-player-track-fill" class="timeline-fill"></span>' +
                   '<span id="lg-timeline-playhead" class="timeline-playhead"></span>' +
                 '</div>' +
@@ -427,7 +427,9 @@
         var pillClass = resolved && resolved.availability === "playable" ? "in-app"
           : (resolved && resolved.availability === "external-app" ? "official-app" : "catalog-only");
         pillEl.className = "lg-detail-availability is-" + pillClass;
-        pillEl.textContent = (resolved ? (resolved.providerShortLabel + " · " + (resolved.availability === "playable" ? resolved.format.toUpperCase() : resolved.availability.toUpperCase())) : arItem.availabilityLabel)
+        var statusTag = (resolved && resolved.availability === "playable") ? resolved.format.toUpperCase()
+          : (arItem.plus ? "ROYA PLUS (LOCKED)" : (resolved ? resolved.availability.toUpperCase() : "UNAVAILABLE"));
+        pillEl.textContent = (resolved ? (resolved.providerShortLabel + " · " + statusTag) : arItem.availabilityLabel)
           + (arItem.countryLabel ? " · " + arItem.countryLabel : "");
       }
 
@@ -441,6 +443,8 @@
           else primaryBtn.textContent = "Watch (YouTube Official)";
         } else if (resolved && resolved.availability === "external-app") {
           primaryBtn.textContent = "Open in " + (resolved.officialApp ? resolved.officialApp.appName : "Official App");
+        } else if (arItem.plus) {
+          primaryBtn.textContent = "Roya Plus (Subscription Required)";
         } else {
           primaryBtn.textContent = "Unavailable (" + (resolved ? resolved.providerShortLabel : "No Stream") + ")";
         }
@@ -501,11 +505,11 @@
 
     var CONTROLS_ORDER = [
       btnRew, btnPlay, btnFf,
-      btnPrev, btnEpisodes, btnNext, btnSwitchProvider, btnSubtitles, btnNative, btnBack
+      btnPrev, btnEpisodes, btnNext, btnSwitchProvider, btnSubtitles, btnNative, btnBack, pTimelineTrack
     ];
     var CONTROL_IDS = [
       "rewind", "play-pause", "forward",
-      "previous-episode", "episodes", "next-episode", "provider-choice", "subtitles", "native", "watch-exit"
+      "previous-episode", "episodes", "next-episode", "provider-choice", "subtitles", "native", "watch-exit", "timeline"
     ];
     var IDLE_MS = 5000;
     var SEEK_COUNTS = [1, 3, 6, 12, 30, 60];
@@ -605,6 +609,7 @@
       var sess = state.playerSession;
       if (!controlsVisible || !state.playerOpen || !sess) return;
       if (sess.mode !== "hls" && sess.mode !== "mp4" && sess.mode !== "youtube") return;
+      if ((sess.mode === "hls" || sess.mode === "mp4") && !sess.observedPlayback) return;
       if (stage && stage.querySelector(".lg-player-status-card")) return;
       if (isPlaybackPaused()) return;
       controlsHideTimer = setTimeout(function () {
@@ -647,6 +652,9 @@
       resetSeekSelection();
       chrome.classList.remove("is-quick-pause");
       setOverlayVisible(false);
+      Array.prototype.forEach.call(overlay.querySelectorAll(".is-focused"), function (n) {
+        n.classList.remove("is-focused");
+      });
       if (pCommandStatus) { pCommandStatus.textContent = ""; pCommandStatus.classList.remove("is-seek-help"); }
       if (remoteCapture && state.playerOpen && !(stage && stage.querySelector(".lg-player-status-card"))) {
         try { remoteCapture.focus({ preventScroll: true }); } catch (_e) { remoteCapture.focus(); }
@@ -654,10 +662,12 @@
     }
 
     function navigateSharedControls(key) {
-      var rows = [[0, 1, 2], [3, 4, 5, 6, 7, 8, 9]].map(function (row) {
+      var rows = [[10], [0, 1, 2], [3, 4, 5, 6, 7, 8, 9]].map(function (row) {
         return row.filter(function (idx) {
           var b = CONTROLS_ORDER[idx];
-          return b && !b.hidden && !b.disabled;
+          if (!b || b.hidden || b.disabled) return false;
+          if (idx === 10 && (!pTimeline || pTimeline.hidden)) return false;
+          return true;
         });
       }).filter(function (row) { return row.length > 0; });
       if (!rows.length) return;
@@ -673,11 +683,18 @@
       if (key === "ArrowUp" || key === "ArrowDown") {
         var nextRow = rows[rowIndex + (key === "ArrowDown" ? 1 : -1)];
         if (!nextRow) return;
+        var curRowId = row[0] === 10 ? "timeline" : (row.indexOf(1) !== -1 ? "primary" : "action");
         var target = Math.round(col * (nextRow.length - 1) / Math.max(1, row.length - 1));
-        if (rowIndex === 0 && key === "ArrowDown") {
+        if (curRowId === "timeline" && key === "ArrowDown") {
+          var playIdx = nextRow.indexOf(1);
+          if (playIdx !== -1) target = playIdx;
+        } else if (curRowId === "primary" && key === "ArrowDown") {
           var isTv = state.playerSession && state.playerSession.item && state.playerSession.item.type === "tv";
           var preferred = isTv ? [3, 6, 5][col] : [6, 6, 9][col];
           if (nextRow.indexOf(preferred) !== -1) target = nextRow.indexOf(preferred);
+        } else if (curRowId === "action" && key === "ArrowUp") {
+          var primaryPlayIdx = nextRow.indexOf(1);
+          if (primaryPlayIdx !== -1 && col >= 1 && col <= Math.max(1, row.length - 2)) target = primaryPlayIdx;
         }
         focusControl(nextRow[target]);
       }
@@ -706,17 +723,26 @@
       var sess = state.playerSession;
       if (!sess || !sess.item || !sess.observedPlayback) return;
       if (sess.mode !== "youtube" && sess.mode !== "mp4" && sess.mode !== "hls") return;
-      var pos = Math.floor(sess.positionSec || 0);
-      var dur = Math.floor(sess.durationSec || 0);
+      var rawPos = Number(sess.positionSec || 0);
+      var rawDur = Number(sess.durationSec || 0);
+      if (videoEl) {
+        if (Number.isFinite(videoEl.currentTime)) rawPos = Math.max(rawPos, videoEl.currentTime);
+        if (Number.isFinite(videoEl.duration) && videoEl.duration > 0) rawDur = videoEl.duration;
+      }
+      var pos = rawPos > 0 ? Math.max(1, Math.round(rawPos)) : 0;
+      var dur = Math.floor(rawDur);
       if (pos <= 0 || dur <= 0) return;
       var completed = dur > 30 && pos / dur >= 0.92;
       var subChoice = core.readSubtitlePref(root.localStorage);
       var providerId = sess.providerId || (sess.mode === "mp4" ? "archive_pd" : (sess.mode === "youtube" ? "youtube_official" : "vidbolt"));
       var rec = core.progressRecord({ position: pos, duration: dur, updatedAt: Date.now(), provider: providerId, completed: completed });
+      var cleanTitle = (sess.item.titleEn && sess.item.titleEn !== sess.item.titleAr)
+        ? (sess.item.titleAr + " · " + sess.item.titleEn)
+        : (sess.item.titleAr || sess.item.title || "");
       var entry = core.item(
         sess.item.type,
         sess.item.id,
-        sess.item.titleAr + " · " + sess.item.titleEn,
+        cleanTitle,
         sess.item.type === "tv" ? sess.season : null,
         sess.item.type === "tv" ? sess.episode : null,
         subChoice || "off",
@@ -738,6 +764,7 @@
       var widthPct = pct.toFixed(2) + "%";
       if (pFill) pFill.style.width = widthPct;
       if (pPlayhead) pPlayhead.style.left = widthPct;
+      if (pTimelineTrack) pTimelineTrack.setAttribute("aria-valuenow", String(Math.round(pct)));
       if (controlsVisible && (selectedControlIdx === 0 || selectedControlIdx === 2)) {
         renderSeekPreview(CONTROL_IDS[selectedControlIdx]);
       }
@@ -748,6 +775,9 @@
       saveObservedProgress();
       clearOverlayMedia();
       chrome.classList.remove("is-quick-pause");
+      Array.prototype.forEach.call(overlay.querySelectorAll(".is-focused"), function (n) {
+        n.classList.remove("is-focused");
+      });
       setOverlayVisible(false);
       state.playerOpen = false;
       state.playerSession = null;
@@ -838,10 +868,17 @@
       });
       videoEl.addEventListener("play", function () {
         if (!state.playerOpen || state.playerSession !== sess) return;
-        sess.observedPlayback = true;
         updatePlayPauseVisual(true);
         chrome.classList.remove("is-quick-pause");
         resetIdle();
+      });
+      videoEl.addEventListener("playing", function () {
+        if (!state.playerOpen || state.playerSession !== sess) return;
+        var firstStart = !sess.observedPlayback;
+        sess.observedPlayback = true;
+        updatePlayPauseVisual(true);
+        chrome.classList.remove("is-quick-pause");
+        if (firstStart) resetIdle();
       });
       videoEl.addEventListener("pause", function () {
         if (!state.playerOpen || state.playerSession !== sess) return;
@@ -919,17 +956,20 @@
     function openHlsPlayback(option, arItem, startSec) {
       var sess = state.playerSession;
       btnNative.hidden = true;
-      pTitle.textContent = arItem.titleAr + " · " + arItem.titleEn;
+      pTitle.textContent = (arItem.titleEn && arItem.titleEn !== arItem.titleAr)
+        ? (arItem.titleAr + " · " + arItem.titleEn)
+        : (arItem.titleAr || arItem.title || "Roya TV");
       if (pEp) {
-        pEp.textContent = (sess && sess.season ? ("Season " + sess.season + " · Episode " + sess.episode + (sess.episodeTitle ? " · " + sess.episodeTitle : "")) : "")
-          || "Authorizing Roya TV HLS stream…";
+        pEp.textContent = (sess && sess.season
+          ? ("Season " + sess.season + " · Episode " + sess.episode + (sess.episodeTitle ? " · " + sess.episodeTitle : ""))
+          : (arItem.date ? arItem.date.slice(0, 4) + " · Roya TV Film" : "Roya TV · HLS"));
       }
       pBadge.textContent = option.providerShortLabel;
       if (pCommandStatus) pCommandStatus.textContent = "Authorizing Roya TV HLS stream…";
       syncSubtitleButton();
       syncEpisodeControls(arItem);
       updatePlayPauseVisual(true);
-      updateTimeBar(startSec || 0, option.durationSec || (arItem.episodeRuntime || 43) * 60);
+      updateTimeBar(startSec || 0, option.durationSec || ((arItem.type === "movie" ? arItem.runtime : arItem.episodeRuntime) || 43) * 60);
 
       videoEl = doc.createElement("video");
       videoEl.id = "lg-html5-video";
@@ -1381,7 +1421,7 @@
           : null;
         var hlsPrevEp = type === "tv" && arabic.findPrevVerifiedEpisode ? arabic.findPrevVerifiedEpisode(id, hlsSeason, hlsEpisode) : null;
         var hlsNextEp = type === "tv" ? arabic.findNextVerifiedEpisode(id, hlsSeason, hlsEpisode) : null;
-        state.playerSession = {
+        var activeHlsSess = {
           mode: "hls",
           providerId: option.providerId,
           item: arItem,
@@ -1394,7 +1434,33 @@
           durationSec: option.durationSec || (hlsEpObj && hlsEpObj.durationSec) || 0,
           observedPlayback: false
         };
+        state.playerSession = activeHlsSess;
         openHlsPlayback(option, arItem, resumeSec);
+        if (type === "tv" && Array.isArray(arItem.seasons) && arItem.seasons.length > 1 && typeof arabic.fetchSeasonAsync === "function") {
+          if (!hlsNextEp) {
+            var nextSeasonEntry = arItem.seasons.find(function (sEntry) { return sEntry.number > hlsSeason; });
+            if (nextSeasonEntry) {
+              arabic.fetchSeasonAsync(id, nextSeasonEntry.number).then(function () {
+                if (state.playerOpen && state.playerSession === activeHlsSess) {
+                  activeHlsSess.nextEpisode = arabic.findNextVerifiedEpisode(id, hlsSeason, hlsEpisode);
+                  syncEpisodeControls(arItem);
+                }
+              }, function () {});
+            }
+          }
+          if (!hlsPrevEp && arabic.findPrevVerifiedEpisode) {
+            var prevCandidates = arItem.seasons.filter(function (sEntry) { return sEntry.number < hlsSeason; });
+            var prevSeasonEntry = prevCandidates.length ? prevCandidates[prevCandidates.length - 1] : null;
+            if (prevSeasonEntry) {
+              arabic.fetchSeasonAsync(id, prevSeasonEntry.number).then(function () {
+                if (state.playerOpen && state.playerSession === activeHlsSess) {
+                  activeHlsSess.prevEpisode = arabic.findPrevVerifiedEpisode(id, hlsSeason, hlsEpisode);
+                  syncEpisodeControls(arItem);
+                }
+              }, function () {});
+            }
+          }
+        }
         return true;
       }
 
@@ -1491,9 +1557,17 @@
           return;
         }
         if (key === "OK") {
-          if (!event.repeat && CONTROLS_ORDER[selectedControlIdx] && !CONTROLS_ORDER[selectedControlIdx].disabled) {
-            CONTROLS_ORDER[selectedControlIdx].click();
+          if (!event.repeat) {
+            if (selectedControlIdx === 10) {
+              togglePlayPause();
+            } else if (CONTROLS_ORDER[selectedControlIdx] && !CONTROLS_ORDER[selectedControlIdx].disabled) {
+              CONTROLS_ORDER[selectedControlIdx].click();
+            }
           }
+          return;
+        }
+        if (selectedControlIdx === 10 && (key === "ArrowLeft" || key === "ArrowRight")) {
+          performSeek(key === "ArrowRight" ? 10 : -10);
           return;
         }
         if ((selectedControlIdx === 0 || selectedControlIdx === 2) && (key === "ArrowLeft" || key === "ArrowRight")) {

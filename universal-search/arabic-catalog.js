@@ -809,8 +809,30 @@
     }
   ];
 
+  function getCombinedTitles() {
+    var roya = root.HorizonRoyaCatalog;
+    var live = (roya && typeof roya.getCachedList === "function") ? roya.getCachedList() : [];
+    if (!live.length) return ARABIC_TITLES.slice();
+    var seenIds = Object.create(null);
+    var out = [];
+    for (var i = 0; i < live.length; i++) {
+      seenIds[live[i].id] = true;
+      out.push(live[i]);
+    }
+    for (var j = 0; j < ARABIC_TITLES.length; j++) {
+      var fallbackItem = ARABIC_TITLES[j];
+      if (!seenIds[fallbackItem.id]) out.push(fallbackItem);
+    }
+    return out;
+  }
+
   function findByKey(type, id) {
     var numId = Number(id);
+    var roya = root.HorizonRoyaCatalog;
+    if (roya && typeof roya.findById === "function") {
+      var royaItem = roya.findById(numId);
+      if (royaItem && (!type || royaItem.type === type)) return royaItem;
+    }
     for (var i = 0; i < ARABIC_TITLES.length; i++) {
       var item = ARABIC_TITLES[i];
       if ((!type || item.type === type) && item.id === numId) return item;
@@ -834,22 +856,33 @@
     return keys;
   }
 
+  function formatDisplayTitle(item) {
+    var ar = item.titleAr || item.title || "";
+    var en = item.titleEn || "";
+    return (en && en !== ar) ? (ar + " · " + en) : ar;
+  }
+
   function toSearchSummary(item) {
     var gIds = (item.genres || []).map(function (g) { return GENRE_NAME_TO_ID[g] || 18; });
     return {
       id: item.id,
       type: item.type,
-      title: item.title + " · " + item.titleEn,
-      date: item.date,
-      poster: item.poster,
-      backdrop: item.backdrop,
-      overview: item.overview,
-      originalLanguage: item.originalLanguage,
-      countryLabel: item.countryLabel,
+      title: formatDisplayTitle(item),
+      originalTitle: item.titleAr || item.title || "",
+      date: item.date || "",
+      poster: item.poster || "",
+      backdrop: item.backdrop || "",
+      overview: item.overview || "",
+      originalLanguage: item.originalLanguage || "ar",
+      countryLabel: item.countryLabel || "",
       genreIds: gIds,
       genre_ids: gIds,
       keywords: extractKeywords(item),
       cast: item.cast || [],
+      popularity: item.popularity || 50,
+      voteCount: item.availability === "in-app" ? 280 : 120,
+      plus: Boolean(item.plus),
+      royaSeriesId: item.royaSeriesId || null,
       availability: item.availability,
       availabilityLabel: item.availabilityLabel
     };
@@ -857,10 +890,13 @@
 
   function toDetailPayload(item) {
     if (!item) return null;
+    var displayTitle = (item.titleEn && item.titleEn !== item.titleAr)
+      ? (item.titleAr + " (" + item.titleEn + ")")
+      : (item.titleAr || item.title || "");
     return {
       id: item.id,
       type: item.type,
-      title: item.title + " (" + item.titleEn + ")",
+      title: displayTitle,
       titleAr: item.titleAr,
       titleEn: item.titleEn,
       date: item.date,
@@ -872,37 +908,41 @@
       backdrop: item.backdrop,
       genres: item.genres || [],
       cast: item.cast || [],
+      creators: item.creators || [],
+      directors: item.directors || [],
       network: item.network || "",
       status: item.status || "",
       originalLanguage: "Arabic (العربية) · " + (item.countryLabel || ""),
       seasons: item.seasons || [],
+      plus: Boolean(item.plus),
       availability: item.availability,
       availabilityLabel: item.availabilityLabel,
       availabilityDetail: item.availabilityDetail,
       officialApp: item.officialApp || null,
       youtubeId: item.youtubeId || null,
       royaSeriesId: item.royaSeriesId || null,
+      movieRoyaEpisodeId: item.movieRoyaEpisodeId || null,
       channel: item.channel || ""
     };
   }
 
-  function toSeasonPayload(id, seasonNumber) {
-    var item = findByKey("tv", id);
-    if (!item) return null;
+  function mapEpisodesPayload(item, seasonNumber, eps) {
     var sNum = Number(seasonNumber);
-    var eps = (item.seasonEpisodes && item.seasonEpisodes[sNum]) ? item.seasonEpisodes[sNum] : [];
     return {
       season: sNum,
-      episodes: eps.map(function (ep) {
+      episodes: (eps || []).map(function (ep) {
         return {
           number: ep.number,
           title: ep.title,
           date: ep.date || "",
           runtime: ep.runtime || item.episodeRuntime || 45,
           durationSec: ep.durationSec || null,
+          plus: Boolean(ep.plus),
+          video_type: ep.video_type || null,
           overview: ep.overview || "",
           still: ep.still || item.backdrop || null,
           youtubeId: ep.youtubeId || null,
+          royaSeriesId: ep.royaSeriesId || item.royaSeriesId || null,
           royaEpisodeId: ep.royaEpisodeId || null,
           channel: ep.channel || item.network || "",
           availability: ep.availability || item.availability
@@ -911,15 +951,23 @@
     };
   }
 
-  function search(query, typeFilter) {
+  function toSeasonPayload(id, seasonNumber) {
+    var item = findByKey("tv", id);
+    if (!item) return null;
+    var sNum = Number(seasonNumber);
+    var eps = (item.seasonEpisodes && item.seasonEpisodes[sNum]) ? item.seasonEpisodes[sNum] : [];
+    return mapEpisodesPayload(item, sNum, eps);
+  }
+
+  function rankCatalogMatches(pool, query, typeFilter) {
     var q = normalizeArabic(query);
     var tokens = tokenizeBilingual(query);
     var filter = (typeFilter === "movie" || typeFilter === "tv") ? typeFilter : "all";
     if (!q) return [];
 
     var scored = [];
-    for (var i = 0; i < ARABIC_TITLES.length; i++) {
-      var item = ARABIC_TITLES[i];
+    for (var i = 0; i < pool.length; i++) {
+      var item = pool[i];
       if (filter !== "all" && item.type !== filter) continue;
       if (item.originalLanguage !== "ar") continue;
 
@@ -945,17 +993,89 @@
       else if (exactNormAr.indexOf(q) >= 0 || exactNormEn.indexOf(q) >= 0) score += 350;
       else score += 120;
 
-      if (item.availability === "in-app") score += 40;
+      if (item.isRoyaCatalog) score += 60;
+      if (item.royaProgramType === "2") score += 25;
+      if (item.availability === "in-app" && !item.plus) score += 40;
+      if (item.plus) score -= 15;
       scored.push({ item: item, score: score });
     }
 
-    scored.sort(function (a, b) { return b.score - a.score; });
+    scored.sort(function (a, b) {
+      if (b.score !== a.score) return b.score - a.score;
+      return (b.item.royaSeriesId || 0) - (a.item.royaSeriesId || 0);
+    });
     return scored.map(function (entry) { return toSearchSummary(entry.item); });
+  }
+
+  function search(query, typeFilter) {
+    return rankCatalogMatches(getCombinedTitles(), query, typeFilter);
+  }
+
+  function searchAsync(query, typeFilter, options) {
+    options = options || {};
+    var page = Math.max(1, Number(options.page) || 1);
+    var pageSize = Math.max(1, Math.min(60, Number(options.pageSize) || 24));
+    var signal = options.signal;
+    var roya = root.HorizonRoyaCatalog;
+    var loader = (roya && typeof roya.ensureCatalogLoaded === "function")
+      ? roya.ensureCatalogLoaded(signal)
+      : Promise.resolve([]);
+
+    return loader.then(function () {
+      var allMatches = rankCatalogMatches(getCombinedTitles(), query, typeFilter);
+      var totalResults = allMatches.length;
+      var totalPages = Math.max(1, Math.ceil(totalResults / pageSize));
+      var start = (page - 1) * pageSize;
+      return {
+        results: allMatches.slice(start, start + pageSize),
+        page: page,
+        pageSize: pageSize,
+        totalResults: totalResults,
+        totalPages: totalPages,
+        hasMore: start + pageSize < totalResults,
+        preRanked: true
+      };
+    });
+  }
+
+  function fetchDetailAsync(type, id, signal) {
+    var numId = Number(id);
+    var existing = findByKey(type, numId);
+    var roya = root.HorizonRoyaCatalog;
+    var royaId = (existing && existing.royaSeriesId) || (roya && typeof roya.toRoyaIdFromWatchId === "function" ? roya.toRoyaIdFromWatchId(numId) : null);
+    if (roya && royaId && typeof roya.fetchDetailsAsync === "function") {
+      return roya.fetchDetailsAsync(royaId, signal).then(function (resolvedItem) {
+        if (existing && !existing.isRoyaCatalog && existing.availability === "in-app" && existing.archiveSource) {
+          return toDetailPayload(existing);
+        }
+        return toDetailPayload(resolvedItem);
+      }, function () {
+        return existing ? toDetailPayload(existing) : null;
+      });
+    }
+    return Promise.resolve(existing ? toDetailPayload(existing) : null);
+  }
+
+  function fetchSeasonAsync(id, seasonNumber, signal) {
+    var numId = Number(id);
+    var sNum = Number(seasonNumber || 1);
+    var existing = findByKey("tv", numId);
+    var roya = root.HorizonRoyaCatalog;
+    var royaId = (existing && existing.royaSeriesId) || (roya && typeof roya.toRoyaIdFromWatchId === "function" ? roya.toRoyaIdFromWatchId(numId) : null);
+    if (roya && royaId && typeof roya.fetchSeasonAsync === "function") {
+      return roya.fetchSeasonAsync(royaId, sNum, signal).then(function (eps) {
+        var resolvedItem = findByKey("tv", numId) || existing;
+        return mapEpisodesPayload(resolvedItem, sNum, eps);
+      }, function () {
+        return existing ? toSeasonPayload(numId, sNum) : null;
+      });
+    }
+    return Promise.resolve(existing ? toSeasonPayload(numId, sNum) : null);
   }
 
   function filterCatalog(category) {
     var cat = category || "all";
-    return ARABIC_TITLES.filter(function (item) {
+    return getCombinedTitles().filter(function (item) {
       if (item.originalLanguage !== "ar") return false;
       if (cat === "all") return true;
       if (cat === "in-app") return item.availability === "in-app";
@@ -1088,7 +1208,7 @@
     return {
       id: item.id,
       type: item.type,
-      title: item.title + " · " + item.titleEn,
+      title: formatDisplayTitle(item),
       date: item.date,
       poster: item.poster || item.backdrop || "",
       backdrop: item.backdrop || item.poster || "",
@@ -1112,25 +1232,42 @@
     };
   }
 
+  function homePoolOrdered() {
+    var combined = getCombinedTitles();
+    // Put core curated playable landmarks first (المومياء, السبع, لن أعيش) then live Roya series & films
+    var priorityIds = [46707, 901714, 111075];
+    var ordered = [];
+    var seen = Object.create(null);
+    priorityIds.forEach(function (pid) {
+      var found = combined.find(function (x) { return x.id === pid; });
+      if (found) { ordered.push(found); seen[found.id] = true; }
+    });
+    combined.forEach(function (item) {
+      if (!seen[item.id]) { ordered.push(item); seen[item.id] = true; }
+    });
+    return ordered;
+  }
+
   function selectHomeRows(historyRows, feedback) {
     var ratings = (feedback && feedback.ratings) ? feedback.ratings : {};
-    var eligible = ARABIC_TITLES.map(toHomeCandidate).filter(function (c) {
+    var pool = homePoolOrdered();
+    var eligible = pool.map(toHomeCandidate).filter(function (c) {
       return ratings[c.type + ":" + c.id] !== "disliked";
     });
-    if (!eligible.length) eligible = ARABIC_TITLES.map(toHomeCandidate);
+    if (!eligible.length) eligible = pool.map(toHomeCandidate);
 
     var tvAll = eligible.filter(function (c) { return c.type === "tv"; });
     var movieAll = eligible.filter(function (c) { return c.type === "movie"; });
 
     var playable = eligible.filter(function (c) {
       var orig = findByKey(c.type, c.id);
-      return orig && orig.availability === "in-app";
+      return orig && orig.availability === "in-app" && !orig.plus;
     });
     var regionalMix = eligible.filter(function (c) {
       return playable.indexOf(c) < 0;
     });
 
-    var seedItem = ARABIC_TITLES[0];
+    var seedItem = pool[0] || ARABIC_TITLES[0];
     if (Array.isArray(historyRows)) {
       for (var i = 0; i < historyRows.length; i++) {
         var matched = findByKey(historyRows[i].type, historyRows[i].id);
@@ -1142,31 +1279,31 @@
       seed: {
         type: seedItem.type,
         id: seedItem.id,
-        title: seedItem.titleAr + " · " + seedItem.titleEn,
+        title: formatDisplayTitle(seedItem),
         liked: ratings[seedItem.type + ":" + seedItem.id] === "liked"
       },
-      top: playable.concat(regionalMix).slice(0, 10),
-      because: eligible.slice(1, 9),
-      trending: eligible.slice(0, 10),
-      gems: regionalMix.concat(playable).slice(0, 8),
-      explore: tvAll.slice(2).concat(movieAll.slice(2)).slice(0, 8),
+      top: playable.slice(0, 14),
+      because: playable.slice(2, 14),
+      trending: eligible.slice(0, 14),
+      gems: regionalMix.concat(playable).slice(0, 12),
+      explore: tvAll.slice(3, 13).concat(movieAll.slice(0, 6)),
       tv: {
-        recommended: tvAll.slice(0, 10),
-        trending: tvAll.slice().reverse().slice(0, 10),
-        genres: tvAll.filter(function (c) { return c.genreIds.indexOf(18) >= 0; }),
+        recommended: tvAll.slice(0, 14),
+        trending: tvAll.slice(3, 17),
+        genres: tvAll.filter(function (c) { return c.genreIds.indexOf(18) >= 0; }).slice(0, 14),
         genresHeading: "Arabic Drama Series",
-        short: tvAll.filter(function (c) { return (c.episodeRuntime || 45) <= 40; }),
-        gems: tvAll.slice(3).concat(tvAll.slice(0, 3)).slice(0, 8),
-        acclaimed: tvAll.slice(0, 8)
+        short: tvAll.filter(function (c) { return (c.episodeRuntime || 45) <= 45; }).slice(0, 14),
+        gems: tvAll.slice(6, 18),
+        acclaimed: tvAll.slice(0, 14)
       },
       movies: {
-        recommended: movieAll.slice(0, 10),
-        trending: movieAll.slice().reverse().slice(0, 10),
-        genres: movieAll.filter(function (c) { return c.genreIds.indexOf(18) >= 0; }),
-        genresHeading: "Arabic Cinema",
-        short: movieAll.filter(function (c) { return (c.runtime || 120) <= 105; }),
-        acclaimed: movieAll.slice(0, 8),
-        gems: movieAll.slice(2).concat(movieAll.slice(0, 2)).slice(0, 8)
+        recommended: movieAll.slice(0, 14),
+        trending: movieAll.slice().reverse().slice(0, 14),
+        genres: movieAll.filter(function (c) { return c.genreIds.indexOf(18) >= 0 || c.genreIds.length > 0; }).slice(0, 14),
+        genresHeading: "Arabic Cinema & Documentaries",
+        short: movieAll.filter(function (c) { return (c.runtime || 120) <= 105; }).slice(0, 14),
+        acclaimed: movieAll.slice(0, 12),
+        gems: movieAll.slice(1).concat(movieAll.slice(0, 1)).slice(0, 12)
       }
     };
   }
@@ -1178,7 +1315,7 @@
     var lengthFilter = params.get("length") || "";
     var sortBy = params.get("sort_by") || "";
 
-    var rows = ARABIC_TITLES.filter(function (item) {
+    var rows = getCombinedTitles().filter(function (item) {
       if (item.type !== type) return false;
       if (withGenre) {
         var gIds = (item.genres || []).map(function (g) { return GENRE_NAME_TO_ID[g] || 0; });
@@ -1196,7 +1333,7 @@
         if (lengthFilter === "long" && rt < (type === "tv" ? 45 : 130)) return false;
       }
       return true;
-    }).map(function (item, idx) { return toHomeCandidate(item, idx); });
+    }).slice(0, 40).map(function (item, idx) { return toHomeCandidate(item, idx); });
 
     if (sortBy.indexOf("date.desc") >= 0) {
       rows.sort(function (a, b) { return String(b.date || "").localeCompare(String(a.date || "")); });
@@ -1209,11 +1346,11 @@
     var avoidSet = Object.create(null);
     String(avoid || "").split(",").forEach(function (k) { if (k) avoidSet[k] = true; });
     var targetType = (target === "tv" || target === "movie") ? target : seed.type;
-    var candidates = ARABIC_TITLES.filter(function (item) {
+    var candidates = getCombinedTitles().filter(function (item) {
       if (item.type === seed.type && item.id === seed.id) return false;
       if (avoidSet[item.type + ":" + item.id]) return false;
       return target === "both" || item.type === targetType;
-    }).map(function (item, idx) { return toHomeCandidate(item, idx); });
+    }).slice(0, 24).map(function (item, idx) { return toHomeCandidate(item, idx); });
 
     return {
       seed: toSearchSummary(seed),
@@ -1226,12 +1363,22 @@
     STREAM_SAMPLES: STREAM_SAMPLES,
     normalizeArabic: normalizeArabic,
     tokenizeBilingual: tokenizeBilingual,
+    getCombinedTitles: getCombinedTitles,
     findByKey: findByKey,
     findById: findById,
     toSearchSummary: toSearchSummary,
     toDetailPayload: toDetailPayload,
     toSeasonPayload: toSeasonPayload,
     search: search,
+    searchAsync: searchAsync,
+    fetchDetailAsync: fetchDetailAsync,
+    fetchSeasonAsync: fetchSeasonAsync,
+    ensureLiveCatalogAsync: function (signal) {
+      var roya = root.HorizonRoyaCatalog;
+      return (roya && typeof roya.ensureCatalogLoaded === "function")
+        ? roya.ensureCatalogLoaded(signal)
+        : Promise.resolve(ARABIC_TITLES);
+    },
     filterCatalog: filterCatalog,
     selectHomeRows: selectHomeRows,
     filterDiscover: filterDiscover,

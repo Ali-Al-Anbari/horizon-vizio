@@ -5,6 +5,7 @@
   var HISTORY_KEY = "horizon-universal-search-history-v1";
   var PREFS_KEY = "horizon-universal-search-providers-v1";
   var SUBTITLE_KEY = "horizon-watch-subtitles-v1";
+  var CONTENT_LIBRARY_KEY = "horizon-watch-content-library-v1";
   var STATE_KEY = "horizon-universal-search-view-v1";
   var HANDOFF_KEY = "horizon-watch-player-handoff-v1";
   var BROWSED_SEASONS_KEY = "horizon-watch-browsed-seasons-v1";
@@ -498,7 +499,7 @@
       var title = String(value || "").toLocaleLowerCase().trim();
       if (title === q) return q.length <= 5 ? 95 : 125;
       if (title.indexOf(q) === 0) return 80;
-      var words = title.split(/[^a-z0-9]+/);
+      var words = title.split(/[^a-z0-9\u0600-\u06FF]+/);
       for (var i = 0; i < words.length; i++) if (words[i].indexOf(q) === 0) return 35;
       return title.indexOf(q) >= 0 ? 22 : 0;
     }
@@ -533,6 +534,16 @@
     if (mode !== "on" && mode !== "off") return;
     try { storage.setItem(SUBTITLE_KEY, JSON.stringify({ version: 1, mode: mode })); } catch (_error) {}
   }
+  function readLibraryPref(storage) {
+    try {
+      var value = JSON.parse(storage.getItem(CONTENT_LIBRARY_KEY));
+      return value && value.version === 1 && value.mode === "arabic" ? "arabic" : "standard";
+    } catch (_error) { return "standard"; }
+  }
+  function writeLibraryPref(storage, mode) {
+    if (mode !== "standard" && mode !== "arabic") return;
+    try { storage.setItem(CONTENT_LIBRARY_KEY, JSON.stringify({ version: 1, mode: mode })); } catch (_error) {}
+  }
   function playerResumeParams(progress, startOver) {
     if (startOver) return "&startOver=1";
     var record = progressRecord(progress);
@@ -555,6 +566,9 @@
       + (typeof handoff === "string" && /^[A-Za-z0-9_-]{8,80}$/.test(handoff) ? "&handoff=" + handoff : "");
   }
   function imageUrl(path, size) {
+    if (typeof path === "string" && /^https:\/\/(image\.tmdb\.org|i\.ytimg\.com|btttr\.cc|d3mfc5qyv0pefp\.cloudfront\.net)\//i.test(path)) {
+      return path;
+    }
     return imagePath(path)
       ? "https://image.tmdb.org/t/p/" + (size === "hero" ? "w1280" : size === "backdrop" ? "w780"
         : size === "poster-small" ? "w342"
@@ -649,7 +663,8 @@
         completed: params.get("completed") === "1" }) } : null;
   }
   root.HorizonSearchCore = { PLAYER_ORIGIN: PLAYER_ORIGIN, LAUNCHER_ORIGIN: LAUNCHER_ORIGIN,
-    HISTORY_KEY: HISTORY_KEY, PREFS_KEY: PREFS_KEY, SUBTITLE_KEY: SUBTITLE_KEY, STATE_KEY: STATE_KEY,
+    HISTORY_KEY: HISTORY_KEY, PREFS_KEY: PREFS_KEY, SUBTITLE_KEY: SUBTITLE_KEY,
+    CONTENT_LIBRARY_KEY: CONTENT_LIBRARY_KEY, STATE_KEY: STATE_KEY,
     HANDOFF_KEY: HANDOFF_KEY, BROWSED_SEASONS_KEY: BROWSED_SEASONS_KEY, EPISODE_CATALOG_KEY: EPISODE_CATALOG_KEY,
     HIDDEN_CONTINUE_KEY: HIDDEN_CONTINUE_KEY, HISTORY_BACKUP_KEY: HISTORY_BACKUP_KEY,
     HISTORY_DELETIONS_KEY: HISTORY_DELETIONS_KEY, ACTIVE_EPISODES_KEY: ACTIVE_EPISODES_KEY,
@@ -668,6 +683,7 @@
     canonicalEpisodeTarget: canonicalEpisodeTarget, isEpisodeCompleted: isEpisodeCompleted, nextCatalogEpisode: nextCatalogEpisode,
     rankResults: rankResults,
     readPrefs: readPrefs, writePrefs: writePrefs, readSubtitlePref: readSubtitlePref, writeSubtitlePref: writeSubtitlePref,
+    readLibraryPref: readLibraryPref, writeLibraryPref: writeLibraryPref,
     tvPlayerUrl: tvPlayerUrl, moviePlayerUrl: moviePlayerUrl, imageUrl: imageUrl, providerApp: providerApp, providerWatchUrl: providerWatchUrl,
     websiteSearch: websiteSearch, returnEpisode: returnEpisode, returnMovie: returnMovie, providerIdentity: providerIdentity,
     groupProviders: groupProviders };

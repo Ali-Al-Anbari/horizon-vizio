@@ -3,16 +3,21 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://image.tmdb.org data:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.youtube.com https://s.ytimg.com; style-src 'self' 'unsafe-inline'; img-src 'self' https://image.tmdb.org https://i.ytimg.com https://btttr.cc https://d3mfc5qyv0pefp.cloudfront.net data:; media-src 'self' https://archive.org https://*.archive.org https://*.us.archive.org https://test-streams.mux.dev https://media.w3.org blob:; connect-src 'self' https://www.youtube.com; object-src 'none'; frame-src https://www.youtube.com https://www.youtube-nocookie.com; base-uri 'none'; form-action 'none'" />
   <title>Horizon Watch</title>
   <link rel="icon" href="data:," />
   <link rel="stylesheet" href="search.css?v=phase4a-4" />
+  <link rel="stylesheet" href="lg-webos-compat.css?v=lg-2" />
+  <script src="lg-compat.js?v=lg-2" defer></script>
   <script src="core.js" defer></script>
   <script src="recommendations.js" defer></script>
   <script src="discover-engine.js" defer></script>
   <script src="player-adapter.js" defer></script>
   <script src="mock-data.js" defer></script>
   <script src="watch-performance.js?v=hero-test-2" defer></script>
+  <script src="arabic-catalog.js?v=lg-2" defer></script>
+  <script src="arabic-providers.js?v=lg-2" defer></script>
+  <script src="lg-webos-adapter.js?v=lg-2" defer></script>
   <script src="search.js?v=phase4a-4" defer></script>
 </head>
 <body>
@@ -369,7 +374,11 @@
             </div>
           </section>
           <section id="settings-panel-library" class="settings-panel" aria-label="Manage Library and Content" hidden>
-            <h3>Continue Watching</h3>
+            <h3>Content Library</h3>
+            <div class="settings-list">
+              <div class="settings-entry"><span>Content Library<small>Switch between Standard Horizon and Arabic Horizon — العربية catalogs across Home, TV, Movies, Discover, and Search.</small></span><button id="settings-content-library" data-focus type="button" aria-pressed="false">Standard Horizon</button></div>
+            </div>
+            <h3 style="margin-top:20px;">Continue Watching</h3>
             <div id="settings-continue" class="settings-list"></div>
             <h3 style="margin-top:20px;">Viewing History</h3>
             <div id="settings-history" class="settings-list"></div>

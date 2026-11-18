@@ -1,0 +1,25 @@
+{
+  "id": "com.horizon.watch.lg",
+  "version": "0.2.0",
+  "vendor": "Horizon",
+  "type": "web",
+  "main": "index.html",
+  "title": "Horizon Watch",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "bgColor": "#000000",
+  "iconColor": "#0a111a",
+  "resolution": "1920x1080",
+  "disableBackHistoryAPI": true,
+  "handlesRelaunch": true,
+  "transparent": false,
+  "enableKeyboard": true,
+  "supportGIP": false,
+  "requiredPermissions": [
+    "application.operation",
+    "tv.inputdevice"
+  ],
+  "requiredACG": [
+    "application.operation"
+  ]
+}

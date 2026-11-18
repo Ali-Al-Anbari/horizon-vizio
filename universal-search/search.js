@@ -60,8 +60,10 @@
     if (watchPerformance && (typeof watchPerformance.onModeChange !== "function"
         || typeof watchPerformance.heroWork !== "function")) watchPerformance = null;
     var query = get("query"), results = get("results");
+    var arabicCatalog = root.HorizonArabicCatalog || null;
+    var contentLibrary = typeof core.readLibraryPref === "function" ? core.readLibraryPref(local) : "standard";
     var state = { view: "watch", previousView: "watch", detailSource: "watch", filter: "all", query: "", title: null, detail: null,
-      season: null, episodes: [], subtitle: core.readSubtitlePref(local), continueMode: false,
+      season: null, episodes: [], subtitle: core.readSubtitlePref(local), contentLibrary: contentLibrary, continueMode: false,
       watchTab: "for-you", detailSourceTab: "for-you",
       historyMode: "overview", historyFilter: "all", historyQuery: "",
       settingsCategory: null, lastSettingsCategory: "appearance" };
@@ -431,6 +433,36 @@
       catch (_error) { /* Return falls back to search. */ }
     }
     function api(path, signal) {
+      if (arabicCatalog) {
+        var arUrl = new URL(path, "https://example.invalid");
+        var arBits = arUrl.pathname.split("/");
+        if (arBits[2] === "title") {
+          var arTitle = arabicCatalog.findByKey(arBits[3], Number(arBits[4]));
+          if (arTitle) return Promise.resolve(arabicCatalog.toDetailPayload(arTitle));
+        }
+        if (arBits[2] === "season" && arBits[3] === "tv") {
+          var arSeason = arabicCatalog.toSeasonPayload(Number(arBits[4]), Number(arBits[5]));
+          if (arSeason) return Promise.resolve(arSeason);
+        }
+        if (contentLibrary === "arabic") {
+          if (arBits[2] === "search") {
+            return Promise.resolve({
+              results: arabicCatalog.search(arUrl.searchParams.get("q") || "", arUrl.searchParams.get("type") || "all")
+            });
+          }
+          if (arBits[2] === "discover" && typeof arabicCatalog.filterDiscover === "function") {
+            return Promise.resolve(arabicCatalog.filterDiscover(arUrl.searchParams));
+          }
+          if (arBits[2] === "discover-similar" && typeof arabicCatalog.similarTitles === "function") {
+            return Promise.resolve(arabicCatalog.similarTitles(
+              arUrl.searchParams.get("type"),
+              arUrl.searchParams.get("id"),
+              arUrl.searchParams.get("target"),
+              arUrl.searchParams.get("avoid")
+            ));
+          }
+        }
+      }
       if (useMock) return Promise.resolve().then(function () {
         var parsed = new URL(path, "https://example.invalid");
         var bits = parsed.pathname.split("/");
@@ -2000,7 +2032,7 @@
       }
     }
     function recommendationSignature(rows, feedback) {
-      return recommendations.seedQuery(rows, feedback) + "|" + feedback.revision + "|"
+      return contentLibrary + "|" + recommendations.seedQuery(rows, feedback) + "|" + feedback.revision + "|"
         + rows.map(function (row) { return row.type + ":" + row.id + ":"
           + (row.progress && row.progress.updatedAt || 0) + ":" + (row.progress && row.progress.completed || false);
         }).join(",");
@@ -2010,6 +2042,7 @@
     function enrichCandidateRuntimes(candidates) {
       if (!candidates || !candidates.length || candidateEnrichmentStarted) return;
       candidateEnrichmentStarted = true;
+      var libraryAtStart = contentLibrary;
       var needed = [];
       candidates.forEach(function (c) {
         var k = c.type + ":" + c.id;
@@ -2033,7 +2066,8 @@
         }, function () {});
       });
       Promise.all(pending).then(function () {
-        if (updated && !disposed && state.view === "watch" && recommendationPayload) {
+        if (updated && !disposed && state.view === "watch" && recommendationPayload
+            && contentLibrary === libraryAtStart && contentLibrary !== "arabic") {
           var rows = previewRows || core.readHistory(local);
           var feedback = recommendations ? recommendations.readFeedback(local) : { ratings: {} };
           paintRecommendationRows(recommendations.selectRows(rows, feedback, recommendationPayload, { runtimes: knownRuntimes }));
@@ -2046,6 +2080,12 @@
       var signature = recommendationSignature(rows, feedback);
       recommendationWantedSignature = signature;
       if (recommendationLoadedSignature === signature) return;
+      if (contentLibrary === "arabic" && arabicCatalog && typeof arabicCatalog.selectHomeRows === "function") {
+        recommendationLoadedSignature = signature;
+        recommendationPayload = null;
+        paintRecommendationRows(arabicCatalog.selectHomeRows(rows, feedback));
+        return;
+      }
       if (recommendationPayload) paintRecommendationRows(recommendations.selectRows(rows, feedback, recommendationPayload, { runtimes: knownRuntimes }));
       if (recommendationPending) return;
       if (!recommendationPayload) paintRecommendationRows(recommendationRows);
@@ -2082,6 +2122,16 @@
     }
     function getFallbackDiscoverSeed() {
       var hist = core.readHistory(local);
+      if (contentLibrary === "arabic" && arabicCatalog) {
+        if (Array.isArray(hist)) {
+          for (var i = 0; i < hist.length; i++) {
+            var matched = arabicCatalog.findByKey(hist[i].type, hist[i].id);
+            if (matched) return arabicCatalog.toSearchSummary(matched);
+          }
+        }
+        var firstAr = arabicCatalog.findByKey("tv", 90674) || arabicCatalog.ARABIC_TITLES[0];
+        if (firstAr) return arabicCatalog.toSearchSummary(firstAr);
+      }
       if (Array.isArray(hist) && hist.length > 0) {
         var first = hist[0];
         if (first && first.id) return { type: first.type, id: first.id, title: first.title, poster: first.poster, backdrop: first.backdrop };
@@ -2183,7 +2233,9 @@
         renderDiscoverRows(data);
       }
 
-      if (useMock && mock.discoverSimilar) {
+      if (contentLibrary === "arabic" && arabicCatalog && typeof arabicCatalog.similarTitles === "function") {
+        handleResponse(arabicCatalog.similarTitles(seed.type, seed.id, discoverMedia, avoids.join(",")));
+      } else if (useMock && mock.discoverSimilar) {
         var mockRes = mock.discoverSimilar(seed.type, seed.id, discoverMedia, avoids);
         handleResponse(mockRes);
       } else {
@@ -2195,7 +2247,9 @@
         api("/api/discover-similar?" + queryParams.toString()).then(function (data) {
           handleResponse(data);
         }).catch(function () {
-          if (useMock && mock.discoverSimilar) {
+          if (contentLibrary === "arabic" && arabicCatalog && typeof arabicCatalog.similarTitles === "function") {
+        handleResponse(arabicCatalog.similarTitles(seed.type, seed.id, discoverMedia, avoids.join(",")));
+      } else if (useMock && mock.discoverSimilar) {
             handleResponse(mock.discoverSimilar(seed.type, seed.id, discoverMedia, avoids));
             return;
           }
@@ -2670,9 +2724,16 @@
       if (browseSummary) {
         browseSummary.textContent = "Hero delay: " + (heroPreferences.delay ? heroPreferences.delay + "ms" : "Immediate");
       }
+      var libButton = get("settings-content-library");
+      if (libButton) {
+        var isArLib = contentLibrary === "arabic";
+        libButton.textContent = isArLib ? "Arabic Horizon — العربية" : "Standard Horizon";
+        libButton.setAttribute("aria-pressed", String(isArLib));
+      }
       var libSummary = get("settings-summary-library");
       if (libSummary) {
-        libSummary.textContent = visible.length + " Continue · " + rows.length + " History · " + Object.keys(tasteRatings).length + " ratings";
+        libSummary.textContent = (contentLibrary === "arabic" ? "Arabic Horizon" : "Standard Horizon")
+          + " · " + visible.length + " Continue · " + rows.length + " History · " + Object.keys(tasteRatings).length + " ratings";
       }
     }
     var SETTINGS_CATEGORIES = {
@@ -3432,6 +3493,11 @@
       if (!url) { text("detail-status", "Invalid episode selection."); return; }
       if (startOver) core.clearProgress(local, "tv", state.title.id, season, episode);
       core.writeActiveEpisode(local, state.title.id, { season: season, episode: episode, at: Date.now() });
+      if (typeof root.__HORIZON_LG_LAUNCH__ === "function"
+          && root.__HORIZON_LG_LAUNCH__("tv", state.title.id, season, episode, !!startOver, confirmedTitle || "")) {
+        launchingEpisode = false;
+        return;
+      }
       launchingEpisode = true;
       saveView();
       try { nav.assign(url);
@@ -3454,6 +3520,11 @@
       var url = player.movieUrl(state.title.id, state.title.title, startOver ? null : progress, !!startOver, handoff);
       if (!url) { text("detail-status", "Invalid movie selection."); return; }
       if (startOver) core.clearProgress(local, "movie", state.title.id);
+      if (typeof root.__HORIZON_LG_LAUNCH__ === "function"
+          && root.__HORIZON_LG_LAUNCH__("movie", state.title.id, null, null, !!startOver, state.title.title || "")) {
+        launchingEpisode = false;
+        return;
+      }
       launchingEpisode = true;
       text("detail-status", "Opening movie in Horizon Video…");
       saveView();
@@ -4201,6 +4272,51 @@
       var btn = get("settings-cat-" + catId);
       if (btn) btn.addEventListener("click", function () { openSettingsCategory(catId); });
     });
+    var contentLibraryBtn = get("settings-content-library");
+    function setContentLibrary(nextMode) {
+      var mode = nextMode === "arabic" ? "arabic" : "standard";
+      contentLibrary = mode;
+      state.contentLibrary = mode;
+      if (typeof core.writeLibraryPref === "function") core.writeLibraryPref(local, mode);
+      cache.clear();
+      recommendationPayload = null;
+      recommendationLoadedSignature = "";
+      recommendationWantedSignature = "";
+      recommendationPending = null;
+      recommendationRows = { top: [], because: [], seed: null };
+      candidateEnrichmentStarted = false;
+      discoverData = null;
+      discoverActiveSeed = null;
+      tvFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
+      movieFilters = { genre: null, length: null, rating: null, year: null, sort: "best" };
+      discoverFilters = { genre: null, style: "all", sort: "best" };
+      discoverStyle = "all"; discoverMode = "all"; discoverMedia = "same";
+      tabRowMemory = { "for-you": Object.create(null), "tv": Object.create(null), "movies": Object.create(null), "discover": Object.create(null) };
+      tabLastContent = { "for-you": null, "tv": null, "movies": null, "discover": null };
+      tabScrollTop = { "for-you": 0, "tv": 0, "movies": 0, "discover": 0 };
+      homeRowMemory = tabRowMemory["for-you"];
+      homeLastContent = null;
+      homeDefaultEntry = null;
+      rowCycleIndex = Object.create(null);
+      state.watchTab = "for-you";
+      state.query = "";
+      if (query) query.value = "";
+      state.settingsCategory = null;
+      state.settingsHistoryItem = null;
+      if (get("settings-landing")) get("settings-landing").hidden = false;
+      if (get("settings-subpage")) get("settings-subpage").hidden = true;
+      updateFilterStripUI();
+      renderSettings();
+      try {
+        doc.dispatchEvent(new CustomEvent("horizon:librarychange", { detail: { library: mode } }));
+      } catch (_e) {}
+      showWatch(true);
+    }
+    if (contentLibraryBtn) {
+      contentLibraryBtn.addEventListener("click", function () {
+        setContentLibrary(contentLibrary === "arabic" ? "standard" : "arabic");
+      });
+    }
     var subpageBack = get("settings-subpage-back");
     if (subpageBack) subpageBack.addEventListener("click", closeSettingsCategory);
     get("history-back").addEventListener("click", function () { returnWithinWatch(leaveHistory); });

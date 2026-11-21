@@ -49,7 +49,7 @@
     if (type === "tv" && (!positive(season) || !positive(episode))) return null;
     artwork = artwork || {};
     var progress = progressRecord(artwork.progress);
-    return { type: type, id: id, title: safeText(title, 160),
+    var built = { type: type, id: id, title: safeText(title, 160),
       season: type === "tv" ? season : null, episode: type === "tv" ? episode : null,
       subtitle: subtitle === "on" ? "on" : "off", at: at,
       poster: imagePath(artwork.poster), backdrop: imagePath(artwork.backdrop),
@@ -57,12 +57,32 @@
       tvdbId: type === "tv" && positive(artwork.tvdbId) ? artwork.tvdbId : null,
       progress: progress, manualWatched: typeof artwork.manualWatched === "boolean" ? artwork.manualWatched : null,
       manualOnly: artwork.manualOnly === true };
+    if (artwork.section === "arabic" || artwork.section === "english") built.section = artwork.section;
+    return built;
   }
-  function historyKey(row) { return row.type + ":" + row.id + (row.type === "tv" ? ":" + row.season + ":" + row.episode : ""); }
-  function readHistory(storage) {
+  function sectionsMod() { return root.HorizonHistorySections || null; }
+  function resolveSection(storage, optSection) {
+    var sm = sectionsMod();
+    if (!sm) return null;
+    return (optSection === "arabic" || optSection === "english")
+      ? optSection
+      : sm.activeSection(storage, CONTENT_LIBRARY_KEY);
+  }
+  function historyKey(row, optSection) {
+    var sm = sectionsMod();
+    if (sm) return sm.sectionHistoryKey(row, optSection);
+    return row.type + ":" + row.id + (row.type === "tv" ? ":" + row.season + ":" + row.episode : "");
+  }
+  function readAllHistory(storage) {
     try {
       var parsed = JSON.parse(storage.getItem(HISTORY_KEY));
       if (!parsed || (parsed.version !== 1 && parsed.version !== 2) || !Array.isArray(parsed.items)) return [];
+      var sm = sectionsMod();
+      if (sm) {
+        return sm.migrateHistoryRows(parsed.items, function (row) {
+          return item(row.type, row.id, row.title, row.season, row.episode, row.subtitle, row.at, row);
+        });
+      }
       var seen = {};
       return parsed.items.slice(0, 120).map(function (row) {
         return item(row.type, row.id, row.title, row.season, row.episode, row.subtitle, row.at, row);
@@ -73,10 +93,26 @@
       }).slice(0, 100);
     } catch (_error) { return []; }
   }
-  function writeHistory(storage, entry) {
-    if (!entry) return readHistory(storage);
+  function readHistory(storage, optSection) {
+    var all = readAllHistory(storage);
+    var sm = sectionsMod();
+    if (!sm) return all;
+    return sm.filterRowsBySection(all, resolveSection(storage, optSection)).slice(0, 100);
+  }
+  function writeHistory(storage, entry, optSection) {
+    var sm = sectionsMod();
+    if (!entry) return readHistory(storage, optSection);
     entry = item(entry.type, entry.id, entry.title, entry.season, entry.episode, entry.subtitle, entry.at, entry);
-    if (!entry) return readHistory(storage);
+    if (!entry) return readHistory(storage, optSection);
+    if (sm) {
+      var sec = (optSection === "arabic" || optSection === "english")
+        ? optSection
+        : (entry.section === "arabic" || entry.section === "english" ? entry.section : resolveSection(storage));
+      var merged = sm.upsertSectionRow(readAllHistory(storage), entry, sec);
+      try { storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: merged })); }
+      catch (_error) { /* Vizio storage may be unavailable; current session still works. */ }
+      return sm.filterRowsBySection(merged, sec).slice(0, 100);
+    }
     var previous = readHistory(storage).find(function (row) { return historyKey(row) === historyKey(entry); });
     if (!entry.progress && previous && previous.progress) entry.progress = previous.progress;
     if (entry.manualWatched === null && previous) entry.manualWatched = previous.manualWatched;
@@ -94,8 +130,25 @@
     catch (_error) { /* Vizio storage may be unavailable; current session still works. */ }
     return rows;
   }
-  function clearHistory(storage) { backupHistory(storage);
-    try { var deleted = historyDeletions(storage);
+  function clearHistory(storage, optSection) { backupHistory(storage);
+    try { var deleted = historyDeletions(storage), sm = sectionsMod();
+      if (sm) {
+        var sec = resolveSection(storage, optSection);
+        var res = sm.clearSectionRows(readAllHistory(storage), sec);
+        res.removed.forEach(function (row) { deleted[historyKey(row, sec)] = Date.now(); });
+        storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: res.kept }));
+        storage.setItem(HISTORY_DELETIONS_KEY, JSON.stringify({ version: 1, items: deleted }));
+        try {
+          var activeData = JSON.parse(storage.getItem(ACTIVE_EPISODES_KEY) || "null");
+          if (activeData && activeData.version === 1 && activeData.shows) {
+            Object.keys(activeData.shows).forEach(function (k) {
+              if (k.indexOf(sec + ":") === 0 || (sec === "english" && k.indexOf(":") < 0)) delete activeData.shows[k];
+            });
+            storage.setItem(ACTIVE_EPISODES_KEY, JSON.stringify(activeData));
+          }
+        } catch (_e) {}
+        return;
+      }
       readHistory(storage).forEach(function (row) { deleted[historyKey(row)] = Date.now(); });
       storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: [] }));
       storage.setItem(HISTORY_DELETIONS_KEY, JSON.stringify({ version: 1, items: deleted }));
@@ -113,20 +166,37 @@
   function importHomeSnapshot(storage, snapshot) {
     if (!snapshot || (snapshot.version !== 2 && snapshot.version !== 3) || !Array.isArray(snapshot.items)
         || snapshot.items.length > 6) return 0;
-    var known = readHistory(storage), count = 0;
+    var sm = sectionsMod();
+    var known = readAllHistory(storage), count = 0;
     snapshot.items.forEach(function (row) {
+      var sec = sm ? sm.classifyRecordSection(row) : undefined;
       var value = row && item(row.type, row.id, row.title, row.season, row.episode, row.subtitle, row.at,
-        { poster: row.poster, backdrop: row.backdrop, episodeTitle: row.episodeTitle, tvdbId: row.tvdbId });
-      if (!value || historyDeletions(storage)[historyKey(value)] >= value.at
-          || known.some(function (old) { return historyKey(old) === historyKey(value); })) return;
+        { poster: row.poster, backdrop: row.backdrop, episodeTitle: row.episodeTitle, tvdbId: row.tvdbId, section: sec });
+      if (!value || historyDeletions(storage)[historyKey(value, sec)] >= value.at
+          || known.some(function (old) { return historyKey(old) === historyKey(value, sec); })) return;
       if (!count) backupHistory(storage);
       known.push(value); count += 1;
     });
     if (count) try { storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2,
-      items: known.sort(function (a, b) { return b.at - a.at; }).slice(0, 100) })); } catch (_error) { return 0; }
+      items: known.sort(function (a, b) { return b.at - a.at; }).slice(0, sm ? 200 : 100) })); } catch (_error) { return 0; }
     return count;
   }
-  function deleteHistory(storage, type, id, season, episode, allTitle) {
+  function deleteHistory(storage, type, id, season, episode, allTitle, optSection) {
+    var sm = sectionsMod();
+    if (sm) {
+      var sec = resolveSection(storage, optSection);
+      var res = sm.deleteSectionRows(readAllHistory(storage), sec, type, id, season, episode, allTitle);
+      if (!res.removed.length) return false;
+      backupHistory(storage);
+      try {
+        var deleted = historyDeletions(storage);
+        res.removed.forEach(function (row) { deleted[historyKey(row, sec)] = Date.now(); });
+        storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: res.kept }));
+        storage.setItem(HISTORY_DELETIONS_KEY, JSON.stringify({ version: 1, items: deleted }));
+        if (allTitle && type === "tv") sm.deleteSectionActiveEpisode(storage, ACTIVE_EPISODES_KEY, id, sec);
+        return true;
+      } catch (_error) { return false; }
+    }
     var rows = readHistory(storage), kept = rows.filter(function (row) { return row.type !== type || row.id !== id
       || !allTitle && row.type === "tv" && (row.season !== season || row.episode !== episode); });
     if (kept.length === rows.length) return false;
@@ -149,9 +219,13 @@
       return true; }
     catch (_error) { return false; }
   }
-  function setHistoryWatched(storage, type, id, season, episode, watched) {
-    var rows = readHistory(storage), row = rows.find(function (entry) { return entry.type === type && entry.id === id
-      && (type !== "tv" || entry.season === season && entry.episode === episode); });
+  function setHistoryWatched(storage, type, id, season, episode, watched, optSection) {
+    var sm = sectionsMod(), sec = resolveSection(storage, optSection);
+    var rows = readAllHistory(storage), row = rows.find(function (entry) {
+      if (sm && sm.classifyRecordSection(entry) !== sec) return false;
+      return entry.type === type && entry.id === id
+        && (type !== "tv" || entry.season === season && entry.episode === episode);
+    });
     if (!row) return false;
     backupHistory(storage); row.manualWatched = watched;
     try { storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: rows })); return true; }
@@ -162,22 +236,32 @@
       return parsed && parsed.version === 1 && parsed.items && typeof parsed.items === "object" ? parsed.items : {};
     } catch (_error) { return {}; }
   }
-  function setContinueHidden(storage, row, hidden) {
+  function setContinueHidden(storage, row, hidden, optSection) {
     if (!row || !positive(row.id)) return false;
-    var items = hiddenContinue(storage), key = row.type + ":" + row.id;
+    var sm = sectionsMod(), sec = resolveSection(storage, optSection);
+    var items = hiddenContinue(storage), key = sm ? sm.sectionTitleKey(row, sec) : (row.type + ":" + row.id);
     if (hidden) items[key] = row.progress ? row.progress.updatedAt : row.at;
-    else delete items[key];
+    else {
+      delete items[key];
+      if (sm && sec === "english") delete items[row.type + ":" + row.id];
+    }
     try { storage.setItem(HIDDEN_CONTINUE_KEY, JSON.stringify({ version: 1, items: items })); return true; }
     catch (_error) { return false; }
   }
-  function isContinueHidden(storage, row) {
+  function isContinueHidden(storage, row, optSection) {
+    var sm = sectionsMod();
+    if (sm) return sm.isSectionContinueHidden(hiddenContinue(storage), row, resolveSection(storage, optSection));
     var stamp = hiddenContinue(storage)[row.type + ":" + row.id];
     return Number.isFinite(stamp) && stamp >= (row.progress ? row.progress.updatedAt : row.at);
   }
-  function clearProgress(storage, type, id, season, episode) {
-    var rows = readHistory(storage);
-    var target = rows.find(function (row) { return row.type === type && row.id === id
-      && (type !== "tv" || row.season === season && row.episode === episode); });
+  function clearProgress(storage, type, id, season, episode, optSection) {
+    var sm = sectionsMod(), sec = resolveSection(storage, optSection);
+    var rows = readAllHistory(storage);
+    var target = rows.find(function (row) {
+      if (sm && sm.classifyRecordSection(row) !== sec) return false;
+      return row.type === type && row.id === id
+        && (type !== "tv" || row.season === season && row.episode === episode);
+    });
     if (!target) return false;
     target.progress = null;
     try { storage.setItem(HISTORY_KEY, JSON.stringify({ version: 2, items: rows })); return true; }
@@ -227,8 +311,10 @@
       storage.setItem(EPISODE_CATALOG_KEY, JSON.stringify({ version: 1, shows: shows })); return true;
     } catch (_error) { return false; }
   }
-  function readActiveEpisode(storage, showId) {
+  function readActiveEpisode(storage, showId, optSection) {
     if (!positive(showId) || !storage || typeof storage.getItem !== "function") return null;
+    var sm = sectionsMod();
+    if (sm) return sm.readSectionActiveEpisode(storage, ACTIVE_EPISODES_KEY, showId, resolveSection(storage, optSection));
     try {
       var data = JSON.parse(storage.getItem(ACTIVE_EPISODES_KEY));
       var value = data && data.version === 1 && data.shows && data.shows[String(showId)];
@@ -237,9 +323,11 @@
         : null;
     } catch (_error) { return null; }
   }
-  function writeActiveEpisode(storage, showId, entry) {
+  function writeActiveEpisode(storage, showId, entry, optSection) {
     if (!positive(showId) || !storage || typeof storage.setItem !== "function" || !entry
         || !positive(entry.season) || !positive(entry.episode)) return false;
+    var sm = sectionsMod();
+    if (sm) return sm.writeSectionActiveEpisode(storage, ACTIVE_EPISODES_KEY, showId, entry, resolveSection(storage, optSection));
     try {
       var data = JSON.parse(storage.getItem(ACTIVE_EPISODES_KEY) || "null");
       var shows = data && data.version === 1 && data.shows && typeof data.shows === "object" ? data.shows : {};

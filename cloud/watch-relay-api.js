@@ -2,11 +2,14 @@ import { smallJson } from "./api.js";
 import { browserWriteAllowed, pairedBrowserDevice } from "./browser-preview-auth.js";
 
 const RELAY_ORIGIN = "https://horizon.129-213-139-127.sslip.io";
-const EPISODES = new Set(["fakhr-el-delta-s01e01"]);
+const ASSET_ID = /^(?:fakhr-el-delta-s01e01|movie-[1-9]\d{0,8}|tv-[1-9]\d{0,8}-s[1-9]\d{0,2}-e[1-9]\d{0,2})$/;
 const TICKET = /^[A-Za-z0-9_-]{1,1536}\.[A-Za-z0-9_-]{43}$/;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const RAY_ID = /^[a-f0-9]{16}(?:-[a-z]{3})?$/i;
 
+function validAssetId(id) {
+  return id.trim() === id && ASSET_ID.test(id);
+}
 function logTicketFailure(request, category, status) {
   const event = { event: "watch_relay_ticket_failure", category };
   if (Number.isInteger(status) && status >= 100 && status <= 599) event.upstreamStatus = status;
@@ -35,6 +38,28 @@ export function watchRelayAvailability(request, env) {
   return json(200, { enabled: relayConfigured(env) });
 }
 
+export async function watchRelayCatalog(request, env, fetcher = fetch) {
+  if (request.method !== "GET") return json(405, { code: "method_not_allowed" });
+  const search = new URL(request.url).searchParams;
+  const id = search.get("id");
+  if (!id || !validAssetId(id) || [...search].length !== 1) return json(400, { available: false });
+  if (!relayConfigured(env)) return json(200, { available: false });
+  const target = new URL("/catalog", RELAY_ORIGIN);
+  target.searchParams.set("id", id);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 7500);
+  try {
+    const upstream = await fetcher(target.href, {
+      headers: { Authorization: "Bearer " + env.ISSUER_SECRET },
+      redirect: "manual", signal: controller.signal,
+    });
+    const reply = upstream.ok ? await upstream.json() : null;
+    return json(200, { available: reply?.available === true && reply.episodeId === id });
+  } catch {
+    return json(200, { available: false });
+  } finally { clearTimeout(timer); }
+}
+
 export async function watchRelayTicket(request, env, fetcher = fetch) {
   const url = new URL(request.url);
   if (request.method !== "POST") return json(405, { code: "method_not_allowed" });
@@ -60,7 +85,7 @@ export async function watchRelayTicket(request, env, fetcher = fetch) {
     || (data.previousTicket !== undefined && (typeof data.previousTicket !== "string" || !TICKET.test(data.previousTicket)))) {
     return json(400, { code: "invalid_request" });
   }
-  if (!EPISODES.has(data.episodeId)) return json(403, { code: "episode_not_allowlisted" });
+  if (!validAssetId(data.episodeId)) return json(403, { code: "episode_not_allowlisted" });
   const target = new URL("/ticket", RELAY_ORIGIN);
   target.searchParams.set("id", data.episodeId);
   if (data.previousTicket) target.searchParams.set("prev", data.previousTicket);
@@ -83,6 +108,9 @@ export async function watchRelayTicket(request, env, fetcher = fetch) {
     if (!issued.ok) {
       logTicketFailure(request, "upstream_http_error", upstreamStatus);
       if (issued.status === 429) return json(429, { code: "relay_rate_limited" });
+      if (issued.status === 404 && !data.previousTicket && data.episodeId !== "fakhr-el-delta-s01e01") {
+        return json(404, { code: "relay_asset_unavailable" });
+      }
       if (data.previousTicket && (issued.status === 401 || issued.status === 403)) {
         return json(403, { code: "ticket_renewal_rejected" });
       }

@@ -1,5 +1,5 @@
 import { handleApi } from "./cloud/api.js";
-import { watchRelayAvailability, watchRelayTicket } from "./cloud/watch-relay-api.js";
+import { watchRelayAvailability, watchRelayCatalog, watchRelayTicket } from "./cloud/watch-relay-api.js";
 
 const TMDB = "https://api.themoviedb.org/3";
 const SHOOFAFLAM_BASE = "https://shoofaflam.tv";
@@ -923,6 +923,10 @@ export async function api(request, env, options = {}) {
   const url = new URL(request.url);
   if (url.pathname === "/api/arabic/relay-availability") return watchRelayAvailability(request, env);
   if (url.pathname === "/api/arabic/relay-ticket") return watchRelayTicket(request, env, options.fetch);
+  if (url.pathname === "/api/arabic/relay-catalog") {
+    if (limited(request, Date.now())) return json(429, { code: "rate_limited" }, 0, 10);
+    return watchRelayCatalog(request, env, options.fetch);
+  }
   if (url.pathname.startsWith("/api/pair/") || url.pathname.startsWith("/api/owner/")) {
     return handleApi(request, { ...env, PAIRING_ONLY: true }, options);
   }

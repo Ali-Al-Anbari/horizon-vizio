@@ -288,7 +288,7 @@ async function run() {
     await page.waitForSelector("#detail-actions .detail-primary", { timeout: 8000 });
     await page.waitForTimeout(500);
     const sabaaBtn = await page.textContent("#detail-actions .detail-primary");
-    assert.ok(sabaaBtn.includes("Roya"), `السبع primary action must preserve Roya HLS playable state, got "${sabaaBtn}"`);
+    assert.equal(sabaaBtn.trim(), "Play", `السبع primary action must display strictly "Play", got "${sabaaBtn}"`);
     await page.click("#detail-actions .detail-primary");
     await page.waitForFunction(() => {
       const ov = document.getElementById("lg-player-overlay");

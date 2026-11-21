@@ -38,6 +38,32 @@ function fixture() {
 
 function forbiddenFetch() { assert.fail("must not reach Oracle"); }
 
+test("Watch accepts only bounded asset IDs and exposes a same-asset catalog boolean", async t => {
+  t.mock.method(console, "warn", () => {});
+  const { env } = fixture();
+  const path = ORIGIN + "/api/arabic/relay-catalog?id=";
+  const asset = "movie-1316421";
+  assert.equal((await api(new Request(path + "https://example.test"), env, { fetch: forbiddenFetch })).status, 400);
+  assert.equal((await api(new Request(path + asset + "%0A"), env, { fetch: forbiddenFetch })).status, 400);
+  const good = await api(new Request(path + asset), env, { fetch: async (url, init) => {
+    const target = new URL(url);
+    assert.equal(target.pathname, "/catalog");
+    assert.equal(target.searchParams.get("id"), asset);
+    assert.equal(init.redirect, "manual");
+    assert.deepEqual(init.headers, { Authorization: "Bearer " + ISSUER });
+    return Response.json({ available: true, episodeId: asset, url: "private" });
+  } });
+  assert.deepEqual(await good.json(), { available: true });
+  const wrong = await api(new Request(path + asset), env, { fetch: async () =>
+    Response.json({ available: true, episodeId: EP }) });
+  assert.deepEqual(await wrong.json(), { available: false });
+  const unauthenticated = await api(request({ episodeId: asset }, { Cookie: "" }), env, { fetch: forbiddenFetch });
+  assert.equal(unauthenticated.status, 401);
+  const unavailable = await api(request({ episodeId: asset }), env, { fetch: async () => new Response(null, { status: 404 }) });
+  assert.equal(unavailable.status, 404);
+  assert.deepEqual(await unavailable.json(), { code: "relay_asset_unavailable" });
+});
+
 test("Watch exposes only non-cacheable relay availability to an unauthenticated browser", async () => {
   const { env } = fixture();
   const url = ORIGIN + "/api/arabic/relay-availability?enabled=true";
@@ -175,7 +201,7 @@ test("Watch logs its own eight-second deadline as a timeout", async t => {
   }]]);
 });
 
-test("Arabic relay provider only resolves the verified TMDB 297621 S01E01 mapping", () => {
+test("Arabic relay preserves the legacy episode and requires exact verification for dynamic assets", () => {
   const item = { id: 297621, type: "tv", titleAr: "فخر الدلتا", titleEn: "Pride of the Delta", date: "2026-02-19",
     seasonEpisodes: { 1: [{ number: 1 }, { number: 2 }], 2: [{ number: 1 }] } };
   const context = vm.createContext({ HorizonArabicCatalog: {
@@ -193,6 +219,14 @@ test("Arabic relay provider only resolves the verified TMDB 297621 S01E01 mappin
     assert.equal(resolve(draft).availability, "unavailable");
   }
   assert.equal(providers.preferredDefaultProvider(input, true), "akwam_relay");
+  for (const [query, id] of [
+    [{ type: "movie", tmdbId: 1316421 }, "movie-1316421"],
+    [{ ...input, season: 2, episode: 30 }, "tv-297621-s2-e30"],
+  ]) {
+    assert.ok(!providers.resolveAll(query, true).some(option => option.providerId === "akwam_relay"));
+    assert.equal(providers.resolveForProvider("akwam_relay", { ...query, relayVerified: id }, true).relayEpisodeId, id);
+    assert.equal(providers.resolveForProvider("akwam_relay", { ...query, relayVerified: EP }, true).availability, "unavailable");
+  }
   for (const unavailable of [undefined, false, "true"]) {
     const option = providers.resolveForProvider("akwam_relay", input, unavailable);
     assert.equal(option.availability, "unavailable");

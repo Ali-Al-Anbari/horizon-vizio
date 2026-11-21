@@ -127,6 +127,16 @@
     }, baseFields || {});
   }
 
+  function relayAssetId(query) {
+    if (!query || !/^[1-9]\d{0,8}$/.test(query.tmdbId)) return null;
+    if (query.type === "movie") return "movie-" + query.tmdbId;
+    if (query.type !== "tv" || !/^[1-9]\d{0,2}$/.test(query.season) || !/^[1-9]\d{0,2}$/.test(query.episode)) return null;
+    if (Number(query.tmdbId) === 297621 && Number(query.season) === 1 && Number(query.episode) === 1) {
+      return "fakhr-el-delta-s01e01";
+    }
+    return "tv-" + query.tmdbId + "-s" + query.season + "-e" + query.episode;
+  }
+
   function resolveForProvider(providerId, query, relayEnabled) {
     var providerMeta = null;
     for (var i = 0; i < PROVIDERS.length; i++) {
@@ -141,16 +151,16 @@
     var item = deterministicMatch(query);
     if (providerId === "akwam_relay") {
       if (relayEnabled !== true) return buildOption(providerMeta, { failureReason: "Relay unavailable." });
-      var supported = query && query.type === "tv" && Number(query.tmdbId) === 297621
-        && Number(query.season) === 1 && Number(query.episode) === 1;
+      var assetId = relayAssetId(query);
+      var supported = assetId && (assetId === "fakhr-el-delta-s01e01" || query.relayVerified === assetId);
       return buildOption(providerMeta, {
         matchedTitle: item ? item.titleAr + " · " + item.titleEn : "",
-        mediaId: supported ? 297621 : (item && item.id),
+        mediaId: supported ? Number(query.tmdbId) : (item && item.id),
         season: (query && query.season) || null,
         episode: (query && query.episode) || null,
         format: "mp4",
         availability: supported ? "playable" : "unavailable",
-        relayEpisodeId: supported ? "fakhr-el-delta-s01e01" : null,
+        relayEpisodeId: supported ? assetId : null,
         ticketUrl: supported ? "/api/arabic/relay-ticket" : null,
         authorizationNote: supported ? "Paired-device playback ticket" : "",
         failureReason: supported ? "" : "No relay mapping for this title and episode."
@@ -370,8 +380,8 @@
   }
 
   function resolveAll(query, relayEnabled) {
-    var base = PROVIDERS.filter(function (p) { return p.id !== "akwam_relay" || relayEnabled === true; })
-      .map(function (p) { return resolveForProvider(p.id, query, relayEnabled); });
+    var base = PROVIDERS.map(function (p) { return resolveForProvider(p.id, query, relayEnabled); })
+      .filter(function (option) { return option.providerId !== "akwam_relay" || option.availability === "playable"; });
     var item = deterministicMatch(query);
     var regional = buildRegionalListingOptions(item, query);
     return base.concat(regional);
@@ -383,14 +393,6 @@
     var options = resolveAll(query, relayEnabled);
     for (var i = 0; i < options.length; i++) {
       if (options[i].availability === "playable") return options[i].providerId;
-    }
-    for (var j = 0; j < options.length; j++) {
-      if (options[j].availability === "external-app") return options[j].providerId;
-    }
-    for (var k = 0; k < options.length; k++) {
-      if (options[k].availability === "subscription-required" || options[k].availability === "listed-on-provider") {
-        return options[k].providerId;
-      }
     }
     return PROVIDERS[0].id;
   }
@@ -410,6 +412,7 @@
     PROVIDERS: PROVIDERS,
     deterministicMatch: deterministicMatch,
     strictEpisodeLookup: strictEpisodeLookup,
+    relayAssetId: relayAssetId,
     resolveForProvider: resolveForProvider,
     resolveAll: resolveAll,
     preferredDefaultProvider: preferredDefaultProvider,

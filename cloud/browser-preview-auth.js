@@ -12,5 +12,5 @@ export async function pairedBrowserDevice(request, pairing) {
   if (!value || !/^[0-9a-f]{64}$/.test(value)) return null;
   const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
   const hash = Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
-  return pairing.authenticate(hash)?.deviceId || null;
+  return (await pairing.authenticate(hash))?.deviceId || null;
 }

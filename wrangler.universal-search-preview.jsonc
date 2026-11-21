@@ -1,11 +1,19 @@
 {
   "name": "horizon-universal-search-preview",
-  "main": "./universal-search-worker.js",
+  "main": "./watch-worker-entry.js",
   "compatibility_date": "2026-10-25",
   "workers_dev": true,
+  "preview_urls": false,
   "keep_vars": true,
   "secrets": { "required": ["TMDB_TOKEN"] },
   "vars": { "AI_RECOMMENDATIONS_MODE": "on" },
+  "rules": [
+    { "type": "Text", "globs": ["**/frontend/owner.html", "**/frontend/owner.css", "**/frontend/owner.js"], "fallthrough": true }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "LAUNCH_QUEUE", "class_name": "LaunchQueue" }]
+  },
+  "migrations": [{ "tag": "watch-pairing-v1", "new_sqlite_classes": ["LaunchQueue"] }],
   "ai": { "binding": "AI" },
   "assets": {
     "directory": "./universal-search",

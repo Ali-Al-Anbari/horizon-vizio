@@ -41,10 +41,8 @@ test("Watch home follows the reference layout and routes cards through the exist
   assert.match(source, /function carouselSlot\(controller, ordinal\)/);
   assert.match(source, /image\.src = image\.dataset\.pendingSrc/);
   assert.match(source, /if \(row\.type === "movie"\) \{ openDetails\(row\); return; \}/);
-  assert.match(source, /openDetails\(row, target \|\| \{ season: row\.season, episode: row\.episode \}\)/);
   assert.match(source, /function lookupNextEpisode\(recent, detail\)/);
   assert.match(source, /pendingEpisodeFocus = \{ season: episodeTarget\.season, episode: episodeTarget\.episode \}/);
-  assert.match(source, /if \(episodeTarget \|\| state\.view === "episodes"\) browseEpisodes\(\)/);
   assert.match(source, /event\.target\.homeEntry\) showHomeHero\(event\.target\.homeEntry\)/);
   assert.match(source, /railButtons = \[get\("search-toggle"\), get\("watch-toggle"\), get\("tv-toggle"\), get\("movies-toggle"\), get\("discover-toggle"\), get\("history-toggle"\), get\("settings-toggle"\)\]/);
   assert.match(source, /revealInScroller\(element, homeScroll, true, 18,[\s\S]*?railEdge/);

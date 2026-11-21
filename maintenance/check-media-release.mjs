@@ -8,7 +8,7 @@ import path from "node:path";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const targets = {
   watch: { config: "wrangler.universal-search-preview.jsonc",
-    name: "horizon-universal-search-preview", main: "./universal-search-worker.js",
+    name: "horizon-universal-search-preview", main: "./watch-worker-entry.js",
     assets: "./universal-search", routes: ["/api/*"],
     secrets: ["TMDB_TOKEN"], page: "/index.html", marker: "Horizon Watch" },
   "video-lab": { config: "wrangler.video-lab-preview.jsonc",
@@ -39,10 +39,12 @@ export async function localPreflight(role) {
   const page = await source(path.join(config.assets.directory, target.page));
   requireCheck(page.includes(target.marker), "expected entry page marker missing");
   if (role === "watch") {
-    requireCheck(main.includes('url.pathname === "/api/recommendations"')
-      && main.includes('url.pathname === "/api/discover-similar"')
+    requireCheck(main.includes('from "./universal-search-worker.js"'), "Watch API delegation missing");
+    const watch = await source("universal-search-worker.js");
+    requireCheck(watch.includes('url.pathname === "/api/recommendations"')
+      && watch.includes('url.pathname === "/api/discover-similar"')
       && (await source(path.join(config.assets.directory, "discover-engine.js"))).includes("HorizonDiscoverEngine")
-      && main.includes("env.TMDB_TOKEN") && main.includes("env.ASSETS.fetch(request)"),
+      && watch.includes("env.TMDB_TOKEN") && watch.includes("env.ASSETS.fetch(request)"),
     "Watch API, discover-similar API, discover-engine asset, secret lookup, or asset fallback missing");
   } else {
     requireCheck(config.vars?.PAIRING_ONLY === true, "Video Lab pairing-only mode missing");

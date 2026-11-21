@@ -305,6 +305,7 @@
 
     // E. Provider selection & Details view decoration for Arabic titles
     var providersMod = root.HorizonArabicProviders;
+    var relayEnabled = false;
     state.selectedProviderByKey = Object.create(null);
     state.providerMenuOpen = false;
     state.providerMenuReturnEl = null;
@@ -328,14 +329,22 @@
       };
     }
 
-    function getSelectedProviderId(arItem) {
+    function getSelectedProviderId(arItem, explicitQuery) {
       var key = arItem.type + ":" + arItem.id;
       if (state.selectedProviderByKey[key]) return state.selectedProviderByKey[key];
       if (!providersMod) return "youtube_official";
-      var q = getSelectionQuery(arItem);
-      var defId = providersMod.preferredDefaultProvider(q);
-      state.selectedProviderByKey[key] = defId;
+      var defId = providersMod.preferredDefaultProvider(explicitQuery || getSelectionQuery(arItem), relayEnabled);
+      if (key !== "tv:297621") state.selectedProviderByKey[key] = defId;
       return defId;
+    }
+
+    function findSelectedOption(providersMod, chosenId, queryObj) {
+      if (!providersMod) return null;
+      var all = providersMod.resolveAll ? providersMod.resolveAll(queryObj, relayEnabled) : [];
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].providerId === chosenId) return all[i];
+      }
+      return providersMod.resolveForProvider(chosenId, queryObj, relayEnabled);
     }
 
     function openProviderMenu(arItem, returnEl) {
@@ -344,11 +353,12 @@
       state.providerMenuReturnEl = returnEl || doc.activeElement;
       var q = getSelectionQuery(arItem);
       var currentId = getSelectedProviderId(arItem);
-      var allOptions = providersMod.resolveAll(q);
+      var allOptions = providersMod.resolveAll(q, relayEnabled);
       var listHost = doc.getElementById("lg-provider-menu-list");
       var sub = doc.getElementById("lg-provider-menu-sub");
       if (sub) {
-        sub.textContent = arItem.titleAr + " (" + arItem.titleEn + ")"
+        sub.textContent = (arItem.titleAr || arItem.title || "")
+          + (arItem.titleEn ? (" (" + arItem.titleEn + ")") : "")
           + (arItem.type === "tv" ? (" · S" + q.season + " E" + q.episode) : "")
           + " — Manual selection (no silent switching).";
       }
@@ -373,7 +383,9 @@
         var pill = doc.createElement("span");
         pill.className = "lg-provider-option-status is-" + opt.availability;
         pill.textContent = opt.availability === "playable" ? "Ready"
-          : (opt.availability === "external-app" ? "LG App" : "Unavailable");
+          : (opt.availability === "external-app" ? "LG App"
+          : (opt.availability === "subscription-required" ? "Subscription"
+          : (opt.availability === "listed-on-provider" ? "Listed" : "Unavailable")));
 
         btn.appendChild(left);
         btn.appendChild(pill);
@@ -407,7 +419,10 @@
       var pillEl = doc.getElementById("lg-detail-availability");
       var dTitle = doc.getElementById("detail-title");
       var dSum = doc.getElementById("detail-summary");
-      var arItem = t ? arabic.findByKey(t.type, t.id) : null;
+      var libraryPref = (app.state && app.state.contentLibrary === "arabic") ? "arabic" : "standard";
+      var found = t ? arabic.findByKey(t.type, t.id) : null;
+      var arItem = (found && (libraryPref === "arabic" || found.royaSeriesId))
+        ? found : null;
       var existingProvBtn = doc.getElementById("lg-provider-select-btn");
       if (!arItem) {
         if (pillEl) pillEl.hidden = true;
@@ -419,34 +434,52 @@
       if (dTitle && hasArabicChars(dTitle.textContent)) dTitle.setAttribute("dir", "rtl");
       if (dSum && hasArabicChars(dSum.textContent)) dSum.setAttribute("dir", "rtl");
 
+      var qObj = getSelectionQuery(arItem);
       var selectedId = getSelectedProviderId(arItem);
-      var resolved = providersMod ? providersMod.resolveForProvider(selectedId, getSelectionQuery(arItem)) : null;
+      var resolved = findSelectedOption(providersMod, selectedId, qObj);
+      var availSummary = providersMod && typeof providersMod.summarizeAvailability === "function"
+        ? providersMod.summarizeAvailability(arItem) : null;
 
       if (pillEl) {
         pillEl.hidden = false;
         var pillClass = resolved && resolved.availability === "playable" ? "in-app"
-          : (resolved && resolved.availability === "external-app" ? "official-app" : "catalog-only");
+          : (resolved && (resolved.availability === "external-app" || resolved.availability === "subscription-required" || resolved.availability === "listed-on-provider") ? "official-app" : "catalog-only");
         pillEl.className = "lg-detail-availability is-" + pillClass;
         var statusTag = (resolved && resolved.availability === "playable") ? resolved.format.toUpperCase()
-          : (arItem.plus ? "ROYA PLUS (LOCKED)" : (resolved ? resolved.availability.toUpperCase() : "UNAVAILABLE"));
-        pillEl.textContent = (resolved ? (resolved.providerShortLabel + " · " + statusTag) : arItem.availabilityLabel)
-          + (arItem.countryLabel ? " · " + arItem.countryLabel : "");
+          : (arItem.plus ? "ROYA PLUS (SUBSCRIPTION)" : (availSummary ? availSummary.label : (resolved ? resolved.availability.toUpperCase() : "METADATA ONLY")));
+        pillEl.textContent = statusTag
+          + (arItem.provenance ? (" · Sources: " + arItem.provenance) : "")
+          + (arItem.countryLabel ? (" · " + arItem.countryLabel) : "");
       }
 
       var actions = doc.getElementById("detail-actions");
       if (!actions) return;
       var primaryBtn = actions.querySelector(".detail-primary");
       if (primaryBtn) {
+        if (primaryBtn.dataset.relayOriginalLabel !== undefined) {
+          primaryBtn.setAttribute("aria-label", primaryBtn.dataset.relayOriginalLabel);
+          delete primaryBtn.dataset.relayOriginalLabel;
+        }
         if (resolved && resolved.availability === "playable") {
-          if (resolved.format === "mp4") primaryBtn.textContent = "Play MP4 (Archive.org)";
+          if (resolved.format === "mp4") {
+            var action = /^Resume\b/.test(primaryBtn.getAttribute("aria-label") || "") ? "Resume" : "Play";
+            primaryBtn.textContent = action + " (" + resolved.providerShortLabel + ")";
+          }
           else if (resolved.format === "hls") primaryBtn.textContent = "Watch (" + resolved.providerShortLabel + ")";
           else primaryBtn.textContent = "Watch (YouTube Official)";
         } else if (resolved && resolved.availability === "external-app") {
           primaryBtn.textContent = "Open in " + (resolved.officialApp ? resolved.officialApp.appName : "Official App");
         } else if (arItem.plus) {
           primaryBtn.textContent = "Roya Plus (Subscription Required)";
+        } else if (availSummary && (availSummary.state === "subscription_required" || availSummary.state === "listed_on_provider")) {
+          primaryBtn.textContent = availSummary.label;
         } else {
-          primaryBtn.textContent = "Unavailable (" + (resolved ? resolved.providerShortLabel : "No Stream") + ")";
+          primaryBtn.textContent = "Unavailable in Horizon (Metadata Only)";
+          if (!relayEnabled && qObj.type === "tv" && Number(qObj.tmdbId) === 297621
+            && Number(qObj.season) === 1 && Number(qObj.episode) === 1 && primaryBtn.hasAttribute("aria-label")) {
+            primaryBtn.dataset.relayOriginalLabel = primaryBtn.getAttribute("aria-label");
+            primaryBtn.setAttribute("aria-label", primaryBtn.textContent);
+          }
         }
       }
 
@@ -464,7 +497,9 @@
         if (moreLike) actions.insertBefore(existingProvBtn, moreLike);
         else actions.appendChild(existingProvBtn);
       }
-      var nextProvLabel = "Provider: " + (resolved ? resolved.providerShortLabel : selectedId);
+      var nextProvLabel = (resolved && resolved.availability !== "unavailable")
+        ? ("Provider: " + resolved.providerShortLabel)
+        : "Providers / Availability";
       if (existingProvBtn.textContent !== nextProvLabel) {
         existingProvBtn.textContent = nextProvLabel;
       }
@@ -473,6 +508,15 @@
     var obs = new MutationObserver(decorateDetails);
     if (doc.getElementById("detail-title")) obs.observe(doc.getElementById("detail-title"), { childList: true, characterData: true, subtree: true });
     if (doc.getElementById("detail-actions")) obs.observe(doc.getElementById("detail-actions"), { childList: true });
+    if (providersMod && typeof root.fetch === "function") {
+      root.fetch("/api/arabic/relay-availability", { cache: "no-store", credentials: "omit", redirect: "error" })
+        .then(function (response) { return response.ok ? response.json() : null; })
+        .then(function (status) {
+          if (!status || status.enabled !== true) return;
+          relayEnabled = true;
+          decorateDetails();
+        }).catch(function () { /* Relay stays hidden when availability cannot be confirmed. */ });
+    }
 
     // F. Full-screen Horizon Video Lab overlay for Arabic HLS / MP4 / YouTube / LG App
     var stage = doc.getElementById("lg-player-stage");
@@ -524,6 +568,9 @@
     var ytPlayer = null;
     var hlsPlayer = null;
     var videoEl = null;
+    var relayRequest = null;
+    var relayPairTimer = 0;
+    var RELAY_ORIGIN = "https://horizon.129-213-139-127.sslip.io";
     var progressTimer = 0;
     var controlsHideTimer = 0;
     var returnFocusNode = null;
@@ -701,6 +748,8 @@
     }
 
     function clearOverlayMedia() {
+      if (relayRequest) { relayRequest.abort(); relayRequest = null; }
+      if (relayPairTimer) { clearTimeout(relayPairTimer); relayPairTimer = 0; }
       clearControlsHideTimer();
       resetSeekSelection();
       if (progressTimer) { clearInterval(progressTimer); progressTimer = 0; }
@@ -713,8 +762,9 @@
         ytPlayer = null;
       }
       if (videoEl) {
-        try { videoEl.pause(); videoEl.removeAttribute("src"); videoEl.load(); } catch (_e) {}
+        var element = videoEl;
         videoEl = null;
+        try { element.pause(); element.removeAttribute("src"); element.load(); } catch (_e) {}
       }
       if (stage) stage.replaceChildren();
     }
@@ -725,8 +775,9 @@
       if (sess.mode !== "youtube" && sess.mode !== "mp4" && sess.mode !== "hls") return;
       var rawPos = Number(sess.positionSec || 0);
       var rawDur = Number(sess.durationSec || 0);
+      if (sess.relay) rawPos = sess.relay.confirmedSec;
       if (videoEl) {
-        if (Number.isFinite(videoEl.currentTime)) rawPos = Math.max(rawPos, videoEl.currentTime);
+        if (!sess.relay && Number.isFinite(videoEl.currentTime)) rawPos = Math.max(rawPos, videoEl.currentTime);
         if (Number.isFinite(videoEl.duration) && videoEl.duration > 0) rawDur = videoEl.duration;
       }
       var pos = rawPos > 0 ? Math.max(1, Math.round(rawPos)) : 0;
@@ -858,56 +909,74 @@
     }
 
     function attachHtml5VideoListeners(option, arItem, sess, startSec, errHeading, retryFn) {
-      videoEl.addEventListener("loadedmetadata", function () {
-        if (!state.playerOpen || state.playerSession !== sess) return;
-        disableNativeTextTracks(videoEl);
-        if (startSec > 0 && videoEl.duration > startSec + 2) {
-          try { videoEl.currentTime = startSec; } catch (_e) {}
+      var element = videoEl;
+      function active() {
+        return state.playerOpen && state.playerSession === sess && videoEl === element;
+      }
+      function confirmPosition() {
+        if (sess.relay && !element.seeking && element.readyState >= 2 && Number.isFinite(element.currentTime)) {
+          sess.relay.confirmedSec = element.currentTime;
         }
-        updateTimeBar(videoEl.currentTime || 0, videoEl.duration || sess.durationSec);
+      }
+      element.addEventListener("loadedmetadata", function () {
+        if (!active()) return;
+        disableNativeTextTracks(element);
+        if (startSec > 0 && element.duration > startSec + 2) {
+          try { element.currentTime = startSec; } catch (_e) {}
+        }
+        updateTimeBar(element.currentTime || 0, element.duration || sess.durationSec);
       });
-      videoEl.addEventListener("play", function () {
-        if (!state.playerOpen || state.playerSession !== sess) return;
+      element.addEventListener("play", function () {
+        if (!active()) return;
+        if (sess.relay) sess.relay.wasPlaying = true;
         updatePlayPauseVisual(true);
         chrome.classList.remove("is-quick-pause");
         resetIdle();
       });
-      videoEl.addEventListener("playing", function () {
-        if (!state.playerOpen || state.playerSession !== sess) return;
+      element.addEventListener("playing", function () {
+        if (!active()) return;
         var firstStart = !sess.observedPlayback;
         sess.observedPlayback = true;
         updatePlayPauseVisual(true);
         chrome.classList.remove("is-quick-pause");
         if (firstStart) resetIdle();
       });
-      videoEl.addEventListener("pause", function () {
-        if (!state.playerOpen || state.playerSession !== sess) return;
+      element.addEventListener("pause", function () {
+        if (!active()) return;
+        if (sess.relay && !element.error) sess.relay.wasPlaying = false;
         updatePlayPauseVisual(false);
         showControls(selectedControlIdx);
         clearControlsHideTimer();
         saveObservedProgress();
       });
-      videoEl.addEventListener("timeupdate", function () {
-        if (!state.playerOpen || state.playerSession !== sess) return;
-        if (videoEl.currentTime > 0) sess.observedPlayback = true;
-        updateTimeBar(videoEl.currentTime || 0, videoEl.duration || sess.durationSec);
+      element.addEventListener("timeupdate", function () {
+        if (!active()) return;
+        confirmPosition();
+        if (element.currentTime > 0) sess.observedPlayback = true;
+        updateTimeBar(element.currentTime || 0, element.duration || sess.durationSec);
       });
-      videoEl.addEventListener("seeked", function () {
-        if (!state.playerOpen || state.playerSession !== sess) return;
+      element.addEventListener("seeked", function () {
+        if (!active()) return;
+        confirmPosition();
         sess.observedPlayback = true;
-        updateTimeBar(videoEl.currentTime || 0, videoEl.duration || sess.durationSec);
+        updateTimeBar(element.currentTime || 0, element.duration || sess.durationSec);
         saveObservedProgress();
       });
-      videoEl.addEventListener("ended", function () {
-        if (!state.playerOpen || state.playerSession !== sess) return;
+      element.addEventListener("ended", function () {
+        if (!active()) return;
+        confirmPosition();
         updatePlayPauseVisual(false);
         showControls(sess.nextEpisode && btnNext && !btnNext.disabled ? 5 : 1);
         clearControlsHideTimer();
         saveObservedProgress();
       });
-      videoEl.addEventListener("error", function () {
-        if (!state.playerOpen || state.playerSession !== sess) return;
-        var code = videoEl && videoEl.error ? videoEl.error.code : "unknown";
+      element.addEventListener("error", function () {
+        if (!active()) return;
+        if (sess.relay) {
+          recoverRelayPlayback(option, arItem, sess, sess.relay.wasPlaying);
+          return;
+        }
+        var code = element.error ? element.error.code : "unknown";
         var btns = [];
         if (typeof retryFn === "function") btns.push({ label: "Retry", onClick: retryFn });
         btns.push({
@@ -927,30 +996,181 @@
       });
     }
 
-    function openHtml5VideoPlayback(option, arItem, startSec) {
-      btnNative.hidden = true;
-      pTitle.textContent = arItem.titleAr + " · " + arItem.titleEn;
-      if (pEp) pEp.textContent = option.authorizationNote + " · MP4 Direct Stream";
+    function setNativeAction(label, reload) {
+      btnNative.setAttribute("aria-label", label);
+      btnNative.title = label;
+      btnNative.querySelector(".action-label").textContent = label;
+      btnNative.querySelector("svg").style.display = reload ? "none" : "";
+    }
+
+    function openHtml5VideoPlayback(option, arItem, startSec, sourceUrl, startPaused) {
+      var sess = state.playerSession;
+      btnNative.hidden = !sess.relay;
+      btnNative.disabled = false;
+      if (sess.relay) {
+        sess.relay.wasPlaying = !startPaused;
+        setNativeAction("Reload", true);
+      }
+      pTitle.textContent = (arItem.titleAr || arItem.title || "") + (arItem.titleEn ? " · " + arItem.titleEn : "");
+      if (pEp) pEp.textContent = sess.season
+        ? "Season " + sess.season + " · Episode " + sess.episode + (sess.episodeTitle ? " · " + sess.episodeTitle : "")
+        : option.authorizationNote + " · MP4 Direct Stream";
       pBadge.textContent = option.providerShortLabel;
+      if (pCommandStatus) pCommandStatus.textContent = "";
       syncSubtitleButton();
       syncEpisodeControls(arItem);
-      updatePlayPauseVisual(true);
-      updateTimeBar(startSec || 0, (arItem.archiveSource && arItem.archiveSource.durationSec) || (arItem.runtime || 90) * 60);
+      updatePlayPauseVisual(!startPaused);
+      updateTimeBar(startSec || 0, sess.durationSec || (arItem.runtime || 90) * 60);
 
-      videoEl = doc.createElement("video");
-      videoEl.id = "lg-html5-video";
-      videoEl.src = option.streamUrl;
-      videoEl.autoplay = true;
-      videoEl.playsInline = true;
-      videoEl.controls = false;
-      stage.appendChild(videoEl);
-
-      var sess = state.playerSession;
+      var element = doc.createElement("video");
+      videoEl = element;
+      element.id = "lg-html5-video";
+      element.autoplay = !startPaused;
+      if (sess.relay) element.preload = "metadata";
+      element.playsInline = true;
+      element.controls = false;
+      stage.appendChild(element);
       attachHtml5VideoListeners(option, arItem, sess, startSec, "MP4 Playback Error", null);
-
-      var p = videoEl.play();
-      if (p && typeof p.catch === "function") p.catch(function () { updatePlayPauseVisual(false); });
+      element.src = sourceUrl || option.streamUrl;
+      if (!startPaused) {
+        var p = element.play();
+        if (p && typeof p.catch === "function") p.catch(function () {
+          if (state.playerOpen && state.playerSession === sess && videoEl === element) updatePlayPauseVisual(false);
+        });
+      }
       showControls(1);
+    }
+
+    function relayApi(path, action, data, signal) {
+      var headers = { "X-Horizon-Action": action };
+      var body;
+      if (data) { headers["Content-Type"] = "application/json"; body = JSON.stringify(data); }
+      return root.fetch(path, { method: "POST", credentials: "same-origin", cache: "no-store",
+        headers: headers, body: body, signal: signal }).then(function (response) {
+        return response.json().then(function (value) {
+          if (!response.ok) throw new Error(value.code || "request_failed");
+          return value;
+        });
+      });
+    }
+
+    function relaySessionActive(sess, request) {
+      return state.playerOpen && state.playerSession === sess && relayRequest === request;
+    }
+
+    function relayStatus(heading, message, arItem, primaryAction) {
+      showStatusCard(heading, message, "", [
+        primaryAction,
+        { label: "Choose Another Provider", onClick: function () {
+          closePlayerOverlay();
+          openProviderMenu(arItem, doc.getElementById("lg-provider-select-btn"));
+        } },
+        { label: "Back to Horizon", onClick: closePlayerOverlay }
+      ].filter(Boolean));
+    }
+
+    function pairRelayDevice(option, arItem, sess, startPaused) {
+      if (relayRequest) return;
+      var request = new AbortController();
+      relayRequest = request;
+      var card = stage.querySelector(".lg-player-status-card");
+      var message = card && card.querySelector("p");
+      var expiresAt;
+      if (message) message.textContent = "Requesting a pairing code…";
+
+      function failed() {
+        if (!relaySessionActive(sess, request)) return;
+        relayRequest = null;
+        if (message) message.textContent = "Pairing ended. Select Show pairing code to try again.";
+      }
+
+      function poll() {
+        if (!relaySessionActive(sess, request)) return;
+        if (Date.now() >= expiresAt) { failed(); return; }
+        relayApi("/api/pair/status", "pair", null, request.signal).then(function (value) {
+          if (!relaySessionActive(sess, request)) return;
+          if (value.state === "paired") {
+            startRelayPlayback(option, arItem, sess, startPaused, false);
+          } else if (value.state === "pending" || value.state === "approved") {
+            relayPairTimer = setTimeout(poll, 2000);
+          } else failed();
+        }, failed);
+      }
+
+      relayApi("/api/pair/start", "pair", null, request.signal).then(function (value) {
+        if (!relaySessionActive(sess, request)) return;
+        if (!/^[A-HJ-NP-Z2-9]{10}$/.test(value.code)) { failed(); return; }
+        expiresAt = Date.now() + 5 * 60 * 1000;
+        if (message) message.textContent = "Code: " + value.code + " · Approve it on this Watch site's /owner page.";
+        relayPairTimer = setTimeout(poll, 1500);
+      }, failed);
+    }
+
+    function startRelayPlayback(option, arItem, sess, startPaused, refreshUpstream) {
+      if (!state.playerOpen || state.playerSession !== sess) return;
+      clearOverlayMedia();
+      var relay = sess.relay;
+      var request = new AbortController();
+      var refreshTicket = relay.ticket && relay.expiresAt <= Date.now() + 5000;
+      var data = { episodeId: option.relayEpisodeId };
+      if (refreshTicket) data.previousTicket = relay.ticket;
+
+      function failed(error) {
+        if (!relaySessionActive(sess, request)) return;
+        var pairing = error.message === "pairing_required";
+        var ended = error.message === "ticket_renewal_rejected";
+        relayStatus(pairing ? "Pair Horizon Watch" : "Akwam Relay Unavailable",
+          pairing ? "Pair this device to play the selected episode."
+            : ended ? "This playback ticket has reached its renewal limit. Exit and select the episode again."
+            : "The relay could not start this episode. Try Reload or choose another provider.",
+          arItem, pairing ? { label: "Show pairing code", onClick: function () {
+            pairRelayDevice(option, arItem, sess, startPaused);
+          } } : ended ? null : { label: "Reload", onClick: function () {
+            startRelayPlayback(option, arItem, sess, startPaused, true);
+          } });
+      }
+
+      function play() {
+        if (!relaySessionActive(sess, request)) return;
+        relayRequest = null;
+        stage.replaceChildren();
+        var source = RELAY_ORIGIN + "/relay?id=" + encodeURIComponent(option.relayEpisodeId)
+          + "&ticket=" + encodeURIComponent(relay.ticket) + (refreshUpstream ? "&refresh=1" : "");
+        openHtml5VideoPlayback(option, arItem, relay.confirmedSec, source, startPaused);
+      }
+
+      var needsTicket = !relay.ticket || refreshTicket;
+      if (needsTicket) relayStatus("Connecting to Akwam Relay", "Requesting an episode playback ticket…", arItem, null);
+      relayRequest = request;
+      if (!needsTicket) { play(); return; }
+      if (refreshTicket && relay.refreshesRemaining === 0) {
+        failed(new Error("ticket_renewal_rejected"));
+        return;
+      }
+      var requestedAt = Date.now();
+      relayApi(option.ticketUrl, "ticket", data, request.signal).then(function (value) {
+        if (!relaySessionActive(sess, request)) return;
+        if (!value || typeof value.ticket !== "string" || !value.ticket || !(value.ttlSeconds > 0)
+          || !Number.isInteger(value.refreshesRemaining) || value.refreshesRemaining < 0) {
+          throw new Error("invalid_ticket_response");
+        }
+        relay.ticket = value.ticket;
+        relay.expiresAt = requestedAt + value.ttlSeconds * 1000;
+        relay.refreshesRemaining = value.refreshesRemaining;
+        play();
+      }).catch(failed);
+    }
+
+    function recoverRelayPlayback(option, arItem, sess, wasPlaying) {
+      if (!sess.relay.recovered) {
+        sess.relay.recovered = true;
+        startRelayPlayback(option, arItem, sess, !wasPlaying, true);
+      } else {
+        relayStatus("Akwam Relay Interrupted", "Playback stopped. Reload resumes from the last confirmed position.",
+          arItem, { label: "Reload", onClick: function () {
+            startRelayPlayback(option, arItem, sess, !wasPlaying, true);
+          } });
+      }
     }
 
     function openHlsPlayback(option, arItem, startSec) {
@@ -1086,6 +1306,7 @@
     }
 
     function openYouTubePlayback(target, startSec) {
+      setNativeAction("Open in LG YouTube App", false);
       btnNative.hidden = false;
       btnNative.disabled = false;
       syncSubtitleButton();
@@ -1303,6 +1524,10 @@
     });
     btnNative.addEventListener("click", function () {
       var s = state.playerSession;
+      if (s && s.relay) {
+        startRelayPlayback(s.relay.option, s.item, s, isPlaybackPaused(), true);
+        return;
+      }
       if (!s || !s.youtubeId) return;
       launchLGApp("youtube.leanback.v4", { contentTarget: "https://www.youtube.com/watch?v=" + s.youtubeId }).then(function (res) {
         if (pCommandStatus) {
@@ -1322,34 +1547,43 @@
     }, { passive: true });
 
     // G. Playback hook registered with universal-search/search.js for Arabic titles ONLY
-    root.__HORIZON_LG_LAUNCH__ = function (type, id, season, episode, startOver) {
-      var arItem = arabic.findByKey(type, Number(id));
-      if (!arItem) return false; // Leave Vizio / non-Arabic VidBolt/Vidy/VidZen/YapGrid untouched!
-
-      var chosenProviderId = getSelectedProviderId(arItem);
-      var q = {
-        type: type,
-        tmdbId: Number(id),
-        titleAr: arItem.titleAr,
-        titleEn: arItem.titleEn,
-        year: arItem.date ? arItem.date.slice(0, 4) : null,
-        season: season || null,
-        episode: episode || null
-      };
-      var option = providersMod ? providersMod.resolveForProvider(chosenProviderId, q) : null;
+    root.__HORIZON_LG_LAUNCH__ = function (type, id, season, episode, startOver, confirmedTitle) {
+      var libraryPref = (app.state && app.state.contentLibrary === "arabic") ? "arabic" : "standard";
+      var found = arabic.findByKey(type, Number(id));
+      var arItem = (found && (libraryPref === "arabic" || found.royaSeriesId)) ? found : null;
+      if (!arItem && (type !== "tv" || Number(id) !== 297621)) return false;
+      var match = core.readHistory(root.localStorage).find(function (row) {
+        return row.type === type && row.id === Number(id)
+          && (type === "movie" || (row.season === Number(season) && row.episode === Number(episode)));
+      });
+      var q = { type: type, tmdbId: Number(id), season: season || null, episode: episode || null };
+      var savedRelayOption = match && match.progress && match.progress.provider === "akwam_relay"
+        && providersMod && providersMod.resolveForProvider("akwam_relay", q, relayEnabled);
+      if (!arItem && savedRelayOption && savedRelayOption.relayEpisodeId) {
+        arItem = found || { type: type, id: Number(id), titleAr: match.title,
+          poster: match.poster, backdrop: match.backdrop };
+      }
+      if (!arItem) return false;
+      q.titleAr = arItem.titleAr;
+      q.titleEn = arItem.titleEn;
+      q.year = arItem.date ? arItem.date.slice(0, 4) : null;
+      var chosenProviderId = getSelectedProviderId(arItem, q);
+      var option = findSelectedOption(providersMod, chosenProviderId, q);
 
       returnFocusNode = doc.activeElement;
       clearOverlayMedia();
       state.playerOpen = true;
       overlay.hidden = false;
 
-      if (!option || option.availability === "unavailable") {
-        // Explicit graceful failure: NEVER silently switch to YouTube!
+      if (!option || option.availability === "unavailable" || option.availability === "subscription-required" || option.availability === "listed-on-provider") {
+        // Explicit graceful failure: NEVER silently switch to YouTube or VidBolt!
         state.playerSession = { mode: "unavailable", item: arItem, observedPlayback: false };
         showStatusCard(
-          "Provider Unavailable · " + (option ? option.providerLabel : chosenProviderId),
-          (option && option.failureReason) || "This provider cannot play the selected title or episode.",
-          "Current selection kept: " + arItem.titleAr + (type === "tv" ? (" S" + season + " E" + episode) : "") + " · No automatic provider switch performed.",
+          (option && (option.availability === "subscription-required" || option.availability === "listed-on-provider"))
+            ? option.providerLabel
+            : ("Provider Unavailable · " + (option ? option.providerLabel : chosenProviderId)),
+          (option && option.failureReason) || "This title is discoverable in Horizon, but no authorized playable stream exists.",
+          "Selection: " + (arItem.titleAr || arItem.title || "") + (type === "tv" ? (" S" + season + " E" + episode) : "") + (arItem.provenance ? (" · Sources: " + arItem.provenance) : "") + " · No unauthorized extraction performed.",
           [
             {
               label: "Choose Another Provider",
@@ -1387,28 +1621,29 @@
         return true;
       }
 
-      var savedRows = core.readHistory(root.localStorage);
-      var match = savedRows.find(function (r) {
-        return r.type === type && r.id === Number(id) && (type === "movie" || (r.season === season && r.episode === episode));
-      });
       var resumeSec = (!startOver && match && match.progress && !match.progress.completed) ? Number(match.progress.position) : 0;
+      if (!Number.isFinite(resumeSec) || resumeSec < 0) resumeSec = 0;
 
-      if (option.format === "mp4" && option.streamUrl) {
+      if (option.format === "mp4" && (option.streamUrl || option.relayEpisodeId)) {
+        var mp4Ep = providersMod.strictEpisodeLookup(arItem, season, episode);
         state.playerSession = {
           mode: "mp4",
           providerId: option.providerId,
           item: arItem,
-          season: null,
-          episode: null,
-          episodeTitle: "",
-          prevEpisode: null,
-          nextEpisode: null,
+          season: type === "tv" ? Number(season) : null,
+          episode: type === "tv" ? Number(episode) : null,
+          episodeTitle: confirmedTitle || (mp4Ep && mp4Ep.title) || (match && match.episodeTitle) || "",
+          prevEpisode: mp4Ep && arabic.findPrevVerifiedEpisode ? arabic.findPrevVerifiedEpisode(id, season, episode) : null,
+          nextEpisode: mp4Ep ? arabic.findNextVerifiedEpisode(id, season, episode) : null,
           subtitleTracks: option.subtitleTracks || [],
           positionSec: resumeSec,
-          durationSec: (arItem.archiveSource && arItem.archiveSource.durationSec) || 0,
+          durationSec: (mp4Ep && mp4Ep.durationSec) || (arItem.archiveSource && arItem.archiveSource.durationSec) || 0,
           observedPlayback: false
         };
-        openHtml5VideoPlayback(option, arItem, resumeSec);
+        if (option.relayEpisodeId) {
+          state.playerSession.relay = { option: option, confirmedSec: resumeSec, recovered: false };
+          startRelayPlayback(option, arItem, state.playerSession, false, false);
+        } else openHtml5VideoPlayback(option, arItem, resumeSec);
         return true;
       }
 
@@ -1598,6 +1833,10 @@
         }
       }
     }, true);
+
+    root.addEventListener("pagehide", function () {
+      if (state.playerSession && state.playerSession.relay) closePlayerOverlay();
+    });
 
     if (isLG) {
       try {

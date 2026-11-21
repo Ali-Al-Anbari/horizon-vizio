@@ -1,13 +1,21 @@
+import { handleApi } from "./cloud/api.js";
+import { watchRelayAvailability, watchRelayTicket } from "./cloud/watch-relay-api.js";
+
 const TMDB = "https://api.themoviedb.org/3";
+const SHOOFAFLAM_BASE = "https://shoofaflam.tv";
 const TYPES = new Set(["movie", "tv"]);
 const buckets = new Map(); // Best-effort per-isolate guard; Cloudflare edge cache is the main cost control.
 const searchCache = new Map();
+const arabicSearchCache = new Map();
 const recommendationCache = new Map();
 const discoverCache = new Map();
 const embeddingCache = new Map();
 const SEARCH_LIMIT = 18;
+const ARABIC_SEARCH_LIMIT = 24;
 const EXPANSIONS = "etaoinsh"; // Common next letters, including continuations such as t and h.
 const SEARCH_CACHE_MS = 5 * 60 * 1000;
+const SHOOFAFLAM_CACHE_MS = 6 * 60 * 60 * 1000;
+let shoofAflamCache = { at: 0, titles: null, platformsBySlug: null, promise: null };
 
 const GENRE_NAMES = {
   12: "Adventure", 14: "Fantasy", 16: "Animation", 18: "Drama", 27: "Horror",
@@ -287,6 +295,7 @@ function json(status, value, ttl = 0, retryAfter = 0) {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": ttl ? `public, max-age=${ttl}` : "no-store",
     "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+    "X-Horizon-Arabic-Api": "1",
     ...(retryAfter ? { "Retry-After": String(retryAfter) } : {}),
   } });
 }
@@ -608,6 +617,300 @@ function season(payload, today) {
     .slice(0, 80).map(e => ({ number: e.episode_number, title: String(e.name || "Episode").slice(0, 160),
       date: e.air_date, overview: String(e.overview || "").slice(0, 1000), still: image(e.still_path) })) };
 }
+
+const ARABIC_DIACRITICS_RE = /[\u064B-\u065F\u0670\u06D6-\u06ED\u0640]/g;
+const ARABIC_SUBSCRIPTION_SLUGS = new Set(["shahid", "netflix", "watchit", "osn", "starzplay", "tod", "disney", "prime", "yango"]);
+
+function normalizeArabicText(value) {
+  return String(value || "")
+    .replace(ARABIC_DIACRITICS_RE, "")
+    .replace(/[أإآٱ]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/ة/g, "ه")
+    .replace(/ؤ/g, "و")
+    .replace(/ئ/g, "ي")
+    .replace(/[٠-٩]/g, d => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .toLowerCase()
+    .trim();
+}
+
+function stableSynthId(prefixBase, keyStr) {
+  let hash = 0;
+  for (let i = 0; i < keyStr.length; i++) {
+    hash = ((hash * 33) ^ keyStr.charCodeAt(i)) >>> 0;
+  }
+  return prefixBase + (hash % 900000);
+}
+
+function classifyShoofPlatform(slug, info) {
+  const s = String(slug || "").toLowerCase();
+  const isSub = ARABIC_SUBSCRIPTION_SLUGS.has(s);
+  return {
+    slug: s.slice(0, 40),
+    nameAr: info && typeof info.name_ar === "string" ? info.name_ar.slice(0, 60) : s,
+    nameEn: info && typeof info.name_en === "string" ? info.name_en.slice(0, 60) : s,
+    tier: isSub ? "subscription" : "listed",
+    url: info && typeof info.url === "string" ? info.url.slice(0, 160) : ""
+  };
+}
+
+async function loadShoofAflamIndex(fetcher, signal) {
+  if (shoofAflamCache.titles && Date.now() - shoofAflamCache.at < SHOOFAFLAM_CACHE_MS) {
+    return shoofAflamCache;
+  }
+  if (shoofAflamCache.promise) return shoofAflamCache.promise;
+  shoofAflamCache.promise = (async () => {
+    try {
+      const innerCtrl = new AbortController();
+      const t = setTimeout(() => innerCtrl.abort(), 3500);
+      const onAbort = () => innerCtrl.abort();
+      if (signal) {
+        if (signal.aborted) innerCtrl.abort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }
+      try {
+        const [titlesRes, platRes] = await Promise.allSettled([
+          fetcher(`${SHOOFAFLAM_BASE}/api/titles.json`, { headers: { Accept: "application/json" }, signal: innerCtrl.signal }),
+          fetcher(`${SHOOFAFLAM_BASE}/api/platforms.json`, { headers: { Accept: "application/json" }, signal: innerCtrl.signal })
+        ]);
+        if (titlesRes.status !== "fulfilled" || !titlesRes.value.ok) return { titles: [], platformsBySlug: {} };
+        const rawTitles = await titlesRes.value.json();
+        const rawPlats = platRes.status === "fulfilled" && platRes.value.ok ? await platRes.value.json() : [];
+        const platformsBySlug = {};
+        if (Array.isArray(rawPlats)) {
+          for (const p of rawPlats) {
+            if (p && typeof p.slug === "string") platformsBySlug[p.slug.toLowerCase()] = p;
+          }
+        }
+        const list = Array.isArray(rawTitles) ? rawTitles : (rawTitles && Array.isArray(rawTitles.titles) ? rawTitles.titles : []);
+        const indexed = list.filter(x => x && typeof x.slug === "string").map(x => {
+          const mediaType = x.type === "movie" ? "movie" : "tv";
+          const titleAr = String(x.title_ar || "").slice(0, 160);
+          const titleEn = String(x.title_en || "").slice(0, 160);
+          return {
+            slug: x.slug.slice(0, 100),
+            type: mediaType,
+            titleAr,
+            titleEn,
+            normAr: normalizeArabicText(titleAr),
+            normEn: normalizeArabicText(titleEn),
+            year: Number.isInteger(x.year) ? x.year : (Number(String(x.year || "").slice(0, 4)) || 0),
+            poster: image(x.poster_path),
+            genre: typeof x.genre === "string" ? x.genre.slice(0, 40) : "",
+            rating: Number.isFinite(x.vote_average) ? x.vote_average : (Number.isFinite(x.rating) ? x.rating : 0),
+            platforms: Array.isArray(x.platforms) ? x.platforms.slice(0, 12).map(p => String(p).toLowerCase()) : []
+          };
+        });
+        shoofAflamCache = { at: Date.now(), titles: indexed, platformsBySlug, promise: null };
+        return shoofAflamCache;
+      } finally {
+        clearTimeout(t);
+        if (signal) signal.removeEventListener("abort", onAbort);
+      }
+    } catch {
+      return { titles: shoofAflamCache.titles || [], platformsBySlug: shoofAflamCache.platformsBySlug || {} };
+    } finally {
+      shoofAflamCache.promise = null;
+    }
+  })();
+  return shoofAflamCache.promise;
+}
+
+function searchShoofAflamLocal(index, query, filter) {
+  const normQ = normalizeArabicText(query);
+  if (!normQ || !index || !Array.isArray(index.titles)) return [];
+  const tokens = normQ.split(" ").filter(Boolean);
+  const scored = [];
+  for (const entry of index.titles) {
+    if (filter !== "all" && entry.type !== filter) continue;
+    const matched = (entry.normAr && (entry.normAr.includes(normQ) || tokens.every(tok => entry.normAr.includes(tok))))
+      || (entry.normEn && (entry.normEn.includes(normQ) || tokens.every(tok => entry.normEn.includes(tok))));
+    if (!matched) continue;
+    let s = 0;
+    if (entry.normAr === normQ || entry.normEn === normQ) s += 1000;
+    else if (entry.normAr.startsWith(normQ) || entry.normEn.startsWith(normQ)) s += 600;
+    else s += 300;
+    if (entry.platforms.length) s += 40;
+    if (entry.year >= 2020) s += 20;
+    scored.push({ entry, s });
+  }
+  scored.sort((a, b) => b.s - a.s || (b.entry.year || 0) - (a.entry.year || 0));
+  return scored.slice(0, 30).map(x => x.entry);
+}
+
+function matchShoofForTitle(index, titleAr, titleEn, type, year) {
+  if (!index || !Array.isArray(index.titles)) return null;
+  const nAr = normalizeArabicText(titleAr);
+  const nEn = normalizeArabicText(titleEn);
+  const yr = Number(String(year || "").slice(0, 4)) || 0;
+  let best = null;
+  for (const entry of index.titles) {
+    if (type && entry.type !== type) continue;
+    const exactMatch = (nAr && entry.normAr === nAr) || (nEn && entry.normEn === nEn);
+    if (!exactMatch) continue;
+    if (yr && entry.year && Math.abs(yr - entry.year) > 1) continue;
+    best = entry;
+    break;
+  }
+  return best;
+}
+
+function formatArabicSearchTitle(row, sfMatch, queryNorm) {
+  const ar = String(row.title || row.name || row.original_title || row.original_name || "").slice(0, 160);
+  const orig = String(row.original_title || row.original_name || "").slice(0, 160);
+  const base = title(row, row.media_type || row._type || "tv");
+  const titleAr = /[\u0600-\u06FF]/.test(ar) ? ar : (/[\u0600-\u06FF]/.test(orig) ? orig : (sfMatch ? sfMatch.titleAr : ""));
+  const titleEn = sfMatch && sfMatch.titleEn ? sfMatch.titleEn : (!/[\u0600-\u06FF]/.test(ar) ? ar : "");
+  return {
+    ...base,
+    tmdbId: base.id,
+    hasTmdbId: true,
+    titleAr: titleAr || base.title,
+    titleEn,
+    shoofSlug: sfMatch ? sfMatch.slug : null,
+    regionalPlatforms: sfMatch ? sfMatch.platforms : [],
+    sources: sfMatch ? ["tmdb", "shoofaflam"] : ["tmdb"],
+    _qMatch: queryNorm ? (normalizeArabicText(titleAr || base.title).includes(queryNorm) ? 1 : 0) : 0
+  };
+}
+
+function rankArabicCandidates(rows, normQuery) {
+  const tokens = normQuery.split(" ").filter(Boolean);
+  function arabicScore(row) {
+    const ar = normalizeArabicText(row.titleAr || row.title || "");
+    const orig = normalizeArabicText(row.originalTitle || "");
+    const en = normalizeArabicText(row.titleEn || "");
+    let s = 0;
+    if (ar === normQuery || orig === normQuery || en === normQuery) s += 1000;
+    else if (ar.startsWith(normQuery) || orig.startsWith(normQuery) || en.startsWith(normQuery)) s += 650;
+    else if (tokens.length > 1 && tokens.every(t => ar.includes(t) || orig.includes(t))) s += 450;
+    else if (ar.includes(normQuery) || orig.includes(normQuery) || en.includes(normQuery)) s += 260;
+    if (row.originalLanguage === "ar") s += 180;
+    if (row.regionalPlatforms && row.regionalPlatforms.length) s += 45;
+    s += Math.log1p(row.popularity || 0) * 8 + Math.log1p(row.voteCount || 0) * 5;
+    return s;
+  }
+  return rows.sort((a, b) => arabicScore(b) - arabicScore(a) || (b.popularity || 0) - (a.popularity || 0))
+    .slice(0, ARABIC_SEARCH_LIMIT);
+}
+
+async function searchArabicMultiSource(fetcher, env, query, filter, signal, options = {}) {
+  const endpoint = filter === "all" ? "multi" : filter;
+  const path = (lang, page) => `/search/${endpoint}?query=${encodeURIComponent(query)}&include_adult=false&language=${lang}&page=${page}`;
+  const tmdbPromise = (async () => {
+    const first = await tmdbJson(fetcher, env, path("ar", 1), signal);
+    const list = (Array.isArray(first.results) ? first.results : []).map(r => ({ ...r, _type: filter === "all" ? r.media_type : filter }));
+    if (Number(first.total_pages) > 1 && list.length < 18) {
+      try {
+        const second = await tmdbJson(fetcher, env, path("ar", 2), signal);
+        for (const r of (Array.isArray(second.results) ? second.results : [])) {
+          list.push({ ...r, _type: filter === "all" ? r.media_type : filter });
+        }
+      } catch { /* Non-fatal second page */ }
+    }
+    return list.filter(r => TYPES.has(r._type) && Number.isInteger(r.id) && r.id > 0 && !r.adult);
+  })();
+
+  const shoofPromise = options.shoofAflam === false
+    ? Promise.resolve({ titles: [], platformsBySlug: {} })
+    : loadShoofAflamIndex(fetcher, signal);
+
+  const [tmdbRes, shoofRes] = await Promise.allSettled([tmdbPromise, shoofPromise]);
+  if (tmdbRes.status !== "fulfilled" && (shoofRes.status !== "fulfilled" || !shoofRes.value.titles.length)) {
+    throw tmdbRes.reason || new Error("arabic_search_unavailable");
+  }
+  const tmdbRows = tmdbRes.status === "fulfilled" ? tmdbRes.value : [];
+  const shoofIndex = shoofRes.status === "fulfilled" ? shoofRes.value : { titles: [], platformsBySlug: {} };
+  const normQuery = normalizeArabicText(query);
+  const shoofHits = searchShoofAflamLocal(shoofIndex, query, filter);
+  const usedShoofSlugs = new Set();
+  const byKey = new Map();
+
+  for (const row of tmdbRows) {
+    const mType = row._type;
+    const key = `${mType}:${row.id}`;
+    if (byKey.has(key)) continue;
+    const yr = String(row.release_date || row.first_air_date || "").slice(0, 4);
+    const rowNormAr = normalizeArabicText(row.title || row.name || row.original_title || row.original_name || "");
+    const sfMatch = shoofHits.find(sf => sf.type === mType
+      && ((sf.normAr && rowNormAr && sf.normAr === rowNormAr) || (row.original_language === "ar" && sf.normAr === rowNormAr))
+      && (!yr || !sf.year || Math.abs(Number(yr) - sf.year) <= 1))
+      || matchShoofForTitle(shoofIndex, row.title || row.name, row.original_title || row.original_name, mType, yr);
+    if (sfMatch) usedShoofSlugs.add(sfMatch.slug);
+    const formatted = formatArabicSearchTitle(row, sfMatch, normQuery);
+    formatted.regionalPlatforms = (formatted.regionalPlatforms || []).map(slug =>
+      classifyShoofPlatform(slug, shoofIndex.platformsBySlug[slug]));
+    byKey.set(key, formatted);
+  }
+
+  for (const sf of shoofHits) {
+    if (usedShoofSlugs.has(sf.slug)) continue;
+    const dup = [...byKey.values()].some(existing => existing.type === sf.type
+      && ((sf.normAr && normalizeArabicText(existing.titleAr || existing.title) === sf.normAr)
+        || (sf.normEn && normalizeArabicText(existing.titleEn || existing.title) === sf.normEn))
+      && (!existing.date || !sf.year || Math.abs(Number(existing.date.slice(0, 4)) - sf.year) <= 1));
+    if (dup) continue;
+    const synthId = stableSynthId(8000000, `${sf.type}:${sf.slug}`);
+    byKey.set(`sf:${sf.slug}`, {
+      type: sf.type,
+      id: synthId,
+      tmdbId: null,
+      hasTmdbId: false,
+      shoofSlug: sf.slug,
+      title: sf.titleAr || sf.titleEn || sf.slug,
+      titleAr: sf.titleAr || sf.titleEn || sf.slug,
+      titleEn: sf.titleEn || "",
+      date: sf.year ? `${sf.year}-01-01` : "",
+      popularity: sf.platforms.length ? 40 : 18,
+      voteCount: 0,
+      originalTitle: sf.titleAr || sf.titleEn || "",
+      originalLanguage: "ar",
+      overview: "",
+      genres: sf.genre ? [sf.genre] : [],
+      poster: sf.poster,
+      backdrop: null,
+      regionalPlatforms: sf.platforms.map(slug => classifyShoofPlatform(slug, shoofIndex.platformsBySlug[slug])),
+      sources: ["shoofaflam"]
+    });
+  }
+
+  return {
+    results: rankArabicCandidates([...byKey.values()], normQuery),
+    sources: {
+      tmdb: tmdbRes.status === "fulfilled",
+      shoofAflam: Boolean(shoofIndex.titles && shoofIndex.titles.length)
+    },
+    attribution: { tmdb: "TMDB", shoofAflam: "shoofaflam.tv" }
+  };
+}
+
+function arabicRegionalProviders(payload) {
+  const regions = ["EG", "SA", "AE", "JO", "US"];
+  const seen = new Map();
+  const rawResults = (payload && payload.results) || {};
+  for (const region of regions) {
+    const bucket = rawResults[region];
+    if (!bucket) continue;
+    for (const [tierKey, list] of [["subscription", bucket.flatrate], ["free", bucket.free], ["free", bucket.ads]]) {
+      for (const p of (Array.isArray(list) ? list : [])) {
+        if (!p || !Number.isInteger(p.provider_id)) continue;
+        const name = String(p.provider_name || "").slice(0, 90);
+        const key = `${region}:${p.provider_id}`;
+        if (!seen.has(key)) {
+          seen.set(key, {
+            id: p.provider_id,
+            name,
+            region,
+            tier: tierKey,
+            logo: image(p.logo_path)
+          });
+        }
+      }
+    }
+  }
+  return [...seen.values()].slice(0, 24);
+}
 function limited(request, now) {
   const key = request.headers.get("cf-connecting-ip") || "local";
   const previous = buckets.get(key);
@@ -618,6 +921,11 @@ function limited(request, now) {
 }
 export async function api(request, env, options = {}) {
   const url = new URL(request.url);
+  if (url.pathname === "/api/arabic/relay-availability") return watchRelayAvailability(request, env);
+  if (url.pathname === "/api/arabic/relay-ticket") return watchRelayTicket(request, env, options.fetch);
+  if (url.pathname.startsWith("/api/pair/") || url.pathname.startsWith("/api/owner/")) {
+    return handleApi(request, { ...env, PAIRING_ONLY: true }, options);
+  }
   if (request.method !== "GET") return json(405, { error: "method_not_allowed" });
   if (!env.TMDB_TOKEN) return json(503, { error: "metadata_unconfigured" });
   if (limited(request, Date.now())) return json(429, { error: "rate_limited" }, 0, 10);
@@ -647,6 +955,47 @@ export async function api(request, env, options = {}) {
     if (avoidParam && !avoids) return json(400, { error: "invalid_query" });
     path = null; shape = null; ttl = 1200;
     var discoverParams = { type, id, target, avoids: avoids || [], aiMode: effectiveAiMode };
+  } else if (url.pathname === "/api/arabic/search") {
+    const query = (url.searchParams.get("q") || "").trim();
+    const type = url.searchParams.get("type") || "all";
+    if (!/^[\p{L}\p{N} .,'!?:&+\-]{1,80}$/u.test(query) || !["all", "movie", "tv"].includes(type)
+        || [...url.searchParams.keys()].some(k => !["q", "type"].includes(k))) return json(400, { error: "invalid_query" });
+    path = null;
+    shape = null;
+    ttl = 180;
+    var arabicSearch = { query, type };
+  } else if (url.pathname.startsWith("/api/arabic/")) {
+    const parts = url.pathname.split("/");
+    const kind = parts[3], type = parts[4], id = positive(parts[5]);
+    if (url.search || !id || !TYPES.has(type) || parts.length !== (kind === "season" ? 7 : 6))
+      return json(400, { error: "invalid_route" });
+    if (kind === "title") {
+      path = null; shape = null; ttl = 1800;
+      var arabicDetail = { type, id };
+    } else if (kind === "season" && type === "tv") {
+      const number = positive(parts[6], 100);
+      if (!number) return json(400, { error: "invalid_season" });
+      path = `/tv/${id}/season/${number}?language=ar`;
+      shape = value => {
+        const today = new Date().toISOString().slice(0, 10);
+        return {
+          number: value.season_number,
+          episodes: (Array.isArray(value.episodes) ? value.episodes : [])
+            .filter(e => Number.isInteger(e.episode_number) && e.episode_number > 0
+              && e.episode_type !== "special"
+              && (!e.air_date || !/^\d{4}-\d{2}-\d{2}$/.test(e.air_date) || e.air_date <= today))
+            .slice(0, 80)
+            .map(e => ({
+              number: e.episode_number,
+              title: String(e.name || `الحلقة ${e.episode_number}`).slice(0, 160),
+              date: e.air_date || "",
+              overview: String(e.overview || "").slice(0, 1000),
+              still: image(e.still_path)
+            }))
+        };
+      };
+      ttl = 1800;
+    } else return json(400, { error: "invalid_route" });
   } else if (url.pathname === "/api/search") {
     const query = (url.searchParams.get("q") || "").trim();
     const type = url.searchParams.get("type") || "all";
@@ -780,6 +1129,46 @@ export async function api(request, env, options = {}) {
       discoverCache.set(cacheKey, { at: Date.now(), value });
       return json(200, value, ttl);
     }
+    if (arabicSearch) {
+      const key = `${arabicSearch.type}:${normalizeArabicText(arabicSearch.query)}`;
+      const cached = arabicSearchCache.get(key);
+      if (cached && Date.now() - cached.at < SEARCH_CACHE_MS) return json(200, cached.value, ttl);
+      const value = await searchArabicMultiSource(fetcher, env, arabicSearch.query, arabicSearch.type, controller.signal, options);
+      if (arabicSearchCache.size >= 40) arabicSearchCache.delete(arabicSearchCache.keys().next().value);
+      arabicSearchCache.set(key, { at: Date.now(), value });
+      return json(200, value, ttl);
+    }
+    if (arabicDetail) {
+      const append = arabicDetail.type === "tv" ? "external_ids,credits,content_ratings" : "credits,release_dates";
+      const [arRes, provRes, shoofRes] = await Promise.allSettled([
+        tmdbJson(fetcher, env, `/${arabicDetail.type}/${arabicDetail.id}?language=ar&append_to_response=${append}`, controller.signal),
+        tmdbJson(fetcher, env, `/${arabicDetail.type}/${arabicDetail.id}/watch/providers`, controller.signal),
+        options.shoofAflam === false ? Promise.resolve({ titles: [], platformsBySlug: {} }) : loadShoofAflamIndex(fetcher, controller.signal)
+      ]);
+      if (arRes.status !== "fulfilled") throw arRes.reason;
+      const raw = arRes.value;
+      const out = detail(raw, arabicDetail.type);
+      const enTitleFallback = String(raw.original_title || raw.original_name || "").slice(0, 160);
+      let enOverview = "";
+      if (!out.overview) {
+        try {
+          const enRaw = await tmdbJson(fetcher, env, `/${arabicDetail.type}/${arabicDetail.id}?language=en-US`, controller.signal);
+          enOverview = String(enRaw.overview || "").slice(0, 1800);
+          out.titleEn = String(enRaw.title || enRaw.name || "").slice(0, 160);
+        } catch { /* Non-fatal English fallback */ }
+      }
+      if (!out.overview && enOverview) out.overview = enOverview;
+      const rawArName = String(raw.title || raw.name || "").slice(0, 160);
+      out.titleAr = /[\u0600-\u06FF]/.test(rawArName) ? rawArName : (/[\u0600-\u06FF]/.test(enTitleFallback) ? enTitleFallback : rawArName);
+      out.imdbId = typeof raw.external_ids?.imdb_id === "string" && /^tt\d{5,12}$/.test(raw.external_ids.imdb_id)
+        ? raw.external_ids.imdb_id : (typeof raw.imdb_id === "string" && /^tt\d{5,12}$/.test(raw.imdb_id) ? raw.imdb_id : null);
+      const shoofIdx = shoofRes.status === "fulfilled" ? shoofRes.value : { titles: [], platformsBySlug: {} };
+      const sfMatch = matchShoofForTitle(shoofIdx, out.titleAr || out.title, out.titleEn || out.originalTitle, arabicDetail.type, out.date);
+      out.regionalPlatforms = sfMatch ? sfMatch.platforms.map(slug => classifyShoofPlatform(slug, shoofIdx.platformsBySlug[slug])) : [];
+      out.watchProviders = provRes.status === "fulfilled" ? arabicRegionalProviders(provRes.value) : [];
+      out.attribution = sfMatch ? { tmdb: "TMDB", shoofAflam: "shoofaflam.tv" } : { tmdb: "TMDB" };
+      return json(200, out, ttl);
+    }
     if (search) {
       const key = `${search.type}:${search.query.toLocaleLowerCase()}`;
       const cached = searchCache.get(key);
@@ -817,7 +1206,9 @@ export {
   formatSemanticDoc,
   applyAiEmbeddings,
   discoverCache,
-  embeddingCache
+  embeddingCache,
+  arabicSearchCache,
+  normalizeArabicText
 };
 export default { fetch(request, env) {
   return new URL(request.url).pathname.startsWith("/api/") ? api(request, env) : env.ASSETS.fetch(request);

@@ -41,6 +41,14 @@
       requiresAuth: true,
       authNote: "Iraq ISP network required (unavailable from US)",
       supportedFormats: []
+    },
+    {
+      id: "akwam_relay",
+      label: "Akwam Relay (MP4)",
+      shortLabel: "Akwam Relay",
+      requiresAuth: true,
+      authNote: "Requires a paired Horizon device",
+      supportedFormats: ["mp4"]
     }
   ];
 
@@ -119,7 +127,7 @@
     }, baseFields || {});
   }
 
-  function resolveForProvider(providerId, query) {
+  function resolveForProvider(providerId, query, relayEnabled) {
     var providerMeta = null;
     for (var i = 0; i < PROVIDERS.length; i++) {
       if (PROVIDERS[i].id === providerId) { providerMeta = PROVIDERS[i]; break; }
@@ -131,6 +139,24 @@
     }
 
     var item = deterministicMatch(query);
+    if (providerId === "akwam_relay") {
+      if (relayEnabled !== true) return buildOption(providerMeta, { failureReason: "Relay unavailable." });
+      var supported = query && query.type === "tv" && Number(query.tmdbId) === 297621
+        && Number(query.season) === 1 && Number(query.episode) === 1;
+      return buildOption(providerMeta, {
+        matchedTitle: item ? item.titleAr + " · " + item.titleEn : "",
+        mediaId: supported ? 297621 : (item && item.id),
+        season: (query && query.season) || null,
+        episode: (query && query.episode) || null,
+        format: "mp4",
+        availability: supported ? "playable" : "unavailable",
+        relayEpisodeId: supported ? "fakhr-el-delta-s01e01" : null,
+        ticketUrl: supported ? "/api/arabic/relay-ticket" : null,
+        authorizationNote: supported ? "Paired-device playback ticket" : "",
+        failureReason: supported ? "" : "No relay mapping for this title and episode."
+      });
+    }
+
     if (!item) {
       return buildOption(providerMeta, {
         failureReason: "Could not deterministically match an Arabic catalog title for this selection."
@@ -294,21 +320,90 @@
     return buildOption(providerMeta, { failureReason: "Provider unavailable." });
   }
 
-  function resolveAll(query) {
-    return PROVIDERS.map(function (p) { return resolveForProvider(p.id, query); });
+  function buildRegionalListingOptions(item, query) {
+    if (!item) return [];
+    var out = [];
+    var seen = Object.create(null);
+    var platforms = Array.isArray(item.regionalPlatforms) ? item.regionalPlatforms : [];
+    var watchProviders = Array.isArray(item.watchProviders) ? item.watchProviders : [];
+
+    function pushPlatform(slug, label, isSub, region) {
+      var key = String(slug || label || "").toLowerCase();
+      if (!key || seen[key]) return;
+      seen[key] = true;
+      var statusLabel = isSub ? "Subscription Required" : "Listed on Provider";
+      out.push({
+        providerId: "regional_" + key.replace(/[^a-z0-9]+/g, "_"),
+        providerLabel: label + " (" + statusLabel + ")",
+        providerShortLabel: label,
+        matchedTitle: (item.titleAr || item.title || "") + (item.titleEn ? (" · " + item.titleEn) : ""),
+        mediaId: item.id,
+        season: (query && query.season) || null,
+        episode: (query && query.episode) || null,
+        format: "external-listing",
+        audioLanguage: "ar",
+        quality: statusLabel,
+        authRequired: Boolean(isSub),
+        authNote: isSub ? "Subscription service without public in-app Horizon stream API" : "External regional platform listing",
+        availability: isSub ? "subscription-required" : "listed-on-provider",
+        streamUrl: null,
+        youtubeId: null,
+        officialApp: null,
+        subtitleTracks: [],
+        authorizationNote: "Discovered via " + (item.provenance || "Shoof Aflam / TMDB") + (region ? (" · " + region) : ""),
+        failureReason: label + " requires its own official app/website (" + statusLabel + "); unauthorized third-party extraction is disabled in Horizon."
+      });
+    }
+
+    for (var i = 0; i < platforms.length; i++) {
+      var p = platforms[i];
+      if (!p) continue;
+      var label = p.nameEn || p.nameAr || p.slug;
+      pushPlatform(p.slug, label, p.tier === "subscription", "MENA");
+    }
+    for (var j = 0; j < watchProviders.length; j++) {
+      var wp = watchProviders[j];
+      if (!wp || !wp.name) continue;
+      pushPlatform(wp.name, wp.name, wp.tier === "subscription", wp.region || "TMDB");
+    }
+    return out;
   }
 
-  function preferredDefaultProvider(query) {
+  function resolveAll(query, relayEnabled) {
+    var base = PROVIDERS.filter(function (p) { return p.id !== "akwam_relay" || relayEnabled === true; })
+      .map(function (p) { return resolveForProvider(p.id, query, relayEnabled); });
+    var item = deterministicMatch(query);
+    var regional = buildRegionalListingOptions(item, query);
+    return base.concat(regional);
+  }
+
+  function preferredDefaultProvider(query, relayEnabled) {
     var item = deterministicMatch(query);
     if (item && item.royaSeriesId) return "roya_tv";
-    var options = resolveAll(query);
+    var options = resolveAll(query, relayEnabled);
     for (var i = 0; i < options.length; i++) {
       if (options[i].availability === "playable") return options[i].providerId;
     }
     for (var j = 0; j < options.length; j++) {
       if (options[j].availability === "external-app") return options[j].providerId;
     }
+    for (var k = 0; k < options.length; k++) {
+      if (options[k].availability === "subscription-required" || options[k].availability === "listed-on-provider") {
+        return options[k].providerId;
+      }
+    }
     return PROVIDERS[0].id;
+  }
+
+  function summarizeAvailability(item) {
+    var engine = root.HorizonArabicSearchEngine;
+    if (engine && typeof engine.classifyAvailability === "function") {
+      return engine.classifyAvailability(item);
+    }
+    if (item && item.availability === "in-app") {
+      return { state: "playable", label: item.availabilityLabel || "Playable in Horizon", detail: item.availabilityDetail || "" };
+    }
+    return { state: "metadata_only", label: (item && item.availabilityLabel) || "Discoverable Only", detail: (item && item.availabilityDetail) || "" };
   }
 
   root.HorizonArabicProviders = {
@@ -317,6 +412,7 @@
     strictEpisodeLookup: strictEpisodeLookup,
     resolveForProvider: resolveForProvider,
     resolveAll: resolveAll,
-    preferredDefaultProvider: preferredDefaultProvider
+    preferredDefaultProvider: preferredDefaultProvider,
+    summarizeAvailability: summarizeAvailability
   };
 })(typeof window !== "undefined" ? window : globalThis);

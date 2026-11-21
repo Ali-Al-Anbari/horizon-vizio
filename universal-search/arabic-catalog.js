@@ -512,7 +512,7 @@
       overview: "بعد انقطاع خمس سنوات، يعود الطبيب النفسي يحيى إلى مستشفى العباسية ليُكلف بتقييم حالة مريض في قسم الثامن غربي يكتشف أنه صديقه القديم شريف. (Acclaimed psychological thriller directed by Marwan Hamed.)"
     },
     {
-      id: 234790,
+      id: 224882,
       type: "tv",
       title: "الحشاشين",
       titleAr: "الحشاشين",
@@ -550,7 +550,7 @@
       }
     },
     {
-      id: 84242,
+      id: 84299,
       type: "tv",
       title: "الهيبة",
       titleAr: "الهيبة",
@@ -589,7 +589,7 @@
       }
     },
     {
-      id: 130133,
+      id: 128486,
       type: "tv",
       title: "رشاش",
       titleAr: "رشاش",
@@ -833,6 +833,11 @@
       var royaItem = roya.findById(numId);
       if (royaItem && (!type || royaItem.type === type)) return royaItem;
     }
+    var engine = root.HorizonArabicSearchEngine;
+    if (engine && typeof engine.getDynamicByKey === "function") {
+      var dynItem = type ? engine.getDynamicByKey(type, numId) : (engine.getDynamicByKey("tv", numId) || engine.getDynamicByKey("movie", numId));
+      if (dynItem) return dynItem;
+    }
     for (var i = 0; i < ARABIC_TITLES.length; i++) {
       var item = ARABIC_TITLES[i];
       if ((!type || item.type === type) && item.id === numId) return item;
@@ -866,8 +871,13 @@
     var gIds = (item.genres || []).map(function (g) { return GENRE_NAME_TO_ID[g] || 18; });
     return {
       id: item.id,
+      tmdbId: item.tmdbId || null,
+      imdbId: item.imdbId || null,
+      hasTmdbId: Boolean(item.hasTmdbId),
       type: item.type,
       title: formatDisplayTitle(item),
+      titleAr: item.titleAr || item.title || "",
+      titleEn: item.titleEn || "",
       originalTitle: item.titleAr || item.title || "",
       date: item.date || "",
       poster: item.poster || "",
@@ -884,45 +894,59 @@
       plus: Boolean(item.plus),
       royaSeriesId: item.royaSeriesId || null,
       availability: item.availability,
-      availabilityLabel: item.availabilityLabel
+      availabilityState: item.availabilityState || null,
+      availabilityLabel: item.availabilityLabel || "",
+      availabilityDetail: item.availabilityDetail || "",
+      regionalPlatforms: item.regionalPlatforms || [],
+      watchProviders: item.watchProviders || [],
+      provenance: item.provenance || "",
+      sources: item.sources || []
     };
   }
 
   function toDetailPayload(item) {
     if (!item) return null;
-    var displayTitle = (item.titleEn && item.titleEn !== item.titleAr)
+    var displayTitle = (item.titleEn && item.titleEn !== item.titleAr && item.titleAr)
       ? (item.titleAr + " (" + item.titleEn + ")")
-      : (item.titleAr || item.title || "");
+      : (item.titleAr || item.titleEn || item.title || "");
     return {
       id: item.id,
+      tmdbId: item.tmdbId || null,
+      imdbId: item.imdbId || null,
+      hasTmdbId: Boolean(item.hasTmdbId),
       type: item.type,
       title: displayTitle,
-      titleAr: item.titleAr,
-      titleEn: item.titleEn,
-      date: item.date,
-      rating: item.rating,
+      titleAr: item.titleAr || "",
+      titleEn: item.titleEn || "",
+      date: item.date || "",
+      rating: item.rating || "",
       runtime: item.runtime || null,
       episodeRuntime: item.episodeRuntime || null,
-      overview: item.overview,
-      poster: item.poster,
-      backdrop: item.backdrop,
+      overview: item.overview || "",
+      poster: item.poster || "",
+      backdrop: item.backdrop || "",
       genres: item.genres || [],
       cast: item.cast || [],
       creators: item.creators || [],
       directors: item.directors || [],
       network: item.network || "",
       status: item.status || "",
-      originalLanguage: "Arabic (العربية) · " + (item.countryLabel || ""),
+      originalLanguage: "Arabic (العربية)" + (item.countryLabel ? " · " + item.countryLabel : ""),
       seasons: item.seasons || [],
       plus: Boolean(item.plus),
       availability: item.availability,
-      availabilityLabel: item.availabilityLabel,
-      availabilityDetail: item.availabilityDetail,
+      availabilityState: item.availabilityState || null,
+      availabilityLabel: item.availabilityLabel || "",
+      availabilityDetail: item.availabilityDetail || "",
       officialApp: item.officialApp || null,
       youtubeId: item.youtubeId || null,
       royaSeriesId: item.royaSeriesId || null,
       movieRoyaEpisodeId: item.movieRoyaEpisodeId || null,
-      channel: item.channel || ""
+      channel: item.channel || "",
+      regionalPlatforms: item.regionalPlatforms || [],
+      watchProviders: item.watchProviders || [],
+      provenance: item.provenance || "",
+      sources: item.sources || []
     };
   }
 
@@ -1021,6 +1045,30 @@
       ? roya.ensureCatalogLoaded(signal)
       : Promise.resolve([]);
 
+    var engine = root.HorizonArabicSearchEngine;
+    if (engine && typeof engine.searchMultiSource === "function") {
+      return engine.searchMultiSource(query, typeFilter, {
+        page: page,
+        pageSize: pageSize,
+        signal: signal,
+        fetch: options.fetch,
+        localPool: getCombinedTitles(),
+        getLocalPool: getCombinedTitles,
+        royaLoader: loader
+      }).then(function (payload) {
+        return {
+          results: (payload.results || []).map(toSearchSummary),
+          page: payload.page,
+          pageSize: payload.pageSize,
+          totalResults: payload.totalResults,
+          totalPages: payload.totalPages,
+          hasMore: payload.hasMore,
+          preRanked: true,
+          metrics: payload.metrics || null
+        };
+      });
+    }
+
     return loader.then(function () {
       var allMatches = rankCatalogMatches(getCombinedTitles(), query, typeFilter);
       var totalResults = allMatches.length;
@@ -1048,7 +1096,22 @@
         if (existing && !existing.isRoyaCatalog && existing.availability === "in-app" && existing.archiveSource) {
           return toDetailPayload(existing);
         }
+        if (existing && existing.regionalPlatforms && existing.regionalPlatforms.length) {
+          resolvedItem = Object.assign({}, resolvedItem, {
+            regionalPlatforms: existing.regionalPlatforms,
+            provenance: existing.provenance
+          });
+        }
         return toDetailPayload(resolvedItem);
+      }, function () {
+        return existing ? toDetailPayload(existing) : null;
+      });
+    }
+    var engine = root.HorizonArabicSearchEngine;
+    if (engine && typeof engine.fetchUniversalDetail === "function"
+        && (!existing || !existing.archiveSource)) {
+      return engine.fetchUniversalDetail(type, numId, existing, { signal: signal }).then(function (resolved) {
+        return resolved ? toDetailPayload(resolved) : (existing ? toDetailPayload(existing) : null);
       }, function () {
         return existing ? toDetailPayload(existing) : null;
       });
@@ -1068,6 +1131,19 @@
         return mapEpisodesPayload(resolvedItem, sNum, eps);
       }, function () {
         return existing ? toSeasonPayload(numId, sNum) : null;
+      });
+    }
+    var engine = root.HorizonArabicSearchEngine;
+    if (engine && typeof engine.fetchUniversalSeason === "function"
+        && (!existing || !existing.seasonEpisodes || !existing.seasonEpisodes[sNum])) {
+      return engine.fetchUniversalSeason(numId, sNum, existing, { signal: signal }).then(function (payload) {
+        if (payload && Array.isArray(payload.episodes) && payload.episodes.length) {
+          var baseObj = existing || { type: "tv", id: numId, availability: "catalog-only" };
+          return mapEpisodesPayload(baseObj, sNum, payload.episodes);
+        }
+        return existing ? toSeasonPayload(numId, sNum) : { season: sNum, episodes: [] };
+      }, function () {
+        return existing ? toSeasonPayload(numId, sNum) : { season: sNum, episodes: [] };
       });
     }
     return Promise.resolve(existing ? toSeasonPayload(numId, sNum) : null);

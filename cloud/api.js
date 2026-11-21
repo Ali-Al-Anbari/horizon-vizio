@@ -53,7 +53,7 @@ function json(status, data) {
   });
 }
 
-async function smallJson(request, maxBytes = 256) {
+export async function smallJson(request, maxBytes = 256) {
   if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
     throw new Error("invalid_content_type");
   }

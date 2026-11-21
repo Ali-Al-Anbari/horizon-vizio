@@ -448,7 +448,7 @@
           var isRoyaSynth = contentLibrary === "arabic" && root.HorizonRoyaCatalog
             && typeof root.HorizonRoyaCatalog.toRoyaIdFromWatchId === "function"
             && root.HorizonRoyaCatalog.toRoyaIdFromWatchId(reqId);
-          if (arTitle || isRoyaSynth) {
+          if (arTitle || isRoyaSynth || contentLibrary === "arabic") {
             if (typeof arabicCatalog.fetchDetailAsync === "function") {
               return arabicCatalog.fetchDetailAsync(arBits[3], reqId, signal);
             }
@@ -461,7 +461,7 @@
           var sIsRoya = contentLibrary === "arabic" && root.HorizonRoyaCatalog
             && typeof root.HorizonRoyaCatalog.toRoyaIdFromWatchId === "function"
             && root.HorizonRoyaCatalog.toRoyaIdFromWatchId(sReqId);
-          if (sTitle || sIsRoya) {
+          if (sTitle || sIsRoya || contentLibrary === "arabic") {
             if (typeof arabicCatalog.fetchSeasonAsync === "function") {
               return arabicCatalog.fetchSeasonAsync(sReqId, Number(arBits[5]), signal);
             }
@@ -2460,6 +2460,12 @@
         }
         var meta = doc.createElement("span"); meta.className = "poster-meta";
         var title = doc.createElement("strong"); title.textContent = row.title;
+        var availabilityTag = row.plus ? " · Roya Plus"
+          : (row.royaSeriesId ? " · Roya HLS"
+          : (row.availabilityState === "playable" ? " · Play in Horizon"
+          : (row.availabilityState === "subscription_required" ? (" · " + ((row.regionalPlatforms && row.regionalPlatforms[0] && (row.regionalPlatforms[0].nameEn || row.regionalPlatforms[0].slug)) || "Subscription"))
+          : (row.availabilityState === "listed_on_provider" ? (" · " + ((row.regionalPlatforms && row.regionalPlatforms[0] && (row.regionalPlatforms[0].nameEn || row.regionalPlatforms[0].slug)) || "External"))
+          : (contentLibrary === "arabic" ? " · Metadata Only" : "")))));
         var info = doc.createElement("small"); info.textContent = row.resume && row.type === "movie"
           ? row.resume.progress && !row.resume.progress.completed
             ? "Movie · " + Math.round(row.resume.progress.position / row.resume.progress.duration * 100) + "% watched"
@@ -2469,7 +2475,7 @@
               ? " · " + Math.round(row.resume.progress.position / row.resume.progress.duration * 100) + "% watched"
               : row.resume.progress && row.resume.progress.completed ? " · completed" : "")
           : (row.type === "tv" ? "TV" : "Movie") + (row.date ? " · " + row.date.slice(0, 4) : "")
-            + (row.plus ? " · Roya Plus" : "");
+            + availabilityTag;
         meta.appendChild(title); meta.appendChild(info); card.appendChild(art); card.appendChild(meta);
         card.setAttribute("aria-label", row.title + ", " + info.textContent);
         results.appendChild(card);
@@ -2509,7 +2515,7 @@
       var page = Math.max(1, Number(pageArg) || 1);
       if (activeAbort) activeAbort.abort();
       if (q.length < (explicit ? 1 : 2)) { renderResults([]); text("search-status", "Enter at least two characters to search, or press OK to submit."); return; }
-      text("search-status", contentLibrary === "arabic" ? "Searching Roya catalog…" : "Searching…");
+      text("search-status", contentLibrary === "arabic" ? "Searching Arabic catalog (TMDB · ArabCinemeta · Roya)…" : "Searching…");
       var key = contentLibrary + ":" + state.filter + ":" + q.toLowerCase();
       var cached = cache.get(key);
       if (page === 1 && cached && Date.now() - cached.at < 420000) {
@@ -3575,6 +3581,11 @@
         launchingEpisode = false;
         return;
       }
+      if (contentLibrary === "arabic") {
+        launchingEpisode = false;
+        text("episode-status", "No authorized Horizon playback stream is available for this title.");
+        return;
+      }
       launchingEpisode = true;
       saveView();
       try { nav.assign(url);
@@ -3600,6 +3611,11 @@
       if (typeof root.__HORIZON_LG_LAUNCH__ === "function"
           && root.__HORIZON_LG_LAUNCH__("movie", state.title.id, null, null, !!startOver, state.title.title || "")) {
         launchingEpisode = false;
+        return;
+      }
+      if (contentLibrary === "arabic") {
+        launchingEpisode = false;
+        text("detail-status", "No authorized Horizon playback stream is available for this movie.");
         return;
       }
       launchingEpisode = true;

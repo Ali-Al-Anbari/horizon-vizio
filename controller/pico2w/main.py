@@ -1,7 +1,7 @@
 """Supervised-first Horizon controller for Pico 2 W / MicroPython v1.29.0.
 
 The default boot path performs a read-only health check and exits. Automatic
-Horizon launching requires the explicit device-local AUTO_LAUNCH_ON_POWER flag.
+Horizon opens only through the opt-in iHeartRadio shortcut.
 """
 
 import binascii
@@ -36,13 +36,11 @@ WIFI_RETRY_MS = (1000, 2000, 4000, 8000, 15000, 30000, 60000)
 NTP_RETRY_MS = (1000, 3000, 8000)
 NTP_BACKGROUND_RETRY_MS = (1000, 3000, 8000, 30000, 60000)
 APP_RETRY_MS = (1000, 3000, 8000, 30000, 60000)
-LAUNCH_RETRY_MS = (3000, 5000, 10000, 20000, 40000, 60000)
 NTP_REFRESH_MS = 24 * 60 * 60 * 1000
 POWER_POLL_MS = 3000
 FRESH_POWER_HINT_MS = 1000
 CLOUD_CONFIRM_MS = 15000
 IHEART_MESSAGE = "https://tvclient.iheart.com/vizio"
-IHEART_RETRY_AFTER_MS = 8000
 IHEART_CONFIRM_MS = 20000
 IHEART_COOLDOWN_MS = 15000
 CLOUD_HOST = "horizon-vizio.ali-al-anbari.workers.dev"
@@ -1090,10 +1088,6 @@ def current_app(context, token):
     raise RuntimeError("TV did not report current app")
 
 
-def horizon_is_active(context, token):
-    return str(current_app(context, token).get("APP_ID")) == "17"
-
-
 def launch_horizon(context, token):
     body = {"VALUE": {"APP_ID": "17", "NAME_SPACE": 4,
                       "MESSAGE": config.HORIZON_URL}}
@@ -1134,9 +1128,9 @@ def shortcut_diag(state, event, now, app=None, detail="-"):
     elapsed = time.ticks_diff(now, detected) if detected is not None else 0
     cooldown = state.get("cooldown_at")
     cooling = cooldown is not None and time.ticks_diff(now, cooldown) < 0
-    print("iHeart diag +%dms %s prev=%s current=%s launch=%s retry=%d poll_lag=%dms cooldown=%s detail=%s" %
+    print("iHeart diag +%dms %s prev=%s current=%s launch=%s poll_lag=%dms cooldown=%s detail=%s" %
           (elapsed, event, state.get("previous_app", "?/?"), shortcut_app_label(app),
-           state.get("launch_outcome", "none"), state.get("retry_count", 0),
+           state.get("launch_outcome", "none"),
            state.get("poll_lag_ms", 0),
            "active" if cooling else "ready", detail))
 
@@ -1168,7 +1162,7 @@ def shortcut_finish(state, now, outcome, app=None):
         print("iHeart shortcut: Horizon not confirmed (%s)" % outcome)
 
 
-def shortcut_send_launch(context, token, state, retry=False):
+def shortcut_send_launch(context, token, state):
     started = perf_start()
     try:
         launch_horizon(context, token)
@@ -1178,7 +1172,7 @@ def shortcut_send_launch(context, token, state, retry=False):
     except (OSError, ValueError):
         outcome = "transport_error"
     state["launch_outcome"] = outcome
-    shortcut_diag(state, "retry_launch" if retry else "launch", ticks(), detail=outcome)
+    shortcut_diag(state, "launch", ticks(), detail=outcome)
     if outcome == "accepted":
         perf_end("iHeart Horizon launch request", started)
         perf_network("iHeart launch", "tv")
@@ -1198,13 +1192,14 @@ def shortcut_superseded_by_cloud(state):
 
 
 def iheart_shortcut_step(context, token, state):
-    """Read app state and allow one guarded retry for an unconfirmed launch."""
+    """Observe the existing radio shortcut and confirm its single launch."""
     read_started = perf_start()
     try:
         app = current_app(context, token)
     except (OSError, ValueError, RuntimeError):
         now = ticks()
         if state["pending_at"] is None:
+            state["observed"] = False
             raise
         state["had_read_error"] = True
         shortcut_diag(state, "verification_error", now, detail="tv_state_unavailable")
@@ -1213,6 +1208,8 @@ def iheart_shortcut_step(context, token, state):
         return
     now = ticks()
     iheart = iheart_app_matches(app)
+    returned_from_horizon = iheart and state.get("was_horizon", False)
+    state["was_horizon"] = shortcut_horizon_matches(app)
     if not iheart:
         perf_slow("iHeart app-state read", read_started, "tv")
     app_label = shortcut_app_label(app) if getattr(config, "IHEART_DIAGNOSTICS", False) is True else None
@@ -1225,7 +1222,7 @@ def iheart_shortcut_step(context, token, state):
         return
 
     if state["pending_at"] is not None:
-        if shortcut_horizon_matches(app):
+        if state["was_horizon"]:
             shortcut_diag(state, "horizon_sample", now, app)
             if state.get("horizon_seen_at") is None:
                 state["horizon_seen_at"] = now
@@ -1242,30 +1239,6 @@ def iheart_shortcut_step(context, token, state):
             shortcut_finish(state, now, "app_changed", app)
         elif time.ticks_diff(now, state["pending_at"]) >= IHEART_CONFIRM_MS:
             shortcut_finish(state, now, "timeout", app)
-        elif (state.get("retry_count", 0) == 0
-              and (state.get("launch_outcome") == "rejected"
-                   or time.ticks_diff(now, state["pending_at"]) >= IHEART_RETRY_AFTER_MS)):
-            # Recheck both power and app after the first sample. A cloud claim
-            # or an unrelated app transition must not be overwritten.
-            try:
-                mode = power_state(context, token)
-                fresh_app = current_app(context, token) if mode == 1 else None
-            except (OSError, ValueError, RuntimeError):
-                state["had_read_error"] = True
-                shortcut_diag(state, "retry_gate", ticks(), detail="tv_state_unavailable")
-                return
-            now = ticks()
-            if mode != 1:
-                shortcut_finish(state, now, "tv_off")
-            elif shortcut_horizon_matches(fresh_app):
-                state["horizon_seen_at"] = now
-                shortcut_diag(state, "retry_gate", now, fresh_app, "horizon_seen")
-            elif not iheart_app_matches(fresh_app):
-                shortcut_finish(state, now, "app_changed", fresh_app)
-            else:
-                state["retry_count"] = 1
-                shortcut_diag(state, "retry_gate", now, fresh_app, "tv_on_iheart")
-                shortcut_send_launch(context, token, state, retry=True)
         else:
             shortcut_diag(state, "verification_sample", now, app, "iheart_active")
         if app_label is not None:
@@ -1280,10 +1253,15 @@ def iheart_shortcut_step(context, token, state):
         if app_label is not None:
             state["last_app"] = app_label
         return
+    if returned_from_horizon:
+        state["latched"] = True
+        shortcut_diag(state, "ignored", now, app, "horizon_exit")
+        return
     if state["latched"]:
         return
     if state["cooldown_at"] is not None and time.ticks_diff(now, state["cooldown_at"]) < 0:
-        shortcut_diag(state, "cooldown", now, app, "new_entry_deferred")
+        state["latched"] = True
+        shortcut_diag(state, "cooldown", now, app, "new_entry_discarded")
         return
 
     state["latched"] = True
@@ -1293,7 +1271,6 @@ def iheart_shortcut_step(context, token, state):
     state["previous_app"] = state.get("last_app", "?/?")
     if app_label is not None:
         state["last_app"] = app_label
-    state["retry_count"] = 0
     state["horizon_seen_at"] = None
     state["horizon_missing_count"] = 0
     state["had_read_error"] = False
@@ -1460,11 +1437,15 @@ def cloud_auth_probe(cloud_context, credential):
         raise RuntimeError("Cloud controller authentication check failed (HTTP %d)" % status)
 
 
-def poll_shortcut_once(context, token, state, last_power, pending_launch,
+def reset_shortcut_observation(state):
+    state.update({"observed": False, "latched": False, "pending_at": None, "horizon_seen_at": None, "was_horizon": False})
+
+
+def poll_shortcut_once(context, token, state, last_power,
                        scheduled_due, interval):
     """Run one due TV sample and skip missed slots after slow network work."""
     state["poll_lag_ms"] = max(0, time.ticks_diff(ticks(), scheduled_due))
-    if last_power == 1 and not pending_launch:
+    if last_power == 1:
         try:
             iheart_shortcut_step(context, token, state)
         except (OSError, ValueError, RuntimeError):
@@ -1559,9 +1540,6 @@ def unattended_watch():
     wlan = network.WLAN(network.WLAN.IF_STA)
     last_power = load_power()
     last_power_at = None
-    pending_launch = False
-    pending_at = None
-    launch_attempts = 0
     context = None
     cloud_context = None
     cloud_session = None
@@ -1586,6 +1564,7 @@ def unattended_watch():
             observed_ip = wifi_address(wlan)
             if last_ip is not None and observed_ip != last_ip:
                 print("Network address lost or changed; closing stale sockets")
+                reset_shortcut_observation(shortcut_state)
                 close_runtime_connections(cloud_session, player_bridge)
                 cloud_session = None
                 player_bridge = None
@@ -1600,6 +1579,7 @@ def unattended_watch():
                 raise OSError("Wi-Fi address unavailable")
             if last_ip is not None and current_ip != last_ip:
                 print("Network address changed; closing stale sockets")
+                reset_shortcut_observation(shortcut_state)
                 close_runtime_connections(cloud_session, player_bridge)
                 cloud_session = None
                 player_bridge = None
@@ -1656,41 +1636,11 @@ def unattended_watch():
                     save_power(mode)
                     print("Power baseline:", "on" if mode else "off")
                 elif mode != last_power:
-                    previous = last_power
                     last_power = mode
                     save_power(mode)
-                    if previous == 0 and mode == 1:
-                        if getattr(config, "AUTO_LAUNCH_ON_POWER", False) is True:
-                            pending_launch = True
-                            pending_at = time.ticks_add(ticks(), 3000)
-                            launch_attempts = 0
-                            print("Confirmed TV off-to-on transition")
-                    elif mode == 0:
-                        pending_launch = False
-                        pending_at = None
-                        if shortcut_state["pending_at"] is not None:
-                            shortcut_finish(shortcut_state, ticks(), "tv_off")
-                        shortcut_state["observed"] = False
-                        shortcut_state["latched"] = False
-                        shortcut_state["pending_at"] = None
-
-            if pending_launch and pending_at is not None and due(pending_at):
-                # Read current app before each attempt, so a lost PUT response
-                # cannot cause a duplicate if Horizon already opened.
-                if horizon_is_active(context, token):
-                    pending_launch = False
-                    pending_at = None
-                    print("Horizon is already active; launch suppressed")
-                elif launch_attempts >= len(LAUNCH_RETRY_MS):
-                    pending_launch = False
-                    pending_at = None
-                    print("Horizon launch not confirmed; stopping retries")
-                else:
-                    delay = LAUNCH_RETRY_MS[launch_attempts]
-                    launch_attempts += 1
-                    launch_horizon(context, token)
-                    # The following pass confirms app 17 before any retry.
-                    pending_at = time.ticks_add(ticks(), delay)
+                    if shortcut_state["pending_at"] is not None:
+                        shortcut_finish(shortcut_state, ticks(), "tv_off" if mode == 0 else "app_changed")
+                    reset_shortcut_observation(shortcut_state)
 
             if (cloud_enabled and shortcut_enabled
                     and shortcut_state.get("horizon_seen_at") is not None
@@ -1706,7 +1656,7 @@ def unattended_watch():
                 # A second Horizon sample is due. Read it before an expensive
                 # empty claim; the claim still runs in this same loop pass.
                 shortcut_poll_due = poll_shortcut_once(
-                    context, token, shortcut_state, last_power, pending_launch,
+                    context, token, shortcut_state, last_power,
                     shortcut_poll_due, shortcut_interval)
 
             if cloud_enabled and due(cloud_poll_due):
@@ -1750,7 +1700,7 @@ def unattended_watch():
 
             if not defer_background and shortcut_enabled and due(shortcut_poll_due):
                 shortcut_poll_due = poll_shortcut_once(
-                    context, token, shortcut_state, last_power, pending_launch,
+                    context, token, shortcut_state, last_power,
                     shortcut_poll_due, shortcut_interval)
             if player_bridge is not None:
                 player_bridge.step()
@@ -1761,6 +1711,7 @@ def unattended_watch():
                 close_runtime_connections(cloud_session, player_bridge)
                 raise
             if not isinstance(error, (OSError, ValueError, RuntimeError)):
+                reset_shortcut_observation(shortcut_state)
                 # Includes MemoryError. Recover in-process instead of falling
                 # into the REPL; discard sockets and TLS contexts first.
                 gc.collect()
@@ -1781,6 +1732,7 @@ def unattended_watch():
                 time.sleep_ms(delay)
                 continue
             print("Controller waiting:", type(error).__name__)
+            reset_shortcut_observation(shortcut_state)
             if wifi_address(wlan) is None:
                 close_runtime_connections(cloud_session, player_bridge)
                 cloud_session = None
@@ -1802,37 +1754,30 @@ def unattended_watch():
                 print("Controller context retry %d in %d ms" % (app_failures, delay))
                 time.sleep_ms(delay)
                 continue
-            if pending_launch:
-                if launch_attempts >= len(LAUNCH_RETRY_MS):
-                    pending_at = time.ticks_add(ticks(), LAUNCH_RETRY_MS[-1])
-                else:
-                    pending_at = time.ticks_add(ticks(), LAUNCH_RETRY_MS[launch_attempts])
         if player_bridge is not None and getattr(player_bridge, "batch", None) is not None:
             # The TV response already serializes keys. Yield to the runtime
             # without inserting the normal polling sleep between batch keys.
             time.sleep_ms(0)
         else:
             time.sleep_ms(next_watch_sleep_ms(ticks(), power_poll_due, cloud_poll_due,
-                                             pending_at if pending_launch else None, cloud_enabled,
+                                             None, cloud_enabled,
                                              50 if player_bridge_enabled else getattr(config, "POLL_MS", POWER_POLL_MS),
                                              shortcut_poll_due if shortcut_enabled else None))
 
 
 def live_mode_enabled():
     return any(getattr(config, name, False) is True for name in
-               ("AUTO_LAUNCH_ON_POWER", "CLOUD_LIVE_CLAIMING",
+               ("CLOUD_LIVE_CLAIMING",
                 "PLAYER_BRIDGE_ENABLED", "IHEART_RETURNS_TO_HORIZON"))
 
 
 def main():
-    # Live queue claiming, power-on launch, and iHeart shortcut are independent opt-ins.
+    # Cloud claims and the local radio shortcut remain independent opt-ins.
     if not live_mode_enabled():
         supervised_check()
         return
     if getattr(config, "CLOUD_LIVE_CLAIMING", False) is True:
         print("Cloud app-launch claiming is enabled")
-    if getattr(config, "AUTO_LAUNCH_ON_POWER", False) is True:
-        print("Automatic power-transition launching is enabled")
     if getattr(config, "IHEART_RETURNS_TO_HORIZON", False) is True:
         print("iHeart return shortcut is enabled")
     if getattr(config, "PLAYER_BRIDGE_ENABLED", False) is True:

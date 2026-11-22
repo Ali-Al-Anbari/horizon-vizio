@@ -39,8 +39,6 @@ TV_CERT_SHA256 = "YOUR_TV_CERTIFICATE_SHA256_HEX"
 NTP_HOST = "pool.ntp.org"
 POLL_MS = 3000
 SOCKET_TIMEOUT_S = 4
-# Supervised read-only diagnostics run by default. Change only after tests pass.
-AUTO_LAUNCH_ON_POWER = False
 # Optional local iHeartRadio-button return shortcut. Enable only after a
 # supervised test; reads /app/current every 2 seconds while TV is on.
 # A supervised 1000 ms trial raises reads from 30 to 60 per minute.

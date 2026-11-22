@@ -1780,3 +1780,36 @@ body.watch-active.watch-desktop-pointer .watch-home { --watch-hero-height: 52vh;
     box-shadow: 0 0 13px rgba(255,255,255,.25), 0 0 10px rgba(146,197,255,.16), 0 8px 22px rgba(0,0,0,.7);
   }
 }
+
+/* Keep the Search rail and directional controls in place while results reflow. */
+#results {
+  grid-template-columns: repeat(auto-fill, minmax(122px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(clamp(106px, 9vw, 142px), 1fr));
+  gap: 16px;
+  gap: clamp(14px, 1.25vw, 22px);
+  overflow-x: hidden;
+}
+#results .search-card .poster-meta strong {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: break-word;
+  line-height: 1.4;
+}
+#results .search-card .poster-meta { width: 100%; }
+.watch-arabic #detail-title,
+.watch-arabic #detail-summary,
+.watch-arabic .search-card .poster-meta,
+.watch-arabic #search-status,
+.watch-arabic .history-view .poster-meta,
+.watch-arabic .lg-player-status-card {
+  direction: rtl;
+}
+.watch-arabic .detail-primary[aria-disabled="true"] { cursor: default; }
+.lg-player-loading {
+  position: absolute;
+  top: 50%;
+  width: 100%;
+  margin: 0;
+  text-align: center;
+  transform: translateY(-50%);
+}

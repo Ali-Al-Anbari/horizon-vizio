@@ -1012,7 +1012,7 @@ class PicoCloudTests(unittest.TestCase):
             for tick in (0, 2000, 4000, 6000, 8000, 14000, 16000, 28000, 30000, 32000):
                 clock["now"] = tick
                 pico.iheart_shortcut_step(None, None, state)
-            self.assertEqual(launch.call_count, 2)
+            launch.assert_called_once()
             self.assertIsNone(state["pending_at"])
 
     def test_iheart_does_not_launch_when_horizon_is_already_active(self):
@@ -1090,7 +1090,27 @@ class PicoCloudTests(unittest.TestCase):
                 self.assertIsNone(state["pending_at"])
             self.assertEqual(launch.call_count, 5)
 
-    def test_iheart_slow_startup_retries_once_only_while_tv_still_on_iheart(self):
+    def test_exiting_horizon_to_iheart_does_not_reopen_it_after_cooldown(self):
+        state = {"observed": False, "latched": False, "pending_at": None,
+                 "cooldown_at": None, "detected_at": None}
+        youtube = {"NAME_SPACE": 5, "APP_ID": "1"}
+        iheart = {"NAME_SPACE": 4, "APP_ID": "6", "MESSAGE": pico.IHEART_MESSAGE}
+        horizon = {"NAME_SPACE": 4, "APP_ID": "17",
+                   "MESSAGE": sys.modules["config"].HORIZON_URL}
+        clock = {"now": 0}
+        launch_times = []
+        with patch.object(pico.time, "ticks_ms", side_effect=lambda: clock["now"], create=True), \
+             patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
+             patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
+             patch.object(pico, "current_app", side_effect=[youtube, iheart, horizon, horizon,
+                                                            iheart, iheart, youtube, iheart]), \
+             patch.object(pico, "launch_horizon", side_effect=lambda *_: launch_times.append(clock["now"])):
+            for tick in (0, 2000, 4000, 6000, 30000, 32000, 34000, 36000):
+                clock["now"] = tick
+                pico.iheart_shortcut_step(None, None, state)
+        self.assertEqual(launch_times, [2000, 36000])
+
+    def test_iheart_slow_startup_confirms_without_resending(self):
         state = {"observed": True, "latched": False, "pending_at": None,
                  "cooldown_at": None, "detected_at": None}
         iheart = {"NAME_SPACE": 4, "APP_ID": "6", "MESSAGE": pico.IHEART_MESSAGE}
@@ -1106,9 +1126,8 @@ class PicoCloudTests(unittest.TestCase):
             for tick in (2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000):
                 clock["now"] = tick
                 pico.iheart_shortcut_step(None, None, state)
-            self.assertEqual(launch.call_count, 2)
-            power.assert_called_once()
-            self.assertEqual(state["retry_count"], 1)
+            launch.assert_called_once()
+            power.assert_not_called()
             self.assertIsNone(state["pending_at"])
 
     def test_iheart_rejected_launch_and_safe_diagnostics(self):
@@ -1129,7 +1148,7 @@ class PicoCloudTests(unittest.TestCase):
         self.assertNotIn("private-tv-test-token", lines)
         self.assertEqual(state["pending_at"], 2000)
 
-    def test_explicit_iheart_rejection_allows_next_guarded_poll_retry(self):
+    def test_explicit_iheart_rejection_is_not_replayed(self):
         state = {"observed": True, "latched": False, "pending_at": None,
                  "cooldown_at": None, "detected_at": None}
         iheart = {"NAME_SPACE": 4, "APP_ID": "6", "MESSAGE": pico.IHEART_MESSAGE}
@@ -1139,15 +1158,14 @@ class PicoCloudTests(unittest.TestCase):
              patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
              patch.object(pico, "current_app", return_value=iheart), \
              patch.object(pico, "power_state", return_value=1) as power, \
-             patch.object(pico, "launch_horizon", side_effect=[RuntimeError("TV API rejected request"), None]) as launch:
+             patch.object(pico, "launch_horizon", side_effect=RuntimeError("TV API rejected request")) as launch:
             pico.iheart_shortcut_step(None, None, state)
             clock["now"] = 4000
             pico.iheart_shortcut_step(None, None, state)
-        self.assertEqual(launch.call_count, 2)
-        power.assert_called_once()
-        self.assertEqual(state["retry_count"], 1)
+        launch.assert_called_once()
+        power.assert_not_called()
 
-    def test_iheart_accepted_but_unconfirmed_times_out_after_one_retry(self):
+    def test_iheart_accepted_but_unconfirmed_times_out_without_resending(self):
         state = {"observed": True, "latched": False, "pending_at": None,
                  "cooldown_at": None, "detected_at": None}
         iheart = {"NAME_SPACE": 4, "APP_ID": "6", "MESSAGE": pico.IHEART_MESSAGE}
@@ -1162,12 +1180,12 @@ class PicoCloudTests(unittest.TestCase):
             for tick in (2000, 4000, 10000, 12000, 22000, 24000):
                 clock["now"] = tick
                 pico.iheart_shortcut_step(None, None, state)
-        self.assertEqual(launch.call_count, 2)
+        launch.assert_called_once()
         self.assertIsNone(state["pending_at"])
         self.assertTrue(any("Horizon not confirmed (timeout)" in str(call)
                             for call in output.call_args_list))
 
-    def test_iheart_retry_rechecks_fresh_app_and_does_not_override_new_selection(self):
+    def test_iheart_yields_to_new_app_after_single_launch(self):
         state = {"observed": True, "latched": False, "pending_at": None,
                  "cooldown_at": None, "detected_at": None}
         iheart = {"NAME_SPACE": 4, "APP_ID": "6", "MESSAGE": pico.IHEART_MESSAGE}
@@ -1176,7 +1194,7 @@ class PicoCloudTests(unittest.TestCase):
         with patch.object(pico.time, "ticks_ms", side_effect=lambda: clock["now"], create=True), \
              patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
              patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
-             patch.object(pico, "current_app", side_effect=[iheart, iheart, youtube]), \
+             patch.object(pico, "current_app", side_effect=[iheart, youtube]), \
              patch.object(pico, "power_state", return_value=1), \
              patch.object(pico, "launch_horizon") as launch:
             pico.iheart_shortcut_step(None, None, state)
@@ -1226,32 +1244,7 @@ class PicoCloudTests(unittest.TestCase):
         self.assertTrue(any("Horizon appeared, then another app" in str(call)
                             for call in output.call_args_list))
 
-    def test_iheart_unrelated_app_and_power_off_block_retry(self):
-        iheart = {"NAME_SPACE": 4, "APP_ID": "6", "MESSAGE": pico.IHEART_MESSAGE}
-        youtube = {"NAME_SPACE": 5, "APP_ID": "1"}
-        for second_app, expected in ((youtube, "app_changed"), (iheart, "tv_off")):
-            with self.subTest(expected=expected):
-                state = {"observed": True, "latched": False, "pending_at": None,
-                         "cooldown_at": None, "detected_at": None}
-                clock = {"now": 2000}
-                with patch.object(pico.time, "ticks_ms", side_effect=lambda: clock["now"], create=True), \
-                     patch.object(pico.time, "ticks_diff", side_effect=lambda a, b: a - b, create=True), \
-                     patch.object(pico.time, "ticks_add", side_effect=lambda a, b: a + b, create=True), \
-                     patch.object(pico, "current_app", side_effect=[iheart, second_app, second_app]), \
-                     patch.object(pico, "power_state", return_value=0), \
-                     patch.object(pico, "launch_horizon") as launch, \
-                     patch("builtins.print") as output:
-                    pico.iheart_shortcut_step(None, None, state)
-                    clock["now"] = 10000 if expected == "tv_off" else 4000
-                    pico.iheart_shortcut_step(None, None, state)
-                launch.assert_called_once()
-                self.assertIsNone(state["pending_at"])
-                self.assertTrue(any(expected in str(call) or
-                                    (expected == "app_changed" and "another app" in str(call)) or
-                                    (expected == "tv_off" and "TV turned off" in str(call))
-                                    for call in output.call_args_list))
-
-    def test_iheart_cooldown_defers_new_entry_without_repeat_launch(self):
+    def test_iheart_cooldown_discards_new_entry_without_late_launch(self):
         state = {"observed": True, "latched": False, "pending_at": None,
                  "cooldown_at": None, "detected_at": None}
         iheart = {"NAME_SPACE": 4, "APP_ID": "6", "MESSAGE": pico.IHEART_MESSAGE}
@@ -1267,8 +1260,8 @@ class PicoCloudTests(unittest.TestCase):
             for tick in (2000, 4000, 6000, 8000, 12000, 20000, 22000):
                 clock["now"] = tick
                 pico.iheart_shortcut_step(None, None, state)
-        self.assertEqual(launch.call_count, 2)
-        self.assertEqual(state["pending_at"], 22000)
+        launch.assert_called_once()
+        self.assertIsNone(state["pending_at"])
 
     def test_cloud_claim_supersedes_pending_iheart_shortcut(self):
         class EndLoop(Exception):
@@ -1966,12 +1959,14 @@ class PicoCloudTests(unittest.TestCase):
         self.assertTrue(cloud_instances[0].closed)
         self.assertTrue(bridge_instances[0].closed)
 
-    def test_power_edge_launches_once_then_app_switch_does_not_relaunch(self):
+    def test_power_edge_never_launches_even_with_legacy_flag(self):
         class EndLoop(Exception):
             pass
 
         clock = {"now": 0}
         modes = iter((0, 1, 1, 1, 1))
+        iheart = {"NAME_SPACE": 4, "APP_ID": "6", "MESSAGE": pico.IHEART_MESSAGE}
+        youtube = {"NAME_SPACE": 5, "APP_ID": "1"}
 
         def sleep(milliseconds):
             clock["now"] += milliseconds
@@ -1980,6 +1975,7 @@ class PicoCloudTests(unittest.TestCase):
 
         with patch.object(sys.modules["config"], "AUTO_LAUNCH_ON_POWER", True), \
              patch.object(sys.modules["config"], "CLOUD_LIVE_CLAIMING", False), \
+             patch.object(sys.modules["config"], "IHEART_RETURNS_TO_HORIZON", True), \
              patch.object(sys.modules["config"], "POLL_MS", 3000, create=True), \
              patch.object(pico.time, "ticks_ms", side_effect=lambda: clock["now"], create=True), \
              patch.object(pico.time, "ticks_add", side_effect=lambda value, delta: value + delta, create=True), \
@@ -1991,11 +1987,12 @@ class PicoCloudTests(unittest.TestCase):
              patch.object(pico, "synchronize_time", return_value=True), \
              patch.object(pico, "tls_context", return_value=object()), \
              patch.object(pico, "power_state", side_effect=lambda *_args: next(modes)), \
-             patch.object(pico, "horizon_is_active", side_effect=[False, True]), \
+             patch.object(pico, "current_app", side_effect=lambda *_args: iheart if clock["now"] < 6000 else youtube) as app, \
              patch.object(pico, "launch_horizon") as launch:
             with self.assertRaises(EndLoop):
                 pico.unattended_watch()
-        launch.assert_called_once()
+        self.assertGreaterEqual(app.call_count, 2)
+        launch.assert_not_called()
 
     def test_stage_timing_is_off_unless_explicitly_enabled(self):
         self.assertIsNone(pico.perf_start())

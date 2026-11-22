@@ -235,32 +235,19 @@ async function run() {
     const arReloadTitles = await getHomeCardTitles(page);
     assert.ok(arReloadTitles.some((t) => /[\u0600-\u06FF]/.test(t)), "Reloaded Arabic mode must stay in Arabic Home");
 
-    // 6. Open Al-Mummia (TMDB 46707) from Movies -> test Failed Provider & Archive.org Open MP4 playback + Seek + Progress
+    // 6. Al-Mummia (TMDB 46707) should play through the verified free source.
     await page.click("#search-toggle");
     await page.waitForTimeout(200);
     await page.fill("#query", "المومياء");
     await page.waitForSelector('#results .poster-card[data-media-id="46707"]', { timeout: 8000 });
     await page.click('#results .poster-card[data-media-id="46707"]');
-    await page.waitForSelector("#lg-provider-select-btn", { timeout: 6000 });
-    await page.waitForTimeout(400);
-
-    // Failed provider check without auto-switching
-    await page.click("#lg-provider-select-btn");
-    await page.waitForSelector('.lg-provider-option[data-provider-id="cinemana_iraq"]', { timeout: 4000 });
-    await page.click('.lg-provider-option[data-provider-id="cinemana_iraq"]');
-    await page.waitForTimeout(200);
-    assert.ok((await page.textContent("#detail-actions .detail-primary")).includes("Unavailable"));
-    await page.click("#detail-actions .detail-primary");
-    await page.waitForTimeout(250);
-    assert.ok((await page.textContent(".lg-player-status-card h3")).includes("Provider Unavailable"));
-    await page.click('#lg-player-stage button:has-text("Choose Another Provider")');
-    await page.waitForSelector('.lg-provider-option[data-provider-id="archive_pd"]', { timeout: 4000 });
-    await page.click('.lg-provider-option[data-provider-id="archive_pd"]');
-    await page.waitForTimeout(200);
+    await page.locator("#detail-actions .detail-primary").filter({ hasText: /^Play$/ }).waitFor({ timeout: 6000 });
+    assert.equal(await page.locator("#lg-provider-menu, #lg-provider-select-btn, #lg-detail-availability").count(), 0);
 
     // Real HTML5 <video> Archive.org MP4 playback
     await page.click("#detail-actions .detail-primary");
     await page.waitForSelector("#lg-html5-video", { timeout: 10000 });
+    assert.equal(await page.locator(".lg-player-status-card").count(), 0);
     await page.waitForFunction(() => {
       const v = document.getElementById("lg-html5-video");
       return v && v.readyState >= 2 && v.duration > 60 && v.currentTime > 0.3 && !v.paused;
@@ -289,7 +276,7 @@ async function run() {
     await page.waitForTimeout(250);
     await page.click("#settings-cat-library");
     await page.waitForTimeout(250);
-    assert.equal(await page.textContent("#settings-content-library"), "Arabic Horizon — العربية");
+    assert.equal(await page.textContent("#settings-content-library"), "مكتبة هورايزن العربية");
     await page.click("#settings-content-library");
     await page.waitForSelector("#watch-top-row .home-card", { timeout: 15000 });
     await page.waitForTimeout(900);

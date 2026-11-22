@@ -23,10 +23,6 @@
     return key || "Unknown";
   }
 
-  function hasArabicChars(text) {
-    return /[\u0600-\u06FF]/.test(String(text || ""));
-  }
-
   function detectWebOSRuntime() {
     var ua = (root.navigator && root.navigator.userAgent) ? root.navigator.userAgent : "";
     return !!(root.webOS || root.PalmSystem || root.PalmServiceBridge || /Web0S|webOS|NetCast/i.test(ua));
@@ -176,7 +172,7 @@
     var staleView = doc.getElementById("arabic-view");
     if (staleView && staleView.parentNode) staleView.parentNode.removeChild(staleView);
 
-    // Build Horizon-owned full-screen Video Lab overlay + Provider Menu
+    // Build the Horizon-owned full-screen Video Lab overlay.
     var overlay = doc.getElementById("lg-player-overlay");
     if (!overlay) {
       overlay = doc.createElement("div");
@@ -237,10 +233,6 @@
                     '<svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm10-12v12h2V6h-2z"/></svg>' +
                     '<span class="action-label">Next</span>' +
                   '</button>' +
-                  '<button id="lg-player-provider-switch" type="button" tabindex="-1" aria-label="Switch provider" title="Switch provider">' +
-                    '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10h14l-4-4m0 8H3l4 4"/></svg>' +
-                    '<span class="action-label">Switch Provider</span>' +
-                  '</button>' +
                 '</div>' +
                 '<div class="control-row test-row utility-row" aria-label="Additional player actions">' +
                   '<button id="lg-player-subtitles" class="is-subtitles-disabled" type="button" tabindex="-1" aria-label="Subtitles" title="Subtitles unavailable" disabled aria-disabled="true">' +
@@ -264,34 +256,7 @@
       doc.body.appendChild(overlay);
     }
 
-    var providerMenu = doc.getElementById("lg-provider-menu");
-    if (!providerMenu) {
-      providerMenu = doc.createElement("div");
-      providerMenu.id = "lg-provider-menu";
-      providerMenu.className = "lg-provider-menu";
-      providerMenu.setAttribute("role", "dialog");
-      providerMenu.setAttribute("aria-modal", "true");
-      providerMenu.setAttribute("aria-label", "Select Arabic Playback Provider");
-      providerMenu.hidden = true;
-      providerMenu.innerHTML =
-        '<h3>Select Playback Provider</h3>' +
-        '<p id="lg-provider-menu-sub" class="lg-provider-menu-sub">Providers are manually selected and do not auto-switch on failure.</p>' +
-        '<div id="lg-provider-menu-list"></div>' +
-        '<button id="lg-provider-menu-close" class="lg-player-ctrl-btn" type="button">Close</button>';
-      doc.body.appendChild(providerMenu);
-    }
-
-    // Add availability pill container inside #detail-copy
-    var detailCopy = doc.getElementById("detail-copy");
-    var detailKind = doc.getElementById("detail-kind");
-    if (detailCopy && !doc.getElementById("lg-detail-availability")) {
-      var pill = doc.createElement("span");
-      pill.id = "lg-detail-availability";
-      pill.className = "lg-detail-availability";
-      pill.hidden = true;
-      if (detailKind && detailKind.nextSibling) detailCopy.insertBefore(pill, detailKind.nextSibling);
-      else detailCopy.insertBefore(pill, detailCopy.firstChild);
-    }
+    var localizePlayer = root.HorizonWatchI18n && root.HorizonWatchI18n.capture(overlay);
 
     function focusEl(el) {
       if (!el || el.disabled || el.hidden || el.closest("[hidden]")) return false;
@@ -303,248 +268,97 @@
       return true;
     }
 
-    // E. Provider selection & Details view decoration for Arabic titles
+    // E. Free playback availability for the current Details selection.
     var providersMod = root.HorizonArabicProviders;
     var relayEnabled = false;
+    var relayAvailability = null;
     var relayChecks = new Map();
-    state.selectedProviderByKey = Object.create(null);
-    state.providerMenuOpen = false;
-    state.providerMenuReturnEl = null;
+
+    function tr(label) {
+      var session = state.playerSession;
+      var isArabic = session ? session.section === "arabic" : app.state.contentLibrary === "arabic";
+      return isArabic && root.HorizonWatchI18n ? root.HorizonWatchI18n.ar(label) : label;
+    }
+
+    function readAvailability(path) {
+      var controller = new AbortController();
+      var timer = setTimeout(function () { controller.abort(); }, 9000);
+      return root.fetch(path, { cache: "no-store", credentials: "omit", redirect: "error", signal: controller.signal })
+        .then(function (response) { return response.ok ? response.json() : null; })
+        .catch(function () { return null; })
+        .then(function (reply) { clearTimeout(timer); return reply; });
+    }
 
     function prepareRelayQuery(query) {
       var id = relayEnabled && providersMod && providersMod.relayAssetId(query);
       if (!id || id === "fakhr-el-delta-s01e01") return Promise.resolve(!!id);
       var current = relayChecks.get(id);
-      if (current && current.until > Date.now()) {
+      if (current && (current.pending || current.until > Date.now())) {
         if (current.available) query.relayVerified = id;
         return current.pending || Promise.resolve(current.available);
       }
       if (relayChecks.size >= 96) relayChecks.delete(relayChecks.keys().next().value);
-      var entry = { until: Date.now() + 8000, available: false };
+      var entry = { until: 0, available: false };
       relayChecks.set(id, entry);
-      entry.pending = root.fetch("/api/arabic/relay-catalog?id=" + encodeURIComponent(id),
-        { cache: "no-store", credentials: "omit", redirect: "error" })
-        .then(function (response) { return response.ok ? response.json() : null; })
-        .then(function (reply) { return !!reply && reply.available === true; })
-        .catch(function () { return false; })
-        .then(function (available) {
+      entry.pending = readAvailability("/api/arabic/relay-catalog?id=" + encodeURIComponent(id))
+        .then(function (reply) {
+          var available = !!reply && reply.available === true;
           entry.available = available;
           entry.until = Date.now() + (available ? 60000 : 20000);
           entry.pending = null;
-          if (available) decorateDetails();
+          decorateDetails();
           return available;
         });
       return entry.pending;
     }
 
-    function getSelectionQuery(arItem) {
-      var season = arItem.type === "tv" ? (app.state.season || (arItem.seasons && arItem.seasons[0] && arItem.seasons[0].number) || 1) : null;
-      var epNum = null;
-      if (arItem.type === "tv") {
-        var activeEp = app.state.activeEpisodeTarget;
-        var epList = arItem.seasonEpisodes && arItem.seasonEpisodes[season] ? arItem.seasonEpisodes[season] : [];
-        epNum = activeEp || (epList[0] && epList[0].number) || 1;
-      }
-      var query = {
-        type: arItem.type,
-        tmdbId: arItem.id,
-        titleAr: arItem.titleAr,
-        titleEn: arItem.titleEn,
-        year: arItem.date ? arItem.date.slice(0, 4) : null,
-        season: season,
-        episode: epNum
-      };
-      prepareRelayQuery(query);
-      return query;
-    }
-
-    function getSelectedProviderId(arItem, explicitQuery) {
-      var key = arItem.type + ":" + arItem.id;
-      var query = explicitQuery || getSelectionQuery(arItem);
-      var selected = state.selectedProviderByKey[key];
-      if (!providersMod) return "youtube_official";
-      if (selected && (selected !== "akwam_relay"
-        || providersMod.resolveForProvider(selected, query, relayEnabled).availability === "playable")) return selected;
-      return providersMod.preferredDefaultProvider(query, relayEnabled);
-    }
-
-    function findSelectedOption(providersMod, chosenId, queryObj) {
+    function freeOption(query) {
       if (!providersMod) return null;
-      var all = providersMod.resolveAll ? providersMod.resolveAll(queryObj, relayEnabled) : [];
-      for (var i = 0; i < all.length; i++) {
-        if (all[i].providerId === chosenId) return all[i];
-      }
-      return providersMod.resolveForProvider(chosenId, queryObj, relayEnabled);
+      var preferred = providersMod.preferredDefaultProvider(query, relayEnabled);
+      var option = providersMod.resolveForProvider(preferred, query, relayEnabled);
+      if (option.availability === "playable" && option.providerId !== "official_app_handoff") return option;
+      return providersMod.resolveAll(query, relayEnabled).find(function (candidate) {
+        return candidate.availability === "playable" && candidate.providerId !== "official_app_handoff";
+      }) || null;
     }
 
-    function openProviderMenu(arItem, returnEl) {
-      if (!providersMod || !arItem) return;
-      state.providerMenuOpen = true;
-      state.providerMenuReturnEl = returnEl || doc.activeElement;
-      var q = getSelectionQuery(arItem);
-      var currentId = getSelectedProviderId(arItem);
-      var allOptions = providersMod.resolveAll(q, relayEnabled);
-      var listHost = doc.getElementById("lg-provider-menu-list");
-      var sub = doc.getElementById("lg-provider-menu-sub");
-      if (sub) {
-        sub.textContent = (arItem.titleAr || arItem.title || "")
-          + (arItem.titleEn ? (" (" + arItem.titleEn + ")") : "")
-          + (arItem.type === "tv" ? (" · S" + q.season + " E" + q.episode) : "")
-          + " — Manual selection (no silent switching).";
-      }
-      listHost.replaceChildren();
-      var selectedEl = null;
-      allOptions.forEach(function (opt) {
-        var btn = doc.createElement("button");
-        btn.type = "button";
-        btn.className = "lg-provider-option" + (opt.providerId === currentId ? " is-selected" : "");
-        btn.dataset.providerId = opt.providerId;
-        var left = doc.createElement("span");
-        var strong = doc.createElement("strong");
-        strong.textContent = opt.providerLabel;
-        var meta = doc.createElement("span");
-        meta.className = "lg-provider-option-meta";
-        meta.textContent = opt.availability === "playable"
-          ? (opt.format.toUpperCase() + " · " + opt.authorizationNote)
-          : (opt.availability === "external-app" ? opt.authorizationNote : opt.failureReason);
-        left.appendChild(strong);
-        left.appendChild(meta);
-
-        var pill = doc.createElement("span");
-        pill.className = "lg-provider-option-status is-" + opt.availability;
-        pill.textContent = opt.availability === "playable" ? "Ready"
-          : (opt.availability === "external-app" ? "LG App"
-          : (opt.availability === "subscription-required" ? "Subscription"
-          : (opt.availability === "listed-on-provider" ? "Listed" : "Unavailable")));
-
-        btn.appendChild(left);
-        btn.appendChild(pill);
-        btn.addEventListener("click", function () {
-          state.selectedProviderByKey[arItem.type + ":" + arItem.id] = opt.providerId;
-          closeProviderMenu();
-          decorateDetails();
-        });
-        listHost.appendChild(btn);
-        if (opt.providerId === currentId) selectedEl = btn;
-      });
-      providerMenu.hidden = false;
-      focusEl(selectedEl || listHost.querySelector("button") || doc.getElementById("lg-provider-menu-close"));
+    function relayCheckPending(query) {
+      var id = providersMod && providersMod.relayAssetId(query);
+      var entry = id && relayChecks.get(id);
+      return !!(id && (relayAvailability || (entry && entry.pending)));
     }
-
-    function closeProviderMenu() {
-      if (!state.providerMenuOpen) return;
-      state.providerMenuOpen = false;
-      providerMenu.hidden = true;
-      if (state.providerMenuReturnEl && doc.body.contains(state.providerMenuReturnEl)) {
-        focusEl(state.providerMenuReturnEl);
-      }
-      state.providerMenuReturnEl = null;
-    }
-
-    var pMenuClose = doc.getElementById("lg-provider-menu-close");
-    if (pMenuClose) pMenuClose.addEventListener("click", closeProviderMenu);
 
     function decorateDetails() {
-      var t = app.state && app.state.title;
-      var pillEl = doc.getElementById("lg-detail-availability");
-      var dTitle = doc.getElementById("detail-title");
-      var dSum = doc.getElementById("detail-summary");
-      var libraryPref = (app.state && app.state.contentLibrary === "arabic") ? "arabic" : "standard";
-      var found = t ? arabic.findByKey(t.type, t.id) : null;
-      if (!found && t && libraryPref === "arabic") found = t;
-      var arItem = (found && (libraryPref === "arabic" || found.royaSeriesId))
-        ? found : null;
-      var existingProvBtn = doc.getElementById("lg-provider-select-btn");
-      if (!arItem) {
-        if (pillEl) pillEl.hidden = true;
-        if (dTitle) dTitle.removeAttribute("dir");
-        if (dSum) dSum.removeAttribute("dir");
-        if (existingProvBtn) existingProvBtn.remove();
-        return;
-      }
-      if (dTitle && hasArabicChars(dTitle.textContent)) dTitle.setAttribute("dir", "rtl");
-      if (dSum && hasArabicChars(dSum.textContent)) dSum.setAttribute("dir", "rtl");
-
-      var qObj = getSelectionQuery(arItem);
-      var selectedId = getSelectedProviderId(arItem);
-      var resolved = findSelectedOption(providersMod, selectedId, qObj);
-      var availSummary = providersMod && typeof providersMod.summarizeAvailability === "function"
-        ? providersMod.summarizeAvailability(arItem) : null;
-
-      if (pillEl) {
-        pillEl.hidden = false;
-        var pillClass = resolved && resolved.availability === "playable" ? "in-app"
-          : (resolved && (resolved.availability === "external-app" || resolved.availability === "subscription-required" || resolved.availability === "listed-on-provider") ? "official-app" : "catalog-only");
-        pillEl.className = "lg-detail-availability is-" + pillClass;
-        var statusTag = (resolved && resolved.availability === "playable") ? resolved.format.toUpperCase()
-          : (arItem.plus ? "ROYA PLUS (SUBSCRIPTION)" : (availSummary ? availSummary.label : (resolved ? resolved.availability.toUpperCase() : "METADATA ONLY")));
-        pillEl.textContent = statusTag
-          + (arItem.provenance ? (" · Sources: " + arItem.provenance) : "")
-          + (arItem.countryLabel ? (" · " + arItem.countryLabel) : "");
-      }
-
+      var t = app.state.title;
+      if (!t || app.state.contentLibrary !== "arabic") return;
       var actions = doc.getElementById("detail-actions");
-      if (!actions) return;
-      var primaryBtn = actions.querySelector(".detail-primary");
-      if (primaryBtn) {
-        if (primaryBtn.dataset.relayOriginalLabel !== undefined) {
-          primaryBtn.setAttribute("aria-label", primaryBtn.dataset.relayOriginalLabel);
-          delete primaryBtn.dataset.relayOriginalLabel;
-        }
-        if (resolved && resolved.availability === "playable") {
-          var cleanLabel = root.HorizonHistorySections
-            ? root.HorizonHistorySections.formatArabicPrimaryButtonLabel(resolved)
-            : "Play";
-          primaryBtn.textContent = cleanLabel || "Play";
-        } else if (resolved && resolved.availability === "external-app") {
-          primaryBtn.textContent = "Open in " + (resolved.officialApp ? resolved.officialApp.appName : "Official App");
-        } else if (arItem.plus) {
-          primaryBtn.textContent = "Roya Plus (Subscription Required)";
-        } else if (availSummary && (availSummary.state === "subscription_required" || availSummary.state === "listed_on_provider")) {
-          primaryBtn.textContent = availSummary.label;
-        } else {
-          primaryBtn.textContent = "Unavailable in Horizon (Metadata Only)";
-          if (!relayEnabled && qObj.type === "tv" && Number(qObj.tmdbId) === 297621
-            && Number(qObj.season) === 1 && Number(qObj.episode) === 1 && primaryBtn.hasAttribute("aria-label")) {
-            primaryBtn.dataset.relayOriginalLabel = primaryBtn.getAttribute("aria-label");
-            primaryBtn.setAttribute("aria-label", primaryBtn.textContent);
-          }
-        }
-      }
-
-      if (!existingProvBtn) {
-        existingProvBtn = doc.createElement("button");
-        existingProvBtn.type = "button";
-        existingProvBtn.id = "lg-provider-select-btn";
-        existingProvBtn.className = "detail-secondary";
-        existingProvBtn.setAttribute("data-focus", "");
-        existingProvBtn.addEventListener("click", function () {
-          var current = app.state && app.state.title ? arabic.findByKey(app.state.title.type, app.state.title.id) : null;
-          if (current || app.state.title) openProviderMenu(current || app.state.title, existingProvBtn);
-        });
-        var moreLike = actions.querySelector('[data-action="more-like-this"]');
-        if (moreLike) actions.insertBefore(existingProvBtn, moreLike);
-        else actions.appendChild(existingProvBtn);
-      }
-      var nextProvLabel = (resolved && resolved.availability !== "unavailable")
-        ? ("Provider: " + resolved.providerShortLabel)
-        : "Providers / Availability";
-      if (existingProvBtn.textContent !== nextProvLabel) {
-        existingProvBtn.textContent = nextProvLabel;
-      }
+      var primary = actions && actions.querySelector(".detail-primary[data-playback-asset]");
+      if (!primary) return;
+      var query = {
+        type: t.type, tmdbId: t.id, titleAr: t.titleAr, titleEn: t.titleEn,
+        year: t.date ? t.date.slice(0, 4) : null,
+        season: Number(primary.dataset.season) || null, episode: Number(primary.dataset.episode) || null
+      };
+      prepareRelayQuery(query);
+      var playable = !!freeOption(query);
+      var label = playable ? "Play" : tr(relayCheckPending(query) ? "Checking availability…" : "Unavailable");
+      primary.setAttribute("aria-disabled", playable ? "false" : "true");
+      if (!playable) primary.setAttribute("aria-label", label);
+      else if (primary.dataset.playbackLabel) primary.setAttribute("aria-label", primary.dataset.playbackLabel);
+      if (primary.textContent !== label) primary.textContent = label;
+      var restart = actions.querySelector('[data-action="start-over"]');
+      if (restart) restart.hidden = !playable;
     }
 
     var obs = new MutationObserver(decorateDetails);
-    if (doc.getElementById("detail-title")) obs.observe(doc.getElementById("detail-title"), { childList: true, characterData: true, subtree: true });
     if (doc.getElementById("detail-actions")) obs.observe(doc.getElementById("detail-actions"), { childList: true });
     if (providersMod && typeof root.fetch === "function") {
-      root.fetch("/api/arabic/relay-availability", { cache: "no-store", credentials: "omit", redirect: "error" })
-        .then(function (response) { return response.ok ? response.json() : null; })
+      relayAvailability = readAvailability("/api/arabic/relay-availability")
         .then(function (status) {
-          if (!status || status.enabled !== true) return;
-          relayEnabled = true;
+          relayEnabled = !!status && status.enabled === true;
+          relayAvailability = null;
           decorateDetails();
-        }).catch(function () { /* Relay stays hidden when availability cannot be confirmed. */ });
+        });
     }
 
     // F. Full-screen Horizon Video Lab overlay for Arabic HLS / MP4 / YouTube / LG App
@@ -571,14 +385,13 @@
     var btnPrev = doc.getElementById("lg-player-prev");
     var btnEpisodes = doc.getElementById("lg-player-episodes");
     var btnNext = doc.getElementById("lg-player-next");
-    var btnSwitchProvider = doc.getElementById("lg-player-provider-switch");
     var btnSubtitles = doc.getElementById("lg-player-subtitles");
     var btnNative = doc.getElementById("lg-player-native");
     var btnBack = doc.getElementById("lg-player-back");
 
     var CONTROLS_ORDER = [
       btnRew, btnPlay, btnFf,
-      btnPrev, btnEpisodes, btnNext, btnSwitchProvider, btnSubtitles, btnNative, btnBack, pTimelineTrack
+      btnPrev, btnEpisodes, btnNext, null, btnSubtitles, btnNative, btnBack, pTimelineTrack
     ];
     var CONTROL_IDS = [
       "rewind", "play-pause", "forward",
@@ -615,7 +428,7 @@
 
     function updatePlayPauseVisual(playing) {
       if (!btnPlay) return;
-      var label = playing ? "Pause" : "Play";
+      var label = tr(playing ? "Pause" : "Play");
       btnPlay.setAttribute("data-playback", playing ? "playing" : "paused");
       btnPlay.setAttribute("aria-label", label);
       btnPlay.title = label;
@@ -645,9 +458,9 @@
       var detail = "";
       if (sess && sess.durationSec > 0) {
         var target = Math.max(0, Math.min(sess.durationSec, (sess.positionSec || 0) + delta));
-        detail = " · target " + formatTime(target);
+        detail = " · " + tr("target") + " " + formatTime(target);
       }
-      pSeekPreview.textContent = (delta < 0 ? "Rewind " : "Forward ") + SEEK_LABELS[seekLevels[id]] + detail + " · OK to confirm";
+      pSeekPreview.textContent = tr(delta < 0 ? "Rewind" : "Forward") + " " + SEEK_LABELS[seekLevels[id]] + detail + " · " + tr("OK to confirm");
       pSeekPreview.hidden = false;
     }
 
@@ -659,7 +472,7 @@
       renderSeekLabels();
       renderSeekPreview(id);
       if (pCommandStatus) {
-        pCommandStatus.textContent = (id === "forward" ? "Forward " + ffLabel.textContent : "Rewind " + rewLabel.textContent) + " · OK seeks";
+        pCommandStatus.textContent = (id === "forward" ? tr("Forward") + " " + ffLabel.textContent : tr("Rewind") + " " + rewLabel.textContent) + " · " + tr("OK seeks");
         pCommandStatus.classList.add("is-seek-help");
       }
       return true;
@@ -887,7 +700,7 @@
       btnSubtitles.classList.add("is-subtitles-disabled");
       btnSubtitles.tabIndex = -1;
       var lbl = btnSubtitles.querySelector(".action-label");
-      if (lbl) lbl.textContent = "Subtitles: OFF";
+      if (lbl) lbl.textContent = tr("Subtitles: OFF");
     }
 
     function syncEpisodeControls(arItem) {
@@ -941,10 +754,15 @@
       clearOverlayMedia();
       setOverlayVisible(false);
       chrome.hidden = true;
+      if (state.playerSession && state.playerSession.section === "arabic" && meta) {
+        heading = "Playback unavailable";
+        body = "";
+        meta = "";
+      }
       var card = doc.createElement("div");
       card.className = "lg-player-status-card";
-      var h = doc.createElement("h3"); h.textContent = heading; card.appendChild(h);
-      var p = doc.createElement("p"); p.textContent = body; card.appendChild(p);
+      var h = doc.createElement("h3"); h.textContent = tr(heading); card.appendChild(h);
+      var p = doc.createElement("p"); p.textContent = tr(body); card.appendChild(p);
       if (meta) {
         var m = doc.createElement("div"); m.className = "lg-player-status-meta"; m.textContent = meta; card.appendChild(m);
       }
@@ -954,7 +772,7 @@
         var b = doc.createElement("button");
         b.type = "button";
         b.className = "lg-player-ctrl-btn" + (i === 0 ? " is-primary" : "");
-        b.textContent = cfg.label;
+        b.textContent = tr(cfg.label);
         b.addEventListener("click", cfg.onClick);
         row.appendChild(b);
       });
@@ -1042,13 +860,6 @@
         var code = element.error ? element.error.code : "unknown";
         var btns = [];
         if (typeof retryFn === "function") btns.push({ label: "Retry", onClick: retryFn });
-        btns.push({
-          label: "Choose Another Provider",
-          onClick: function () {
-            closePlayerOverlay();
-            openProviderMenu(arItem, doc.getElementById("lg-provider-select-btn"));
-          }
-        });
         btns.push({ label: "Back to Horizon", onClick: closePlayerOverlay });
         showStatusCard(
           errHeading + " (" + option.providerShortLabel + ")",
@@ -1060,6 +871,7 @@
     }
 
     function setNativeAction(label, reload) {
+      label = tr(label);
       btnNative.setAttribute("aria-label", label);
       btnNative.title = label;
       btnNative.querySelector(".action-label").textContent = label;
@@ -1076,8 +888,8 @@
       }
       pTitle.textContent = (arItem.titleAr || arItem.title || "") + (arItem.titleEn ? " · " + arItem.titleEn : "");
       if (pEp) pEp.textContent = sess.season
-        ? "Season " + sess.season + " · Episode " + sess.episode + (sess.episodeTitle ? " · " + sess.episodeTitle : "")
-        : option.authorizationNote + " · MP4 Direct Stream";
+        ? tr("Season " + sess.season + " · Episode " + sess.episode) + (sess.episodeTitle ? " · " + sess.episodeTitle : "")
+        : sess.section === "arabic" ? "" : option.authorizationNote + " · MP4 Direct Stream";
       pBadge.textContent = option.providerShortLabel;
       if (pCommandStatus) pCommandStatus.textContent = "";
       syncSubtitleButton();
@@ -1121,13 +933,20 @@
       return state.playerOpen && state.playerSession === sess && relayRequest === request;
     }
 
-    function relayStatus(heading, message, arItem, primaryAction) {
+    function showLoading(label) {
+      setOverlayVisible(false);
+      chrome.hidden = true;
+      var status = doc.createElement("p");
+      status.className = "lg-player-loading";
+      status.setAttribute("role", "status");
+      status.textContent = tr(label);
+      stage.appendChild(status);
+      focusEl(remoteCapture);
+    }
+
+    function relayStatus(heading, message, primaryAction) {
       showStatusCard(heading, message, "", [
         primaryAction,
-        { label: "Choose Another Provider", onClick: function () {
-          closePlayerOverlay();
-          openProviderMenu(arItem, doc.getElementById("lg-provider-select-btn"));
-        } },
         { label: "Back to Horizon", onClick: closePlayerOverlay }
       ].filter(Boolean));
     }
@@ -1139,12 +958,12 @@
       var card = stage.querySelector(".lg-player-status-card");
       var message = card && card.querySelector("p");
       var expiresAt;
-      if (message) message.textContent = "Requesting a pairing code…";
+      if (message) message.textContent = tr("Requesting a pairing code…");
 
       function failed() {
         if (!relaySessionActive(sess, request)) return;
         relayRequest = null;
-        if (message) message.textContent = "Pairing ended. Select Show pairing code to try again.";
+        if (message) message.textContent = tr("Pairing ended. Select Show pairing code to try again.");
       }
 
       function poll() {
@@ -1164,7 +983,7 @@
         if (!relaySessionActive(sess, request)) return;
         if (!/^[A-HJ-NP-Z2-9]{10}$/.test(value.code)) { failed(); return; }
         expiresAt = Date.now() + 5 * 60 * 1000;
-        if (message) message.textContent = "Code: " + value.code + " · Approve it on this Watch site's /owner page.";
+        if (message) message.textContent = tr("Code:") + " " + value.code + " · " + tr("Approve it on this Watch site’s /owner page.");
         relayPairTimer = setTimeout(poll, 1500);
       }, failed);
     }
@@ -1187,12 +1006,12 @@
           relayChecks.set(option.relayEpisodeId, { available: false, until: Date.now() + 20000 });
           decorateDetails();
         }
-        relayStatus(pairing ? "Pair Horizon Watch" : "Akwam Relay Unavailable",
+        relayStatus(pairing ? "Pair Horizon Watch" : "Playback unavailable",
           pairing ? "Pair this device to play the selected episode."
             : ended ? "This playback ticket has reached its renewal limit. Exit and select the episode again."
             : unavailable ? "No verified source is currently available for this selection."
-            : "The relay could not start this episode. Try Reload or choose another provider.",
-          arItem, pairing ? { label: "Show pairing code", onClick: function () {
+            : "Could not start playback. Try Reload.",
+          pairing ? { label: "Show pairing code", onClick: function () {
             pairRelayDevice(option, arItem, sess, startPaused);
           } } : ended || unavailable ? null : { label: "Reload", onClick: function () {
             startRelayPlayback(option, arItem, sess, startPaused, true);
@@ -1209,7 +1028,7 @@
       }
 
       var needsTicket = !relay.ticket || refreshTicket;
-      if (needsTicket) relayStatus("Connecting to Akwam Relay", "Requesting an episode playback ticket…", arItem, null);
+      if (needsTicket) showLoading("Loading…");
       relayRequest = request;
       if (!needsTicket) { play(); return; }
       if (refreshTicket && relay.refreshesRemaining === 0) {
@@ -1235,8 +1054,8 @@
         sess.relay.recovered = true;
         startRelayPlayback(option, arItem, sess, !wasPlaying, true);
       } else {
-        relayStatus("Akwam Relay Interrupted", "Playback stopped. Reload resumes from the last confirmed position.",
-          arItem, { label: "Reload", onClick: function () {
+        relayStatus("Playback interrupted", "Playback stopped. Reload resumes from the last confirmed position.",
+          { label: "Reload", onClick: function () {
             startRelayPlayback(option, arItem, sess, !wasPlaying, true);
           } });
       }
@@ -1250,11 +1069,11 @@
         : (arItem.titleAr || arItem.title || "Roya TV");
       if (pEp) {
         pEp.textContent = (sess && sess.season
-          ? ("Season " + sess.season + " · Episode " + sess.episode + (sess.episodeTitle ? " · " + sess.episodeTitle : ""))
-          : (arItem.date ? arItem.date.slice(0, 4) + " · Roya TV Film" : "Roya TV · HLS"));
+          ? (tr("Season " + sess.season + " · Episode " + sess.episode) + (sess.episodeTitle ? " · " + sess.episodeTitle : ""))
+          : sess.section === "arabic" ? "" : (arItem.date ? arItem.date.slice(0, 4) + " · Roya TV Film" : "Roya TV · HLS"));
       }
       pBadge.textContent = option.providerShortLabel;
-      if (pCommandStatus) pCommandStatus.textContent = "Authorizing Roya TV HLS stream…";
+      if (pCommandStatus) pCommandStatus.textContent = tr("Authorizing Roya TV HLS stream…");
       syncSubtitleButton();
       syncEpisodeControls(arItem);
       updatePlayPauseVisual(true);
@@ -1281,13 +1100,6 @@
           meta,
           [
             { label: "Retry", onClick: retryHls },
-            {
-              label: "Choose Another Provider",
-              onClick: function () {
-                closePlayerOverlay();
-                openProviderMenu(arItem, doc.getElementById("lg-provider-select-btn"));
-              }
-            },
             { label: "Back to Horizon", onClick: closePlayerOverlay }
           ]
         );
@@ -1384,8 +1196,8 @@
       pTitle.textContent = target.item.titleAr + " · " + target.item.titleEn;
       if (pEp) {
         pEp.textContent = target.item.type === "tv"
-          ? ("Season " + target.season + " · Episode " + target.episode + (target.episodeObj && target.episodeObj.title ? " · " + target.episodeObj.title : ""))
-          : target.subtitle;
+          ? (tr("Season " + target.season + " · Episode " + target.episode) + (target.episodeObj && target.episodeObj.title ? " · " + target.episodeObj.title : ""))
+          : state.playerSession.section === "arabic" ? "" : target.subtitle;
       }
       pBadge.textContent = "YouTube Official · " + (target.channel || "Horizon");
       updateTimeBar(startSec || 0, (target.episodeObj && target.episodeObj.runtime ? target.episodeObj.runtime * 60 : (target.item.runtime || 40) * 60));
@@ -1446,13 +1258,6 @@
                     label: "Open in LG YouTube App",
                     onClick: function () {
                       launchLGApp("youtube.leanback.v4", { contentTarget: "https://www.youtube.com/watch?v=" + target.youtubeId });
-                    }
-                  },
-                  {
-                    label: "Choose Another Provider",
-                    onClick: function () {
-                      closePlayerOverlay();
-                      openProviderMenu(target.item, doc.getElementById("lg-provider-select-btn"));
                     }
                   },
                   { label: "Back to Horizon", onClick: closePlayerOverlay }
@@ -1578,13 +1383,6 @@
         }
       });
     }
-    if (btnSwitchProvider) {
-      btnSwitchProvider.addEventListener("click", function () {
-        var cur = state.playerSession && state.playerSession.item;
-        closePlayerOverlay();
-        if (cur) openProviderMenu(cur, doc.getElementById("lg-provider-select-btn"));
-      });
-    }
     btnNext.addEventListener("click", function () {
       var s = state.playerSession;
       if (!s || !s.nextEpisode) return;
@@ -1620,6 +1418,7 @@
 
     // G. Playback hook registered with universal-search/search.js for Arabic titles ONLY
     root.__HORIZON_LG_LAUNCH__ = function (type, id, season, episode, startOver, confirmedTitle, forcedSection) {
+      if (!providersMod) return false;
       var launchSection = (forcedSection === "arabic" || forcedSection === "english")
         ? forcedSection
         : (pendingTransitionSection || ((app.state && app.state.contentLibrary === "arabic") ? "arabic" : "english"));
@@ -1647,72 +1446,38 @@
       q.titleAr = arItem.titleAr;
       q.titleEn = arItem.titleEn;
       q.year = arItem.date ? arItem.date.slice(0, 4) : null;
-      var chosenProviderId = libraryPref === "standard" && savedRelay ? "akwam_relay" : getSelectedProviderId(arItem, q);
-      var option = findSelectedOption(providersMod, chosenProviderId, q);
+      var option = libraryPref === "standard" && savedRelay
+        ? providersMod.resolveForProvider("akwam_relay", q, relayEnabled)
+        : libraryPref === "arabic" ? freeOption(q)
+        : providersMod.resolveForProvider("roya_tv", q, relayEnabled);
 
       returnFocusNode = doc.activeElement;
       clearOverlayMedia();
       state.playerOpen = true;
       overlay.hidden = false;
-      var lookup = relayEnabled && providersMod && relayChecks.get(providersMod.relayAssetId(q));
-      if (lookup && lookup.pending && (!option || option.availability === "unavailable")) {
+      if (localizePlayer) localizePlayer(launchSection === "arabic");
+      pBadge.hidden = launchSection === "arabic";
+      var lookup = relayEnabled && relayChecks.get(providersMod.relayAssetId(q));
+      var waitingForFlag = (libraryPref === "arabic" || savedRelay) && providersMod.relayAssetId(q) && relayAvailability;
+      var pending = waitingForFlag || (lookup && lookup.pending);
+      if (pending && (!option || option.availability !== "playable")) {
         var pendingSession = { item: arItem, mode: "unavailable", section: launchSection, observedPlayback: false };
         state.playerSession = pendingSession;
-        relayStatus("Checking Akwam Relay", "Looking for this exact title or episode…", arItem, null);
-        lookup.pending.then(function (available) {
+        showLoading("Checking availability…");
+        pending.then(function (available) {
           if (!state.playerOpen || state.playerSession !== pendingSession) return;
-          if (available) {
+          if (available || waitingForFlag) {
             var focusTarget = returnFocusNode;
             root.__HORIZON_LG_LAUNCH__(type, id, season, episode, startOver, confirmedTitle, launchSection);
             returnFocusNode = focusTarget;
-          } else relayStatus("Akwam Relay Unavailable", "No verified source for this selection.", arItem, null);
+          } else relayStatus("Unavailable", "", null);
         });
         return true;
       }
 
-      if (!option || option.availability === "unavailable" || option.availability === "subscription-required" || option.availability === "listed-on-provider") {
-        // Explicit graceful failure: NEVER silently switch to YouTube or VidBolt!
+      if (!option || option.availability !== "playable") {
         state.playerSession = { mode: "unavailable", section: launchSection, item: arItem, observedPlayback: false };
-        showStatusCard(
-          (option && (option.availability === "subscription-required" || option.availability === "listed-on-provider"))
-            ? option.providerLabel
-            : ("Provider Unavailable · " + (option ? option.providerLabel : chosenProviderId)),
-          (option && option.failureReason) || "This title is discoverable in Horizon, but no authorized playable stream exists.",
-          "Selection: " + (arItem.titleAr || arItem.title || "") + (type === "tv" ? (" S" + season + " E" + episode) : "") + (arItem.provenance ? (" · Sources: " + arItem.provenance) : "") + " · No unauthorized extraction performed.",
-          [
-            {
-              label: "Choose Another Provider",
-              onClick: function () {
-                closePlayerOverlay();
-                openProviderMenu(arItem, doc.getElementById("lg-provider-select-btn"));
-              }
-            },
-            { label: "Back to Horizon", onClick: closePlayerOverlay }
-          ]
-        );
-        return true;
-      }
-
-      if (option.availability === "external-app" && option.officialApp) {
-        // Do NOT write fake progress for third-party app launches!
-        state.playerSession = { mode: "official-app", section: launchSection, item: arItem, observedPlayback: false };
-        showStatusCard(
-          "Open in " + option.officialApp.appName + " on LG webOS",
-          arItem.titleAr + " (" + arItem.titleEn + ") is available via the official " + option.officialApp.appName + " LG TV application. Horizon will not invent playback progress for external apps.",
-          "Luna payload: luna://com.webos.applicationManager/launch -> {\"id\":\"" + option.officialApp.appId + "\"}",
-          [
-            {
-              label: "Launch " + option.officialApp.appName,
-              onClick: function () {
-                launchLGApp(option.officialApp.appId).then(function (res) {
-                  var m = stage.querySelector(".lg-player-status-meta");
-                  if (m) m.textContent = res.simulated ? ("Desktop dry-run -> " + JSON.stringify(res.parameters)) : (res.ok ? "Launched " + option.officialApp.appName : res.error);
-                });
-              }
-            },
-            { label: "Back to Horizon", onClick: closePlayerOverlay }
-          ]
-        );
+        relayStatus("Unavailable", "", null);
         return true;
       }
 
@@ -1825,27 +1590,14 @@
       var active = doc.activeElement;
       var rawCode = event.keyCode || event.which;
 
-      if (state.providerMenuOpen) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        if (key === "Back") {
-          closeProviderMenu();
-          return;
-        }
-        var mBtns = Array.prototype.slice.call(providerMenu.querySelectorAll("button"));
-        if (!mBtns.length) return;
-        var mIdx = mBtns.indexOf(active);
-        if (mIdx < 0) mIdx = 0;
-        if (key === "ArrowDown" || key === "ArrowRight") focusEl(mBtns[(mIdx + 1) % mBtns.length]);
-        else if (key === "ArrowUp" || key === "ArrowLeft") focusEl(mBtns[(mIdx - 1 + mBtns.length) % mBtns.length]);
-        else if (key === "OK") mBtns[mIdx].click();
-        return;
-      }
-
       if (state.playerOpen) {
         event.preventDefault();
         event.stopImmediatePropagation();
 
+        if (stage.querySelector(".lg-player-loading")) {
+          if ((key === "Back" && !event.repeat) || key === "MediaStop") closePlayerOverlay();
+          return;
+        }
         var statusCard = stage && stage.querySelector(".lg-player-status-card");
         if (statusCard) {
           if (key === "Back" || key === "MediaStop") { closePlayerOverlay(); return; }

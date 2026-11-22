@@ -241,28 +241,21 @@ async function run() {
     await page.press("#query", "Enter");
     await page.waitForSelector('#results .poster-card[data-media-id="301322"]', { timeout: 10000 });
     await page.click('#results .poster-card[data-media-id="301322"]');
-    await page.waitForSelector("#lg-detail-availability", { timeout: 10000 });
+    await page.waitForSelector("#detail-actions .detail-primary", { timeout: 10000 });
     await page.waitForTimeout(800);
 
     const efragDetails = await page.evaluate(() => ({
       title: document.getElementById("detail-title")?.textContent || "",
       summary: document.getElementById("detail-summary")?.textContent || "",
-      pill: document.getElementById("lg-detail-availability")?.textContent || "",
+      hasProviderUI: !!document.querySelector("#lg-detail-availability, #lg-provider-select-btn"),
       primaryBtn: document.querySelector("#detail-actions .detail-primary")?.textContent || "",
       episodes: document.querySelectorAll("#episode-list .episode-play").length
     }));
     assert.ok(efragDetails.title.includes("إفراج"), "Details must show إفراج title");
     assert.ok(/[\u0600-\u06FF]/.test(efragDetails.summary), "Details must enrich Arabic overview from ArabCinemeta");
     assert.ok(efragDetails.episodes >= 15, `إفراج must load aired episode cards (>=15), got ${efragDetails.episodes}`);
-    assert.ok(!efragDetails.primaryBtn.includes("Play S1"), `Must NOT falsely claim direct Play S1 on non-Roya title: ${efragDetails.primaryBtn}`);
-
-    // Clicking primary button on non-Roya show MUST show Horizon unavailable/listing card, NEVER navigate to VidBolt!
-    const beforeHref = page.url();
-    await page.click("#detail-actions .detail-primary");
-    await page.waitForSelector(".lg-player-status-card", { timeout: 5000 });
-    assert.equal(page.url(), beforeHref, "Must NOT leave Horizon Watch or open VidBolt player-overlay.html");
-    await page.keyboard.press("Escape");
-    await page.waitForFunction(() => document.getElementById("lg-player-overlay")?.hidden === true, null, { timeout: 4000 });
+    assert.equal(efragDetails.hasProviderUI, false);
+    assert.doesNotMatch(efragDetails.primaryBtn, /Subscription|Shahid|شاهد/i);
 
     // Back from Details -> Search
     await page.keyboard.press("Escape");
@@ -342,12 +335,12 @@ async function run() {
       await p2.press("#query", "Enter");
       await p2.waitForSelector('#results .poster-card[data-media-id="301322"]', { timeout: 10000 });
       const hybCardText = await p2.textContent('#results .poster-card[data-media-id="301322"]');
-      assert.ok(/Shahid|شاهد/i.test(hybCardText), `Updated Worker + ShoofAflam must show Shahid listing on إفراج card, got: ${hybCardText}`);
+      assert.doesNotMatch(hybCardText, /Subscription|Shahid|شاهد/i);
       await p2.click('#results .poster-card[data-media-id="301322"]');
-      await p2.waitForSelector("#lg-detail-availability", { timeout: 8000 });
-      await p2.waitForTimeout(500);
-      const hybPill = await p2.textContent("#lg-detail-availability");
-      assert.ok(/Subscription Required.*Shahid/i.test(hybPill), `Availability pill must show Subscription Required · Shahid, got: ${hybPill}`);
+      const unavailable = p2.locator("#detail-actions .detail-primary").filter({ hasText: /^غير متاح$/ });
+      await unavailable.waitFor({ timeout: 8000 });
+      assert.equal(await unavailable.getAttribute("aria-disabled"), "true");
+      assert.equal(await p2.locator("#lg-detail-availability, #lg-provider-select-btn").count(), 0);
       await ctx2.close();
     } finally {
       hyb.server.close();

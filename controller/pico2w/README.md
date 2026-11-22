@@ -62,7 +62,6 @@ an ambiguous key command automatically. A later warm test can call `send()`
 twice on a new prepared trial, within the five-second idle limit.
 
 `config.example.py` defaults both `CLOUD_LIVE_CLAIMING` and
-`AUTO_LAUNCH_ON_POWER` to `False`. It also defaults
 `IHEART_RETURNS_TO_HORIZON` to `False`.
 
 - **Default supervised run:** checks Wi-Fi, NTP, pinned Vizio TLS, read-only TV
@@ -74,20 +73,14 @@ twice on a new prepared trial, within the five-second idle limit.
   queue test. It polls every 3 seconds by default. It claims and runs commands,
   so leave it `False` until the connectivity probe has passed and you are ready
   for the requested TV app to open.
-- **Power-on Horizon:** remains independently disabled. `AUTO_LAUNCH_ON_POWER`
-  must be the literal boolean `True` to launch Horizon on a confirmed TV
-  off-to-on transition. Home and native-app changes are not power transitions.
-  Leave it `False` through cloud testing; enable it later only after the cloud
-  launch tests pass and you explicitly choose to turn it on.
 - **iHeart return shortcut:** `IHEART_RETURNS_TO_HORIZON = True` makes the Pico
   read `/app/current` every `IHEART_POLL_MS` (default 2000 ms) while the TV is
   confirmed on. A new, exact iHeartRadio app state (namespace 4, app ID 6)
   triggers the existing pinned local Horizon launch. The Pico confirms Horizon
   through `/app/current`, suppresses duplicates and applies a 15-second
-  cooldown. If Horizon remains unconfirmed after 8 seconds, it permits one
-  retry only after fresh reads confirm both TV power-on and iHeartRadio still
-  active. Verification ends after 20 seconds. A cloud claim or a different app
-  cancels the attempt. This is independent of cloud claiming and power-on launch.
+  cooldown. Each accepted shortcut entry sends one launch request. Verification
+  ends after 20 seconds or when another app or cloud command takes over. An
+  entry during the cooldown or a direct return from Horizon to iHeartRadio is discarded.
 
 The cloud client accepts only the five verified app keys and uses fixed native
 launch mappings. It checks `/app/current` before launching and after the PUT;
@@ -163,17 +156,16 @@ token. This test performs no claim, native-app launch, or TV screen change.
 
 Only after the previous test passes:
 
-1. Keep `AUTO_LAUNCH_ON_POWER = False`.
-2. Set `CLOUD_LIVE_CLAIMING = True` on the Pico and run `/main.py` again. It
+1. Set `CLOUD_LIVE_CLAIMING = True` on the Pico and run `/main.py` again. It
    begins polling, but does not claim when the queue is empty.
-3. With Horizon visible on the TV, press OK on YouTube once. The Pico claims
+2. With Horizon visible on the TV, press OK on YouTube once. The Pico claims
    the command, launches only its fixed YouTube mapping, and reads `/app/current`
    until it confirms the expected app state.
-4. Expect `Cloud command claimed: youtube` followed by
+3. Expect `Cloud command claimed: youtube` followed by
    `Cloud launch YouTube: verified (app_confirmed)`. Confirm YouTube is
    visibly open. A different state should produce `tv_unconfirmed`; TV/network
    failure produces `tv_unavailable`; API rejection produces `tv_rejected`.
-5. Set `CLOUD_LIVE_CLAIMING = False` when the test is complete.
+4. Set `CLOUD_LIVE_CLAIMING = False` when the test is complete.
 
 This repository has mock tests only. The above is the first physical Pico test;
 do not describe it as passed until it is run on the board. After YouTube passes,
@@ -184,12 +176,26 @@ use.
 ## Always-on operation and return to Horizon
 
 Once supervised cloud launches pass, run with `CLOUD_LIVE_CLAIMING = True` for
-always-on queue handling. To also enable automatic Horizon startup after a
-confirmed TV off-to-on transition, separately change
-`AUTO_LAUNCH_ON_POWER = True`. Its first power reading is only a baseline; Home
-or opening a streaming app cannot trigger another Horizon launch. This is not
-enabled by these source changes. Vizio Home may still be the result of pressing
-the TV Home button; seamless return from a native app is not promised.
+always-on queue handling. Horizon can open through the opt-in radio shortcut.
+The controller establishes a fresh baseline after TV power and network changes.
+The TV reports the active iHeartRadio app state, so directly opening iHeartRadio
+may also be interpreted as the radio shortcut.
+
+## Updating the controller over USB
+
+With the Pico connected, identify its port using `mpremote connect list`. Set
+`pico_port` to that exact port, then run from the repository root:
+
+```sh
+mpremote connect "$pico_port" fs cp :main.py /private/tmp/horizon-pico-main.backup.py &&
+  test -s /private/tmp/horizon-pico-main.backup.py &&
+  mpremote connect "$pico_port" fs cp controller/pico2w/main.py :main.py &&
+  mpremote connect "$pico_port" reset
+```
+
+To restore the previous controller, copy the backup to `:main.py` using the
+same port and reset. Keep `/config.py`, `/secrets.py`, and the MicroPython
+firmware in place.
 
 ## Supervised iHeart return test
 
@@ -199,7 +205,7 @@ the Pico. Add `IHEART_RETURNS_TO_HORIZON = False`, `IHEART_POLL_MS = 2000`, and
 `IHEART_DIAGNOSTICS = False` to the private device `/config.py`. Do not replace
 its existing Wi-Fi, TV, TLS, or cloud settings with template placeholders.
 With the TV on and the Pico connected, set the shortcut flag to `True` and
-restart `/main.py` in Thonny. Leave the existing cloud and power flags as
+restart `/main.py` in Thonny. Leave the existing cloud flags as
 already configured. Open YouTube or Prime Video normally, then press the
 physical iHeartRadio button once. Look for `iHeart shortcut: Horizon confirmed`
 and confirm Horizon visibly opens. With `PERF_TIMING = True`, the Pico logs the
@@ -207,7 +213,7 @@ app-state read, launch request, and detection-to-confirmation times without
 printing credentials. For a failed return, set `IHEART_DIAGNOSTICS = True` on
 the Pico and restart it before repeating the test. Diagnostic lines contain
 relative monotonic milliseconds, previous and current numeric app identities,
-launch outcome, retry count, cooldown state, and categorical result. No URL,
+launch outcome, cooldown state, and categorical result. No URL,
 token, certificate pin, or HTTP header is logged. Turn diagnostics off after
 testing. To disable the shortcut, set `IHEART_RETURNS_TO_HORIZON = False` and
 restart the controller. To roll back the code, restore the backed-up `/main.py`;
@@ -219,12 +225,11 @@ never observed, `detail=horizon_lost` when Horizon was seen and then an
 unrelated app remained active, `detail=confirmed_after_read_error` when a
 temporary read failure was followed by confirmation, and
 `detail=tv_unavailable` when TV state could not be read at the deadline.
-`detail=app_changed`, `detail=superseded`, and `detail=tv_off` suppress retries.
+`detail=app_changed`, `detail=superseded`, and `detail=tv_off` end confirmation.
 An accepted SmartCast response is never treated as proof that Horizon opened.
 
 The default two-second cadence adds up to 30 pinned TV reads per minute while
-the TV is on; confirmation uses those same scheduled reads. A retry eligibility
-check adds one power read and one fresh app read. Detection is bounded
+the TV is on; confirmation uses those same scheduled reads. Detection is bounded
 by the polling interval and network request duration while the loop is idle;
 a cloud launch or network outage can delay it further. Pico logs measure from
 the first observed iHeart state, not from the physical button press. Host tests
@@ -237,7 +242,7 @@ measurement run. The Pico reports safe durations for cloud claim, TV power
 read or reuse, current-app precheck, SmartCast launch acceptance, app-state
 confirmation, and result reporting. DNS, TCP, TLS handshake, and garbage
 collection are broken out for completed requests. `IHEART_DIAGNOSTICS = True`
-adds relative detection, retry, and verification events with numeric app IDs.
+adds relative detection and verification events with numeric app IDs.
 Both flags default to `False`; switch them off after collecting a short sample.
 
 Cloud claim polling is scheduled from its previous due time and skips missed
@@ -247,10 +252,7 @@ poll interval without bursting to catch up. The example keeps
 try `CLOUD_POLL_MS = 1500` or `IHEART_POLL_MS = 1000` one at a time, then
 restore the original value if errors, stalls, or excess TV load appear.
 `POLL_MS` caps idle sleep; the earlier cloud and iHeart deadlines still wake
-the loop. The iHeart retry may happen on the next scheduled app sample after
-an explicit SmartCast rejection, but transport errors keep the conservative
-eight-second retry gate. Every retry still requires fresh TV-on and iHeart
-state reads.
+the loop.
 
 For a supervised trial, `CLOUD_REUSE_RECENT_POWER = True` lets the Pico reuse a
 successful TV-on power read for a cloud launch only when it is at most one

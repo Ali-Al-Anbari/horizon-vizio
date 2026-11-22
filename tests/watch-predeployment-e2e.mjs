@@ -22,8 +22,18 @@ async function withWatch(callback, availability = false, verifiedAsset = null, o
       if (media && url.origin === "https://horizon.129-213-139-127.sslip.io" && url.pathname === "/relay") {
         assert.ok(isVerified(url.searchParams.get("id")));
         assert.equal(url.searchParams.get("ticket"), "fixture-ticket");
+        if (options.failUntilAlternate && !url.searchParams.has("variant")) {
+          options.failUntilAlternate.push(url.searchParams.has("refresh") ? "refresh" : "initial");
+          return route.fulfill({ status: 502, body: "upstream unavailable" });
+        }
+        if (options.failUntilAlternate) options.failUntilAlternate.push("alternate");
+        if (options.stallMedia) {
+          await options.stallMedia;
+          return route.abort().catch(() => {});
+        }
         const range = await request.headerValue("range");
         mediaRequests.push(range);
+        if (options.ignoreRange) return route.fulfill({ status: 200, contentType: "video/mp4", body: media });
         const [, first, last] = /^bytes=(\d+)-(\d*)$/.exec(range);
         const start = Number(first), end = last ? Math.min(Number(last), media.length - 1) : media.length - 1;
         return route.fulfill({ status: 206, body: media.subarray(start, end + 1),
@@ -38,7 +48,8 @@ async function withWatch(callback, availability = false, verifiedAsset = null, o
       }
       if (url.pathname === "/api/arabic/relay-ticket") {
         tickets.push(request.postDataJSON());
-        if (options.paired) return route.fulfill({ json: { ticket: "fixture-ticket", ttlSeconds: 90, refreshesRemaining: 1 } });
+        if (options.paired) return route.fulfill({ json: { ticket: "fixture-ticket", ttlSeconds: 90, refreshesRemaining: 1,
+          ...(options.failUntilAlternate ? { sourceCount: 2 } : {}) } });
         return route.fulfill({ status: 401, json: { code: "pairing_required" } });
       }
       if (url.pathname === "/api/arabic/relay-catalog") {
@@ -125,6 +136,68 @@ test("Delayed free availability for الحريفة suppresses WATCH IT and one P
   } finally {
     releaseCatalog();
   }
+});
+
+test("Watch starts a movie with valid MP4 bytes when its server ignores the initial Range", async () => {
+  await withWatch(async (page, tickets, requests) => {
+    await selectArabicLibrary(page);
+    await openArabicMovie(page, 1197989, "الحريفة");
+    await page.locator("#detail-actions .detail-primary").filter({ hasText: /^Play$/ }).click();
+    await page.waitForFunction(() => {
+      const video = document.querySelector("#lg-player-stage video");
+      return video && video.currentTime > 0.4 && video.videoWidth > 0;
+    });
+    assert.ok(requests.length >= 1);
+    assert.deepEqual(tickets, [{ episodeId: "movie-1197989" }]);
+    assert.equal(await page.locator(".lg-player-status-card").count(), 0);
+  }, true, "movie-1197989", { paired: true, ignoreRange: true });
+});
+
+test("a failed movie start refreshes once and uses the signed movie's second source silently", async () => {
+  const attempts = [];
+  await withWatch(async (page, tickets) => {
+    await selectArabicLibrary(page);
+    await openArabicMovie(page, 1197989, "الحريفة");
+    await page.locator("#detail-actions .detail-primary").filter({ hasText: /^Play$/ }).click();
+    await page.waitForFunction(() => {
+      const video = document.querySelector("#lg-player-stage video");
+      return video && video.currentTime > 0.4 && video.videoWidth > 0;
+    }, null, { timeout: 11000 });
+    assert.deepEqual([...new Set(attempts)], ["initial", "refresh", "alternate"]);
+    assert.deepEqual(tickets, [{ episodeId: "movie-1197989" }]);
+    assert.equal(await page.locator(".lg-player-status-card").count(), 0);
+  }, true, "movie-1197989", { paired: true, failUntilAlternate: attempts });
+});
+
+test("the startup watchdog refreshes a silent media stall and stops on Back", async () => {
+  let unblock;
+  const stallMedia = new Promise(resolve => { unblock = resolve; });
+  try {
+    await withWatch(async (page, tickets) => {
+      await page.clock.install();
+      await selectArabicLibrary(page);
+      await openArabicMovie(page, 1197989, "الحريفة");
+      const incoming = [];
+      page.on("request", request => {
+        const url = new URL(request.url());
+        if (url.pathname === "/relay") incoming.push(url.searchParams.has("refresh"));
+      });
+      const initial = page.waitForRequest(request => new URL(request.url()).pathname === "/relay");
+      await page.locator("#detail-actions .detail-primary").filter({ hasText: /^Play$/ }).click();
+      await initial;
+      const refresh = page.waitForRequest(request => new URL(request.url()).searchParams.has("refresh"));
+      await page.clock.fastForward(26000);
+      await page.clock.runFor(100);
+      await refresh;
+      assert.deepEqual(tickets, [{ episodeId: "movie-1197989" }]);
+      assert.equal(await page.locator(".lg-player-status-card").count(), 0);
+      await page.keyboard.press("Escape");
+      assert.equal(await page.locator("#lg-player-stage video").count(), 0);
+      const before = incoming.length;
+      await page.clock.fastForward(61000);
+      assert.equal(incoming.length, before);
+    }, true, "movie-1197989", { paired: true, stallMedia });
+  } finally { unblock(); }
 });
 
 test("A late movie lookup cannot enable playback on a different title", async () => {

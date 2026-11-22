@@ -1,16 +1,29 @@
 # Akwam relay rollout
 
-The [resolver](catalog.mjs) uses the existing verified catalog roots as a fast path. Other assets use Watch's existing public TMDB-backed title and season endpoints. The resolver searches Akwam using the trusted original and localized names, applies the publisher's section and year filters, and requires a unique exact title, year and season. Each episode must appear under that season and have a watch link for its own source ID and episode number. An ambiguous or missing match stays unavailable. An available result still requires a strict Range and MP4 signature check.
+The [resolver](catalog.mjs) uses the existing verified catalog roots as a fast path. Other assets use Watch's existing public TMDB-backed title and season endpoints. The resolver uses the Arabic, original and English metadata labels and the season's title. It searches by section and year, then falls back to bounded section-only and unfiltered searches. TV still requires agreement on title, year and season. Movies rank normalized title and trusted TMDB release dates, with credits, runtime or a published IMDb ID as corroboration when available. Episode links must appear under that season and point to a watch link with their own source ID. Legacy short episode URLs also require agreement between the publisher's link label and the target episode heading. Positive root and page caches expire after five minutes, and known catalog misses expire after 45 seconds. Access errors and timeouts remain retryable. The normal path verifies Range semantics and an MP4 signature. A matched movie whose media server returns 200 instead of 206 can be tried only after the relay confirms an MP4 prefix. The relay rechecks that prefix when delivering byte zero and rejects HTML, malformed ranges, and mismatched movie tickets.
 
 ```sh
 node oracle-relay/audit-catalog.mjs --find movie 'الجواهرجي' 'El Gawahergy'
 CA_BUNDLE_PATH=/path/to/verified-ca-bundle.pem node oracle-relay/audit-catalog.mjs
-CA_BUNDLE_PATH=/path/to/verified-ca-bundle.pem node oracle-relay/audit-catalog.mjs --expanded
+CA_BUNDLE_PATH=/path/to/verified-ca-bundle.pem node oracle-relay/audit-catalog.mjs --expanded --probe-formats
+CA_BUNDLE_PATH=/path/to/verified-ca-bundle.pem node oracle-relay/audit-catalog.mjs --unseen-movies
 CA_BUNDLE_PATH=/path/to/verified-ca-bundle.pem node oracle-relay/audit-catalog.mjs \
   --discover-only --cold tv-122543-s4-e1 tv-122543-s4-e1
 ```
 
-The audit reads public catalog and metadata responses and at most 12 media bytes per rendition. Its MKV probe records the container signature for diagnosis. MKV remains unavailable for the MP4 relay. The audit prints identifiers, checks, timings, and peak process RSS. It never prints media URLs. Playback, audio, and codecs require a player test.
+The audit reads public catalog and metadata responses and requests 12 media bytes per rendition. The optional `--probe-formats` gate requests up to 512 bytes for diagnostic identification of Matroska, WebM and HLS on candidates without an MP4 extension. The relay requires an MP4 signature for both Range-verified and best-effort movie sources. The audit prints identifiers, checks, mean and P95 lookup times, and peak process RSS. Playback, audio, and codecs require a player test.
+
+## Movie ranking and startup recovery rollout
+
+Validate the Watch metadata and ticket changes on an inactive version with the existing pairing, secrets, and relay feature flag. The metadata enrichment is additive and the optional ticket source count defaults to one with the prior relay. After authorizing the change, activate and smoke-test Watch, then stage the new `catalog.mjs` and `relay-service.mjs` together on Oracle. Compare the live entrypoint and module checksums to the preflight record, validate both staged files with Node, back up both active modules, then replace both and restart the existing `horizon-relay-next` unit once. Preserve the unit, its environment, and the trusted CA bundle.
+
+Smoke-test a legacy episode, a newly matched movie with a one-year release discrepancy, a deliberately unavailable movie, and a marked recovery session. Watch waits for actual clock advancement, then preserves observed progress. A silent startup stall gets a refresh of the same source and, when the ticket lists another rendition of the same catalog work, one alternate attempt. Playback and seeking remain subject to the upstream's actual Range support. Use the previous Watch version and both backed-up Oracle files for rollback. Repeat the existing physical LG checks before wider rollout.
+
+## Discovery-only update on an existing dynamic relay
+
+The release changes `catalog.mjs` on the VM. Confirm the active unit imports the existing dynamic catalog and record checksums for both active modules before staging. Use a fresh staging directory and a uniquely named backup of the active `catalog.mjs`. Confirm the active checksums still match your record, run `node --check` on the staged module, and verify the staged SHA-256 against your workstation. Install it to a temporary filename in `/opt/horizon-relay`, atomically rename it to `catalog.mjs`, then restart `horizon-relay-next`. Reuse the existing service configuration and environment.
+
+Verify health, the original paired Watch playback of فخر الدلتا S01E01, the requested season of العتاولة, and one legacy short-link episode of الاختيار. Check Range 206, Arabic audio, and seek. Roll back by atomically restoring the backed-up `catalog.mjs` and restarting the same service. The sections below apply to discovery-only and initial dynamic-catalog rollouts.
 
 ## Oracle first
 

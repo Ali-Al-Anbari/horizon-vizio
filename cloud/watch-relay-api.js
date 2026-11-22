@@ -121,11 +121,13 @@ export async function watchRelayTicket(request, env, fetcher = fetch) {
       || typeof value.ticket !== "string" || !TICKET.test(value.ticket)
       || typeof value.expiresAt !== "string" || !Number.isFinite(Date.parse(value.expiresAt))
       || !Number.isSafeInteger(value.ttlSeconds) || value.ttlSeconds < 1
-      || !Number.isSafeInteger(value.refreshesRemaining) || value.refreshesRemaining < 0) {
+      || !Number.isSafeInteger(value.refreshesRemaining) || value.refreshesRemaining < 0
+      || value.sourceCount !== undefined && ![1, 2].includes(value.sourceCount)) {
       logTicketFailure(request, "invalid_ticket_response", upstreamStatus);
       return json(502, { code: "relay_ticket_unavailable" });
     }
-    return json(200, { ticket: value.ticket, ttlSeconds: value.ttlSeconds, refreshesRemaining: value.refreshesRemaining });
+    return json(200, { ticket: value.ticket, ttlSeconds: value.ttlSeconds, refreshesRemaining: value.refreshesRemaining,
+      ...(value.sourceCount === 2 ? { sourceCount: 2 } : {}) });
   } catch (error) {
     let category = "fetch_error";
     if (controller.signal.aborted) category = "timeout";

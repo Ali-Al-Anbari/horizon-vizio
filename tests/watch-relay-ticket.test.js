@@ -132,6 +132,20 @@ test("Watch forwards only the episode and prior ticket to the fixed issuer, retu
   assert.deepEqual(visited, [null, OLD]);
 });
 
+test("Watch exposes only a bounded alternate count from the authorized movie ticket", async t => {
+  t.mock.method(console, "warn", () => {});
+  const { env } = fixture();
+  const movie = "movie-1246595";
+  const call = sourceCount => api(request({ episodeId: movie }), env, { fetch: async () => Response.json({
+    ok: true, episodeId: movie, ticket: NEXT, ttlSeconds: 1800, expiresAt: "2030-01-01T00:00:00.000Z",
+    refreshesRemaining: 2, sourceCount, work: "123", sources: ["sensitive-upstream-value"],
+  }) });
+  const response = await call(2);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ticket: NEXT, ttlSeconds: 1800, refreshesRemaining: 2, sourceCount: 2 });
+  assert.equal((await call(3)).status, 502);
+});
+
 test("Watch logs an invalid ticket response and preserves renewal rejection without reminting", async t => {
   const warn = t.mock.method(console, "warn", () => {});
   const { env } = fixture();

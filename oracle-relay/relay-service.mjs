@@ -19,7 +19,7 @@ import http from "node:http";
 import https from "node:https";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { catalogKey, createCatalog, MEDIA_HOST, publicLookup, safeUrl } from "./catalog.mjs";
+import { catalogKey, createCatalog, mediaSignature, MEDIA_HOST, publicLookup, safeUrl } from "./catalog.mjs";
 
 export const DEFAULT_ALLOWLIST = {
   "fakhr-el-delta-s01e01": {
@@ -80,6 +80,20 @@ export function verifyPlaybackTicket(token, secret, expectedEpisodeId, nowSec = 
   if (Number.isFinite(payload.maxExp) && nowSec > payload.maxExp) return { ok: false, reason: "ticket_session_expired" };
   if (Number.isFinite(payload.iat) && payload.iat > nowSec + 30) return { ok: false, reason: "ticket_not_yet_valid" };
   return { ok: true, payload };
+}
+
+export function validMediaRange(requested, headers) {
+  const returned = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(headers["content-range"] || "");
+  const requestedParts = /^bytes=(\d*)-(\d*)$/.exec(requested || "");
+  if (!returned || !requestedParts) return false;
+  const [start, end, size] = returned.slice(1).map(Number);
+  if (![start, end, size].every(Number.isSafeInteger) || start > end || end >= size) return false;
+  if (headers["content-length"] !== undefined && Number(headers["content-length"]) !== end - start + 1) return false;
+  const [, first, last] = requestedParts;
+  if (!first && !last) return false;
+  return first
+    ? start === Number(first) && (!last || end <= Number(last))
+    : start === Math.max(0, size - Number(last)) && end === size - 1;
 }
 
 function parseCookie(cookieHeader, name) {
@@ -320,12 +334,15 @@ export function createHardenedRelay(config = {}) {
     }
 
     const promise = (async () => {
-      let source;
+      let source, resolved;
       if (entry) {
         const html = await fetchWatchHtmlSafely(entry.watchUrl, entry.watchHostPattern);
         source = html.match(/<source\b[^>]*\bsrc\s*=\s*["'](https:\/\/[^"']+\.mp4)["']/i)?.[1];
         if (!source) throw Object.assign(new Error("no_mp4_source_found"), { httpStatus: 502 });
-      } else source = await catalog.resolve(id, { force: forceRefresh });
+      } else {
+        resolved = await catalog.resolveSources(id, { force: forceRefresh });
+        source = resolved.sources[0].url;
+      }
       const parsed = safeUrl(source, entry?.mediaHostPattern || MEDIA_HOST);
 
       let expiresAtMs = null;
@@ -341,6 +358,8 @@ export function createHardenedRelay(config = {}) {
       const record = {
         url: parsed.toString(),
         host: parsed.hostname,
+        work: resolved?.work,
+        sources: resolved?.sources,
         expiresAtMs,
         resolvedAtMs,
         cacheUntilMs: resolvedAtMs + cacheTtlMs,
@@ -360,7 +379,9 @@ export function createHardenedRelay(config = {}) {
     }
   }
 
-  function streamUpstream({ clientReq, clientRes, id, targetUrl, range, allowRetry }) {
+  function streamUpstream({ clientReq, clientRes, id, targetUrl, range, allowRetry, work, sourceKey }) {
+    if (clientRes.destroyed) return;
+    const movie = id.startsWith("movie-");
     let parsedTarget;
     try {
       parsedTarget = enableTestFaults && id === "test-unreachable"
@@ -369,7 +390,7 @@ export function createHardenedRelay(config = {}) {
       return sendJson(clientReq, clientRes, 502, { ok: false, error: "invalid_upstream_url" });
     }
 
-    const upHeaders = { "User-Agent": "Mozilla/5.0" };
+    const upHeaders = { "User-Agent": "Mozilla/5.0", "Accept-Encoding": "identity" };
     if (range) upHeaders.Range = range;
 
     stats.activeStreams += 1;
@@ -405,13 +426,17 @@ export function createHardenedRelay(config = {}) {
           stats.expiredAutoRetries += 1;
           try {
             const fresh = await resolveEpisode(id, { forceRefresh: true, bypassCooldown: true });
-            if (clientAborted || clientRes.writableEnded) return;
+            if (clientAborted || clientRes.writableEnded || clientRes.destroyed) return;
+            const source = fresh.sources?.find(candidate => candidate.key === sourceKey);
+            if (work && fresh.work !== work || sourceKey && !source) {
+              return sendJson(clientReq, clientRes, 404, { ok: false, error: "media_unavailable" });
+            }
             return streamUpstream({
               clientReq,
               clientRes,
               id,
-              targetUrl: fresh.url,
-              range,
+              targetUrl: source?.url || fresh.url,
+              range, work, sourceKey,
               allowRetry: false,
             });
           } catch (err) {
@@ -428,7 +453,16 @@ export function createHardenedRelay(config = {}) {
           return sendJson(clientReq, clientRes, 502, { ok: false, error: "upstream_status_" + status });
         }
 
-        if (status === 206) stats.http206Responses += 1;
+        const mime = String(upstreamRes.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+        const startsAtZero = !range || /^bytes=0+-/.test(range);
+        if (status !== 416 && ((mime !== "video/mp4" && mime !== "application/octet-stream")
+          || upstreamRes.headers["content-encoding"]
+          || status === 206 && !validMediaRange(range, upstreamRes.headers)
+          || status === 200 && !startsAtZero)) {
+          upstreamRes.destroy();
+          finishStream();
+          return sendJson(clientReq, clientRes, 502, { ok: false, error: "invalid_media_response" });
+        }
 
         const outHeaders = {
           ...corsHeaders(clientReq),
@@ -437,26 +471,59 @@ export function createHardenedRelay(config = {}) {
           "Content-Type": "video/mp4",
         };
         for (const h of ["content-range", "content-length", "accept-ranges"]) {
-          if (upstreamRes.headers[h]) outHeaders[h] = upstreamRes.headers[h];
+          if (upstreamRes.headers[h] && (status !== 416 || h !== "content-length")) outHeaders[h] = upstreamRes.headers[h];
         }
-
-        clientRes.writeHead(status, outHeaders);
-        if (clientReq.method === "HEAD") {
-          upstreamRes.resume();
+        if (status === 416 || clientReq.method === "HEAD") {
+          upstreamRes.destroy();
           finishStream();
+          clientRes.writeHead(status, outHeaders);
           return clientRes.end();
         }
 
-        upstreamRes.on("data", (chunk) => {
-          recordEgress(chunk.length);
-          if (dailyBytesStreamed > dailyEgressCapBytes) {
-            upstreamReq.destroy();
-            clientRes.destroy();
+        upstreamRes.on("close", finishStream);
+        upstreamRes.on("error", () => {
+          finishStream();
+          if (clientRes.destroyed) return;
+          if (clientRes.headersSent) clientRes.destroy();
+          else sendJson(clientReq, clientRes, 502, { ok: false, error: "invalid_media_response" });
+        });
+
+        function deliver() {
+          if (status === 206) stats.http206Responses += 1;
+          clientRes.writeHead(status, outHeaders);
+          upstreamRes.on("data", chunk => {
+            recordEgress(chunk.length);
+            if (dailyBytesStreamed > dailyEgressCapBytes) {
+              upstreamReq.destroy();
+              clientRes.destroy();
+            }
+          });
+          upstreamRes.pipe(clientRes);
+        }
+
+        // Check the same representation again on movie requests beginning at
+        // byte zero. Later ranges use the URL and work scoped by the ticket.
+        const fromBeginning = status === 200 || /^bytes 0-/.test(upstreamRes.headers["content-range"] || "");
+        if (!movie || !fromBeginning) return deliver();
+        upstreamRes.once("readable", function inspectPrefix() {
+          const prefix = upstreamRes.read(12);
+          if (prefix === null && !upstreamRes.readableEnded) {
+            upstreamRes.once("readable", inspectPrefix);
+            return;
+          }
+          if (mediaSignature(prefix) !== "mp4") {
+            upstreamRes.destroy();
+            finishStream();
+            return sendJson(clientReq, clientRes, 502, { ok: false, error: "invalid_mp4_prefix" });
+          }
+          upstreamRes.unshift(prefix);
+          deliver();
+        });
+        upstreamRes.once("end", () => {
+          if (!clientRes.headersSent && !clientRes.destroyed) {
+            sendJson(clientReq, clientRes, 502, { ok: false, error: "invalid_mp4_prefix" });
           }
         });
-        upstreamRes.on("end", finishStream);
-        upstreamRes.on("close", finishStream);
-        upstreamRes.pipe(clientRes);
       }
     );
 
@@ -468,7 +535,7 @@ export function createHardenedRelay(config = {}) {
         finishStream();
       }
     };
-    clientReq.once("close", onClientClose);
+    clientReq.once("aborted", onClientClose);
     clientRes.once("close", onClientClose);
 
     upstreamReq.on("timeout", () => {
@@ -550,6 +617,7 @@ export function createHardenedRelay(config = {}) {
       const nowSec = Math.floor(Date.now() / 1000);
       let refreshes = 0;
       let maxExp = nowSec + ticketMaxSessionSec;
+      let priorWork;
 
       // Optional bounded refresh from a prior ticket (prevents indefinite refresh chains)
       const prevTicket = reqUrl.searchParams.get("prev");
@@ -568,6 +636,7 @@ export function createHardenedRelay(config = {}) {
         if (prevPayload.sub !== auth.subject || prevPayload.ep !== id) {
           return sendJson(req, res, 403, { ok: false, error: "ticket_subject_or_episode_mismatch" });
         }
+        priorWork = prevPayload.work;
         refreshes = Number(prevPayload.refreshes || 0) + 1;
         maxExp = Number(prevPayload.maxExp || maxExp);
         if (refreshes > maxTicketRefreshes || nowSec >= maxExp) {
@@ -575,13 +644,18 @@ export function createHardenedRelay(config = {}) {
         }
       }
 
+      let record;
       if (!allowlist[id]) {
-        try { await resolveEpisode(id); }
+        try { record = await resolveEpisode(id); }
         catch { return sendJson(req, res, 404, { ok: false, error: "asset_unavailable" }); }
+        if (priorWork && record.work !== priorWork) {
+          return sendJson(req, res, 403, { ok: false, error: "ticket_work_mismatch" });
+        }
       }
       const exp = Math.min(nowSec + ticketTtlSec, maxExp);
       const payload = {
         ep: id,
+        ...(record?.work ? { work: record.work, sources: record.sources.map(source => source.key) } : {}),
         sub: auth.subject,
         jti: crypto.randomBytes(8).toString("hex"),
         iat: nowSec,
@@ -599,6 +673,7 @@ export function createHardenedRelay(config = {}) {
         expiresAt: new Date(exp * 1000).toISOString(),
         ttlSeconds: Math.max(0, exp - nowSec),
         refreshesRemaining: Math.max(0, maxTicketRefreshes - refreshes),
+        ...(record?.work ? { sourceCount: record.sources.length } : {}),
         relayPath: `/relay?id=${encodeURIComponent(id)}&ticket=${encodeURIComponent(ticket)}`,
       });
     }
@@ -635,7 +710,7 @@ export function createHardenedRelay(config = {}) {
       }
 
       const range = req.headers.range ? req.headers.range.trim() : null;
-      if (range && !/^bytes=\d*-\d*$/.test(range)) {
+      if (range && !/^bytes=(?:\d{1,15}-\d{0,15}|-\d{1,15})$/.test(range)) {
         return sendJson(req, res, 416, { ok: false, error: "invalid_range" });
       }
 
@@ -655,14 +730,24 @@ export function createHardenedRelay(config = {}) {
       }
 
       const forceRefresh = reqUrl.searchParams.get("refresh") === "1";
+      const variant = reqUrl.searchParams.get("variant");
+      const work = tCheck.payload.work;
+      if (variant !== null && (variant !== "1" || !work || !id.startsWith("movie-"))) {
+        return sendJson(req, res, 404, { ok: false, error: "media_unavailable" });
+      }
       try {
         const rec = await resolveEpisode(id, { forceRefresh });
+        const sourceKey = tCheck.payload.sources?.[Number(variant)];
+        const source = sourceKey ? rec.sources?.find(candidate => candidate.key === sourceKey) : rec.sources?.[0];
+        if (work && work !== rec.work || sourceKey && !source || variant && !sourceKey || !work && source && !source.verified) {
+          return sendJson(req, res, 404, { ok: false, error: "media_unavailable" });
+        }
         return streamUpstream({
           clientReq: req,
           clientRes: res,
           id,
-          targetUrl: rec.url,
-          range,
+          targetUrl: source?.url || rec.url,
+          range, work, sourceKey,
           allowRetry: true,
         });
       } catch (err) {

@@ -198,6 +198,27 @@ test("detail metadata is bounded, verified, and omits missing fields", async () 
   assert.equal(film.rating, "");
 });
 
+test("Arabic movie details expose TMDB regional dates, alternative titles, and original credit names", async () => {
+  const response = await api(new Request("https://search.example/api/arabic/title/movie/1324331", { headers: { "cf-connecting-ip": "192.0.2.50" } }), env, { shoofAflam: false, fetch: async url => {
+    if (url.includes("/watch/providers")) return new Response(JSON.stringify({ results: {} }));
+    assert.match(url, /append_to_response=credits,release_dates,alternative_titles/);
+    return new Response(JSON.stringify({
+      id: 1324331, title: "الحريفة 2", original_language: "ar", overview: "ملخص", release_date: "2024-12-04",
+      runtime: 110, release_dates: { results: [{ iso_3166_1: "EG", release_dates: [
+        { type: 3, release_date: "2024-12-04T00:00:00Z" },
+        { type: 4, release_date: "2025-01-01T00:00:00Z" },
+        { type: 6, release_date: "2027-01-01T00:00:00Z" },
+      ] }] },
+      alternative_titles: { titles: [{ iso_3166_1: "EG", title: "الحريفة 2: الريمونتادا" }] },
+      credits: { crew: [{ job: "Director", name: "Director", original_name: "المخرج" }] },
+    }));
+  } });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.deepEqual(result.movieIdentity, { alternativeTitles: ["الحريفة 2: الريمونتادا"],
+    releaseYears: ["2024", "2025"], originalCast: [], originalDirectors: ["المخرج"] });
+});
+
 test("TV details carry a validated external TVDB identity for player episode lookup", async () => {
   let upstream;
   const response = await api(req("/api/title/tv/105248"), env, { fetch: async (url, options) => {

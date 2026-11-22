@@ -531,6 +531,31 @@ function detail(row, type) {
       ? row.original_language : "",
     rating: typeof usRating === "string" ? usRating.slice(0, 12) : "" };
 }
+function arabicMovieIdentity(row) {
+  const years = new Set();
+  const regions = row.release_dates?.results;
+  for (const region of Array.isArray(regions) ? regions : []) {
+    for (const release of Array.isArray(region?.release_dates) ? region.release_dates : []) {
+      if (![1, 2, 3, 4].includes(release.type)) continue;
+      const year = /^\d{4}(?=-)/.exec(release.release_date || "")?.[0];
+      if (year) years.add(year);
+    }
+  }
+  const alternatives = row.alternative_titles?.titles;
+  const titles = (Array.isArray(alternatives) ? alternatives : []).filter(item => typeof item?.title === "string" && item.title.trim()
+    && (/\p{Script=Arabic}/u.test(item.title) || /^(?:US|GB|CA|AU)$/.test(item.iso_3166_1)))
+    .map(item => item.title.trim().slice(0, 100));
+  const original = list => (Array.isArray(list) ? list : [])
+    .slice(0, 6).map(item => typeof item.original_name === "string" ? item.original_name.slice(0, 70) : "").filter(Boolean);
+  const crew = Array.isArray(row.credits?.crew) ? row.credits.crew : [];
+  return {
+    alternativeTitles: [...new Set(titles)].slice(0, 8),
+    releaseYears: [...years].sort().slice(0, 12),
+    originalCast: original(row.credits?.cast),
+    originalDirectors: original(crew.filter(item => item.job === "Director")),
+  };
+}
+
 function results(payload, filter) {
   return (Array.isArray(payload.results) ? payload.results : []).filter(row => {
     const type = filter === "all" ? row.media_type : filter;
@@ -1143,7 +1168,7 @@ export async function api(request, env, options = {}) {
       return json(200, value, ttl);
     }
     if (arabicDetail) {
-      const append = arabicDetail.type === "tv" ? "external_ids,credits,content_ratings" : "credits,release_dates";
+      const append = arabicDetail.type === "tv" ? "external_ids,credits,content_ratings" : "credits,release_dates,alternative_titles";
       const [arRes, provRes, shoofRes] = await Promise.allSettled([
         tmdbJson(fetcher, env, `/${arabicDetail.type}/${arabicDetail.id}?language=ar&append_to_response=${append}`, controller.signal),
         tmdbJson(fetcher, env, `/${arabicDetail.type}/${arabicDetail.id}/watch/providers`, controller.signal),
@@ -1152,6 +1177,7 @@ export async function api(request, env, options = {}) {
       if (arRes.status !== "fulfilled") throw arRes.reason;
       const raw = arRes.value;
       const out = detail(raw, arabicDetail.type);
+      if (arabicDetail.type === "movie") out.movieIdentity = arabicMovieIdentity(raw);
       const enTitleFallback = String(raw.original_title || raw.original_name || "").slice(0, 160);
       let enOverview = "";
       if (!out.overview) {

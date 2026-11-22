@@ -412,6 +412,8 @@
     var videoEl = null;
     var relayRequest = null;
     var relayPairTimer = 0;
+    var relayStartupTimer = 0;
+    var relayRetryTimer = 0;
     var RELAY_ORIGIN = "https://horizon.129-213-139-127.sslip.io";
     var progressTimer = 0;
     var controlsHideTimer = 0;
@@ -589,7 +591,14 @@
       }
     }
 
+    function stopRelayStartupTimer() {
+      if (relayStartupTimer) clearTimeout(relayStartupTimer);
+      relayStartupTimer = 0;
+    }
+
     function clearOverlayMedia() {
+      stopRelayStartupTimer();
+      if (relayRetryTimer) { clearTimeout(relayRetryTimer); relayRetryTimer = 0; }
       if (relayRequest) { relayRequest.abort(); relayRequest = null; }
       if (relayPairTimer) { clearTimeout(relayPairTimer); relayPairTimer = 0; }
       clearControlsHideTimer();
@@ -791,25 +800,40 @@
 
     function attachHtml5VideoListeners(option, arItem, sess, startSec, errHeading, retryFn) {
       var element = videoEl;
+      var relayStarted = false;
+      var relayPlaying = false;
+      var startPosition = 0;
       function active() {
         return state.playerOpen && state.playerSession === sess && videoEl === element;
       }
-      function confirmPosition() {
-        if (sess.relay && !element.seeking && element.readyState >= 2 && Number.isFinite(element.currentTime)) {
+      function watchRelayStartup() {
+        if (!sess.relay || relayStarted || relayStartupTimer) return;
+        relayStartupTimer = setTimeout(function () {
+          relayStartupTimer = 0;
+          if (active() && !relayStarted && sess.relay.wasPlaying) {
+            recoverRelayPlayback(option, arItem, sess, true, true);
+          }
+        }, 25000);
+      }
+
+      function confirmPosition(seekFinished) {
+        if (sess.relay && (relayStarted || seekFinished) && !element.seeking && element.readyState >= 2 && Number.isFinite(element.currentTime)) {
           sess.relay.confirmedSec = element.currentTime;
         }
       }
+      if (sess.relay && sess.relay.wasPlaying) watchRelayStartup();
       element.addEventListener("loadedmetadata", function () {
         if (!active()) return;
         disableNativeTextTracks(element);
         if (startSec > 0 && element.duration > startSec + 2) {
-          try { element.currentTime = startSec; } catch (_e) {}
+          try { element.currentTime = startSec; startPosition = startSec; } catch (_e) {}
         }
         updateTimeBar(element.currentTime || 0, element.duration || sess.durationSec);
       });
       element.addEventListener("play", function () {
         if (!active()) return;
         if (sess.relay) sess.relay.wasPlaying = true;
+        watchRelayStartup();
         updatePlayPauseVisual(true);
         chrome.classList.remove("is-quick-pause");
         resetIdle();
@@ -817,14 +841,18 @@
       element.addEventListener("playing", function () {
         if (!active()) return;
         var firstStart = !sess.observedPlayback;
-        sess.observedPlayback = true;
+        relayPlaying = true;
+        if (!sess.relay) sess.observedPlayback = true;
         updatePlayPauseVisual(true);
         chrome.classList.remove("is-quick-pause");
         if (firstStart) resetIdle();
       });
       element.addEventListener("pause", function () {
         if (!active()) return;
-        if (sess.relay && !element.error) sess.relay.wasPlaying = false;
+        if (sess.relay && !element.error) {
+          sess.relay.wasPlaying = false;
+          if (element.readyState >= 2) stopRelayStartupTimer();
+        }
         updatePlayPauseVisual(false);
         showControls(selectedControlIdx);
         clearControlsHideTimer();
@@ -832,14 +860,22 @@
       });
       element.addEventListener("timeupdate", function () {
         if (!active()) return;
+        if (sess.relay && !relayStarted && relayPlaying && !element.paused && !element.seeking
+          && element.readyState >= 2 && element.currentTime >= startPosition + 0.35) {
+          relayStarted = true;
+          sess.observedPlayback = true;
+          stopRelayStartupTimer();
+          resetIdle();
+        }
         confirmPosition();
-        if (element.currentTime > 0) sess.observedPlayback = true;
+        if (!sess.relay && element.currentTime > 0) sess.observedPlayback = true;
         updateTimeBar(element.currentTime || 0, element.duration || sess.durationSec);
       });
       element.addEventListener("seeked", function () {
         if (!active()) return;
-        confirmPosition();
-        sess.observedPlayback = true;
+        if (!relayStarted) startPosition = element.currentTime;
+        confirmPosition(true);
+        if (!sess.relay) sess.observedPlayback = true;
         updateTimeBar(element.currentTime || 0, element.duration || sess.durationSec);
         saveObservedProgress();
       });
@@ -854,7 +890,7 @@
       element.addEventListener("error", function () {
         if (!active()) return;
         if (sess.relay) {
-          recoverRelayPlayback(option, arItem, sess, sess.relay.wasPlaying);
+          recoverRelayPlayback(option, arItem, sess, sess.relay.wasPlaying, !relayStarted);
           return;
         }
         var code = element.error ? element.error.code : "unknown";
@@ -1022,8 +1058,10 @@
         if (!relaySessionActive(sess, request)) return;
         relayRequest = null;
         stage.replaceChildren();
+        relay.attemptAt = Date.now();
         var source = RELAY_ORIGIN + "/relay?id=" + encodeURIComponent(option.relayEpisodeId)
-          + "&ticket=" + encodeURIComponent(relay.ticket) + (refreshUpstream ? "&refresh=1" : "");
+          + "&ticket=" + encodeURIComponent(relay.ticket) + (refreshUpstream ? "&refresh=1" : "")
+          + (relay.variant ? "&variant=1" : "");
         openHtml5VideoPlayback(option, arItem, relay.confirmedSec, source, startPaused);
       }
 
@@ -1045,14 +1083,32 @@
         relay.ticket = value.ticket;
         relay.expiresAt = requestedAt + value.ttlSeconds * 1000;
         relay.refreshesRemaining = value.refreshesRemaining;
+        relay.sourceCount = value.sourceCount === 2 ? 2 : 1;
         play();
       }).catch(failed);
     }
 
-    function recoverRelayPlayback(option, arItem, sess, wasPlaying) {
-      if (!sess.relay.recovered) {
-        sess.relay.recovered = true;
+    function recoverRelayPlayback(option, arItem, sess, wasPlaying, startup) {
+      var relay = sess.relay;
+      if (startup && relay.startupRetries < 1) {
+        relay.startupRetries++;
+        clearOverlayMedia();
+        showLoading("Loading…");
+        // Let the existing Oracle force-refresh cooldown elapse even on an
+        // immediate decode error. Back and episode changes cancel this timer.
+        var delay = Math.max(0, 5000 - (Date.now() - relay.attemptAt));
+        relayRetryTimer = setTimeout(function () {
+          relayRetryTimer = 0;
+          startRelayPlayback(option, arItem, sess, !wasPlaying, true);
+        }, delay);
+      } else if (startup && !relay.variant && relay.sourceCount === 2) {
+        relay.variant = 1;
+        startRelayPlayback(option, arItem, sess, !wasPlaying, false);
+      } else if (!startup && !relay.recovered) {
+        relay.recovered = true;
         startRelayPlayback(option, arItem, sess, !wasPlaying, true);
+      } else if (startup) {
+        relayStatus("Unavailable", "", null);
       } else {
         relayStatus("Playback interrupted", "Playback stopped. Reload resumes from the last confirmed position.",
           { label: "Reload", onClick: function () {
@@ -1395,6 +1451,8 @@
     btnNative.addEventListener("click", function () {
       var s = state.playerSession;
       if (s && s.relay) {
+        s.relay.startupRetries = 0;
+        s.relay.variant = 0;
         startRelayPlayback(s.relay.option, s.item, s, isPlaybackPaused(), true);
         return;
       }
@@ -1502,7 +1560,7 @@
           observedPlayback: false
         };
         if (option.relayEpisodeId) {
-          state.playerSession.relay = { option: option, confirmedSec: resumeSec, recovered: false };
+          state.playerSession.relay = { option: option, confirmedSec: resumeSec, recovered: false, startupRetries: 0, variant: 0 };
           startRelayPlayback(option, arItem, state.playerSession, false, false);
           verifyRelayNeighbors(state.playerSession);
         } else openHtml5VideoPlayback(option, arItem, resumeSec);

@@ -1,5 +1,5 @@
 /**
- * Horizon Watch — Audited Strict-TLS Akwam Resolver & Ticket-Authenticated Range Relay
+ * Horizon Watch — Strict-TLS, Ticket-Authenticated MP4 Range Relay
  * Zero external npm dependencies (Node.js 20+ / 22+ built-ins only).
  *
  * Security & Reliability Controls:
@@ -11,7 +11,7 @@
  * - Strict upstream TLS (rejectUnauthorized: true) with verified intermediate + trusted roots.
  * - Strict redirect validation (no SSRF / open proxy), allowlist-only episodes & hosts.
  * - Issue A fix: Shared in-flight resolve Promise + 5s refresh cooldown (1 resolve per Reload).
- * - Issue B fix: Transparent single-retry on expired Downet URLs (HTTP 403/404/410/500).
+ * - Transparent single retry on a provider's expired media response.
  * - 1 GB RAM & $0 OCI Always Free safeguards: per-IP rate limit, concurrent-stream cap,
  *   daily egress byte cap, zero disk caching, zero secret/ticket/signed-URL logging.
  */
@@ -20,6 +20,10 @@ import https from "node:https";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { catalogKey, createCatalog, mediaSignature, MEDIA_HOST, publicLookup, safeUrl } from "./catalog.mjs";
+import { createPlaybackProvider } from "./playback-provider.mjs";
+import { createMySeedProvider, MYSEED_MEDIA_HEADERS } from "./myseed-provider.mjs";
+import { createApprovedCatalogSources, createCatalogTransport, createUniversalCatalog, openSecondaryCache } from "./universal-catalog.mjs";
+import { createMp4PlusDelivery, createMp4PlusProvider, MP4PLUS_HEADERS, MP4PLUS_MEDIA_HOST } from "./mp4plus-provider.mjs";
 
 export const DEFAULT_ALLOWLIST = {
   "fakhr-el-delta-s01e01": {
@@ -31,8 +35,9 @@ export const DEFAULT_ALLOWLIST = {
   },
 };
 
-const EXPIRED_UPSTREAM_STATUSES = new Set([403, 404, 410, 500]);
+const SOURCE_KEY = /^[a-z0-9_.:-]{1,80}$/i;
 const SESSION_COOKIE = "__Host-horizon_session";
+const secondaryAssetId = id => id === "fakhr-el-delta-s01e01" ? "tv-297621-s1-e1" : id;
 
 function timingSafeStrEqual(a, b) {
   if (!a || !b) return false;
@@ -76,8 +81,8 @@ export function verifyPlaybackTicket(token, secret, expectedEpisodeId, nowSec = 
   }
   if (!payload || typeof payload !== "object") return { ok: false, reason: "invalid_ticket_payload" };
   if (!payload.ep || payload.ep !== expectedEpisodeId) return { ok: false, reason: "ticket_episode_mismatch" };
-  if (!Number.isFinite(payload.exp) || nowSec > payload.exp) return { ok: false, reason: "ticket_expired" };
   if (Number.isFinite(payload.maxExp) && nowSec > payload.maxExp) return { ok: false, reason: "ticket_session_expired" };
+  if (!Number.isFinite(payload.exp) || nowSec > payload.exp) return { ok: false, reason: "ticket_expired", payload };
   if (Number.isFinite(payload.iat) && payload.iat > nowSec + 30) return { ok: false, reason: "ticket_not_yet_valid" };
   return { ok: true, payload };
 }
@@ -156,7 +161,88 @@ export function createHardenedRelay(config = {}) {
     maxSockets: Math.max(16, maxConcurrentStreams * 2),
   });
   const catalog = createCatalog({ agent: strictTlsAgent, ...config.catalog });
-  const knownAsset = id => !!allowlist[id] || (akwamProxyPermitted && !!catalogKey(id));
+  const akwam = createPlaybackProvider({
+    enabled: true, relayPermitted: akwamProxyPermitted, mediaHosts: MEDIA_HOST, resolveSources: catalog.resolveSources,
+  });
+  const myseed = createMySeedProvider({
+    enabled: process.env.MYSEED_ENABLED === "true",
+    relayPermitted: process.env.MYSEED_PROXY_PERMITTED === "true",
+    hosts: (process.env.MYSEED_MEDIA_HOSTS || "").split(",").filter(Boolean),
+    descriptorFile: process.env.MYSEED_DESCRIPTOR_FILE,
+    ...config.myseed, agent: strictTlsAgent,
+  });
+  const secondaryConfig = {
+    enabled: process.env.MP4PLUS_ENABLED === "true",
+    relayPermitted: process.env.MP4PLUS_PROXY_PERMITTED === "true",
+    catalogs: (process.env.MP4PLUS_CATALOGS || "").split(",").map(id => id.trim()).filter(Boolean),
+    cachePath: process.env.MP4PLUS_CACHE_PATH,
+    ...config.mp4plus,
+  };
+  let secondaryCatalog;
+  if (secondaryConfig.enabled === true && secondaryConfig.relayPermitted === true) {
+    const names = [...new Set(secondaryConfig.catalogs)];
+    if (!names.length || !secondaryConfig.cachePath) throw new Error("mp4plus_configuration_required");
+    const get = createCatalogTransport({ agent: strictTlsAgent, request: secondaryConfig.request });
+    const sources = createApprovedCatalogSources(names, get);
+    secondaryCatalog = createUniversalCatalog({ sources, readIdentity: catalog.readIdentity, verify: createMp4PlusDelivery(get),
+      database: openSecondaryCache(secondaryConfig.cachePath) });
+  }
+  const mp4plus = createMp4PlusProvider(secondaryCatalog);
+  const providers = new Map([
+    ["akwam", {
+      enabled: akwam.enabled,
+      supports: id => !!allowlist[id] || !!catalogKey(id),
+      mediaHosts: id => allowlist[id]?.mediaHostPattern || MEDIA_HOST,
+      headers: { "User-Agent": "Mozilla/5.0", "Accept-Encoding": "identity" },
+      recoverOn: new Set([403, 404, 410, 500]),
+      expiryMarginMs: 60_000,
+      async resolve(id, force) {
+        const entry = allowlist[id];
+        let result;
+        if (entry) {
+          const html = await fetchWatchHtmlSafely(entry.watchUrl, entry.watchHostPattern);
+          const url = html.match(/<source\b[^>]*\bsrc\s*=\s*["'](https:\/\/[^"']+\.mp4)["']/i)?.[1];
+          if (!url) throw new Error("no_mp4_source_found");
+          result = { work: null, sources: [{ url, key: "legacy", verified: true }] };
+        } else {
+          result = await akwam.getPlaybackSource(id, { force });
+        }
+        const expires = new URL(result.sources[0].url).pathname.split("/")
+          .find(seg => /^\d{10}$/.test(seg) && Number(seg) > 1_700_000_000);
+        return { ...result, expiresAtMs: expires ? Number(expires) * 1000 : null };
+      },
+    }],
+    ["mp4plus", {
+      enabled: mp4plus.enabled,
+      supports: id => !!catalogKey(secondaryAssetId(id)),
+      mediaHosts: () => MP4PLUS_MEDIA_HOST,
+      headers: MP4PLUS_HEADERS,
+      recoverOn: new Set([410]),
+      expiryMarginMs: 0,
+      verifyEpisodePrefix: true,
+      strictRange: true,
+      episodeRenditions: 2,
+      forceTicketRenewal: true,
+      cacheTtlMs: 90_000,
+      resolve: (id, force) => mp4plus.getPlaybackSource(secondaryAssetId(id), { force }),
+    }],
+    ["myseed", {
+      enabled: myseed.enabled,
+      supports: id => !!catalogKey(id),
+      mediaHosts: () => myseed.mediaHosts,
+      headers: MYSEED_MEDIA_HEADERS,
+      recoverOn: new Set([410]),
+      expiryMarginMs: 0,
+      refreshOnExpiry: true,
+      forceTicketRenewal: true,
+      verifyEpisodePrefix: true,
+      async resolve(id, force) {
+        const result = await myseed.getPlaybackSource(id, { force });
+        return { ...result, expiresAtMs: result.sources[0].expiresAtMs };
+      },
+    }],
+  ]);
+  const knownAsset = id => [...providers.values()].some(provider => provider.enabled && provider.supports(id));
 
   const descriptorCache = new Map();
   const inFlightResolves = new Map();
@@ -312,85 +398,103 @@ export function createHardenedRelay(config = {}) {
     throw Object.assign(new Error("too_many_redirects"), { httpStatus: 502 });
   }
 
-  async function resolveEpisode(id, { forceRefresh = false, bypassCooldown = false } = {}) {
-    const entry = allowlist[id];
-    if (!knownAsset(id)) throw Object.assign(new Error("episode_not_allowlisted"), { httpStatus: 403 });
-
+  async function resolveAsset(providerId, id, { force = false } = {}) {
+    const provider = providers.get(providerId);
+    if (!provider?.enabled || !provider.supports(id)) throw new Error("provider_unavailable");
+    const cacheKey = providerId + ":" + id;
     const now = Date.now();
-    const cached = descriptorCache.get(id);
-    const notNearExpiry = cached && (!cached.expiresAtMs || now + 60_000 < cached.expiresAtMs);
-
-    if (cached && notNearExpiry) {
-      if (!forceRefresh && now < cached.cacheUntilMs) return cached;
-      if (forceRefresh && !bypassCooldown && now - cached.resolvedAtMs < refreshCooldownMs) {
+    const cached = descriptorCache.get(cacheKey);
+    const nearExpiry = cached?.expiresAtMs && now + provider.expiryMarginMs >= cached.expiresAtMs;
+    if (cached && !nearExpiry) {
+      if (!force && now < cached.cacheUntilMs) return cached;
+      if (force && now - cached.resolvedAtMs < refreshCooldownMs) {
         stats.cooldownReuses += 1;
         return cached;
       }
     }
-
-    if (inFlightResolves.has(id)) {
+    if (inFlightResolves.has(cacheKey)) {
       stats.dedupedResolveHits += 1;
-      return inFlightResolves.get(id);
+      return inFlightResolves.get(cacheKey);
     }
-
     const promise = (async () => {
-      let source, resolved;
-      if (entry) {
-        const html = await fetchWatchHtmlSafely(entry.watchUrl, entry.watchHostPattern);
-        source = html.match(/<source\b[^>]*\bsrc\s*=\s*["'](https:\/\/[^"']+\.mp4)["']/i)?.[1];
-        if (!source) throw Object.assign(new Error("no_mp4_source_found"), { httpStatus: 502 });
-      } else {
-        resolved = await catalog.resolveSources(id, { force: forceRefresh });
-        source = resolved.sources[0].url;
-      }
-      const parsed = safeUrl(source, entry?.mediaHostPattern || MEDIA_HOST);
-
-      let expiresAtMs = null;
-      for (const seg of parsed.pathname.split("/")) {
-        if (/^\d{10}$/.test(seg) && Number(seg) > 1_700_000_000) {
-          expiresAtMs = Number(seg) * 1000;
-          break;
-        }
-      }
-
+      const resolved = await provider.resolve(id, force || !!(nearExpiry && provider.refreshOnExpiry));
+      const sources = resolved.sources.map(source => ({
+        ...source, url: safeUrl(source.url, provider.mediaHosts(id)).href,
+      }));
       const resolvedAtMs = Date.now();
       stats.resolveCount += 1;
-      const record = {
-        url: parsed.toString(),
-        host: parsed.hostname,
-        work: resolved?.work,
-        sources: resolved?.sources,
-        expiresAtMs,
-        resolvedAtMs,
-        cacheUntilMs: resolvedAtMs + cacheTtlMs,
-      };
-      if (descriptorCache.size >= 256 && !descriptorCache.has(id)) {
+      const record = { ...resolved, providerId, sources, resolvedAtMs,
+        cacheUntilMs: resolvedAtMs + (provider.cacheTtlMs ?? cacheTtlMs) };
+      if (descriptorCache.size >= 256 && !descriptorCache.has(cacheKey)) {
         descriptorCache.delete(descriptorCache.keys().next().value);
       }
-      descriptorCache.set(id, record);
+      descriptorCache.set(cacheKey, record);
       return record;
     })();
-
-    inFlightResolves.set(id, promise);
-    try {
-      return await promise;
-    } finally {
-      inFlightResolves.delete(id);
-    }
+    inFlightResolves.set(cacheKey, promise);
+    try { return await promise; }
+    finally { inFlightResolves.delete(cacheKey); }
   }
 
-  function streamUpstream({ clientReq, clientRes, id, targetUrl, range, allowRetry, work, sourceKey }) {
+  function dropDescriptor(record, id) {
+    const key = record.providerId + ":" + id;
+    if (descriptorCache.get(key) === record) descriptorCache.delete(key);
+  }
+
+  async function chooseAsset(id) {
+    for (const providerId of providers.keys()) {
+      try { return await resolveAsset(providerId, id); }
+      catch { /* The next permitted provider must independently match the same ID. */ }
+    }
+    throw new Error("asset_unavailable");
+  }
+
+  function matchingSource(record, payload, index) {
+    if (payload.work && payload.work !== record.work) return null;
+    const key = payload.sources?.[index];
+    const source = key ? record.sources.find(item => item.key === key) : index === 0 ? record.sources[0] : null;
+    return source && (payload.work || source.verified) ? source : null;
+  }
+
+  function ticketPolicy(payload, id) {
+    if (payload.provider === undefined) return providers.get("akwam").enabled ? "akwam" : null;
+    const provider = providers.get(payload.provider);
+    if (!provider?.enabled || !provider.supports(id)
+      || !Number.isSafeInteger(payload.refreshLimit) || payload.refreshLimit < 0
+      || !Number.isSafeInteger(payload.refreshes) || payload.refreshes < 0 || payload.refreshes > payload.refreshLimit
+      || !Number.isSafeInteger(payload.iat) || !Number.isSafeInteger(payload.exp) || !Number.isSafeInteger(payload.maxExp)
+      || payload.exp < payload.iat || payload.exp > payload.maxExp
+      || payload.recovery !== 1 || !Array.isArray(payload.sources) || !payload.sources.length
+      || payload.sources.length > (id.startsWith("movie-") ? 2 : (provider.episodeRenditions ?? 1))
+      || !payload.sources.every(key => typeof key === "string" && SOURCE_KEY.test(key))
+      || new Set(payload.sources).size !== payload.sources.length
+      || (payload.work !== null && (typeof payload.work !== "string" || !SOURCE_KEY.test(payload.work)))
+      || (payload.provider === "myseed" && (!payload.work
+        || (payload.mediaExpiresAt !== undefined && !Number.isSafeInteger(payload.mediaExpiresAt))))
+      || (payload.provider === "mp4plus" && !/^mp4plus:[a-z0-9]{10,16}$/i.test(payload.work || ""))) return null;
+    return payload.provider;
+  }
+
+  function streamUpstream({ clientReq, clientRes, id, targetUrl, totalBytes, range, allowRetry, record, payload, index = 0 }) {
     if (clientRes.destroyed) return;
+    if (stats.activeStreams >= maxConcurrentStreams || dailyBytesStreamed >= dailyEgressCapBytes) {
+      const error = stats.activeStreams >= maxConcurrentStreams ? "max_concurrent_streams_reached" : "daily_egress_cap_reached";
+      return sendJson(clientReq, clientRes, 503, { ok: false, error });
+    }
     const movie = id.startsWith("movie-");
+    const provider = providers.get(record.providerId);
+    if (provider.refreshOnExpiry && record.expiresAtMs != null && record.expiresAtMs <= Date.now()) {
+      return sendJson(clientReq, clientRes, 502, { ok: false, error: "media_unavailable" });
+    }
     let parsedTarget;
     try {
       parsedTarget = enableTestFaults && id === "test-unreachable"
-        ? new URL(targetUrl) : safeUrl(targetUrl, allowlist[id]?.mediaHostPattern || MEDIA_HOST);
+        ? new URL(targetUrl) : safeUrl(targetUrl, provider.mediaHosts(id));
     } catch {
       return sendJson(clientReq, clientRes, 502, { ok: false, error: "invalid_upstream_url" });
     }
 
-    const upHeaders = { "User-Agent": "Mozilla/5.0", "Accept-Encoding": "identity" };
+    const upHeaders = { ...provider.headers };
     if (range) upHeaders.Range = range;
 
     stats.activeStreams += 1;
@@ -418,28 +522,29 @@ export function createHardenedRelay(config = {}) {
         }
         const status = upstreamRes.statusCode || 502;
 
-        // Issue B: Transparent single retry on expired Downet URL (403/404/410/500)
-        if (allowRetry && !clientAborted && EXPIRED_UPSTREAM_STATUSES.has(status) && knownAsset(id)) {
-          upstreamRes.resume();
+        // Retry only a provider-defined expiry status and keep the signed source identity.
+        if (allowRetry && !clientAborted && provider.recoverOn.has(status)) {
+          upstreamRes.destroy();
           finishStream();
-          descriptorCache.delete(id);
+          dropDescriptor(record, id);
           stats.expiredAutoRetries += 1;
           try {
-            const fresh = await resolveEpisode(id, { forceRefresh: true, bypassCooldown: true });
+            const fresh = await resolveAsset(record.providerId, id, { force: true });
             if (clientAborted || clientRes.writableEnded || clientRes.destroyed) return;
-            const source = fresh.sources?.find(candidate => candidate.key === sourceKey);
-            if (work && fresh.work !== work || sourceKey && !source) {
+            const source = matchingSource(fresh, payload, index);
+            if (!source) {
               return sendJson(clientReq, clientRes, 404, { ok: false, error: "media_unavailable" });
             }
             return streamUpstream({
               clientReq,
               clientRes,
               id,
-              targetUrl: source?.url || fresh.url,
-              range, work, sourceKey,
+              targetUrl: source.url, totalBytes: source.totalBytes,
+              range, record: fresh, payload, index,
               allowRetry: false,
             });
           } catch (err) {
+            if (clientRes.destroyed || clientRes.writableEnded) return;
             return sendJson(clientReq, clientRes, err.httpStatus || 502, {
               ok: false,
               error: "expired_recovery_failed",
@@ -458,7 +563,9 @@ export function createHardenedRelay(config = {}) {
         if (status !== 416 && ((mime !== "video/mp4" && mime !== "application/octet-stream")
           || upstreamRes.headers["content-encoding"]
           || status === 206 && !validMediaRange(range, upstreamRes.headers)
-          || status === 200 && !startsAtZero)) {
+          || status === 200 && !startsAtZero
+          || provider.strictRange && (range ? status !== 206 || Number(String(upstreamRes.headers["content-range"]).split("/")[1]) !== totalBytes
+            : status !== 200 || Number(upstreamRes.headers["content-length"]) !== totalBytes))) {
           upstreamRes.destroy();
           finishStream();
           return sendJson(clientReq, clientRes, 502, { ok: false, error: "invalid_media_response" });
@@ -504,7 +611,7 @@ export function createHardenedRelay(config = {}) {
         // Check the same representation again on movie requests beginning at
         // byte zero. Later ranges use the URL and work scoped by the ticket.
         const fromBeginning = status === 200 || /^bytes 0-/.test(upstreamRes.headers["content-range"] || "");
-        if (!movie || !fromBeginning) return deliver();
+        if ((!movie && !provider.verifyEpisodePrefix) || !fromBeginning) return deliver();
         upstreamRes.once("readable", function inspectPrefix() {
           const prefix = upstreamRes.read(12);
           if (prefix === null && !upstreamRes.readableEnded) {
@@ -587,9 +694,9 @@ export function createHardenedRelay(config = {}) {
         return sendJson(req, res, 401, { ok: false, error: "unauthorized_issuer" });
       }
       const id = reqUrl.searchParams.get("id") || "";
-      if (!akwamProxyPermitted || !knownAsset(id)) return sendJson(req, res, 404, { available: false });
+      if (!knownAsset(id)) return sendJson(req, res, 404, { available: false });
       try {
-        if (!allowlist[id]) await resolveEpisode(id);
+        if (!allowlist[id] || !akwam.enabled || mp4plus.enabled) await chooseAsset(id);
         return sendJson(req, res, 200, { available: true, episodeId: id });
       } catch {
         return sendJson(req, res, 404, { available: false });
@@ -617,51 +724,60 @@ export function createHardenedRelay(config = {}) {
       const nowSec = Math.floor(Date.now() / 1000);
       let refreshes = 0;
       let maxExp = nowSec + ticketMaxSessionSec;
-      let priorWork;
+      let previous;
+      let providerId;
+      let refreshLimit = maxTicketRefreshes;
 
-      // Optional bounded refresh from a prior ticket (prevents indefinite refresh chains)
       const prevTicket = reqUrl.searchParams.get("prev");
       if (prevTicket) {
-        const prevCheck = verifyPlaybackTicket(prevTicket, ticketSigningSecret, id, nowSec);
-        // Allow refresh even if exp recently lapsed, as long as signature & maxExp are valid
-        if (!prevCheck.ok && prevCheck.reason !== "ticket_expired") {
-          return sendJson(req, res, 401, { ok: false, error: prevCheck.reason });
+        const check = verifyPlaybackTicket(prevTicket, ticketSigningSecret, id, nowSec);
+        if (!check.ok && check.reason !== "ticket_expired") {
+          return sendJson(req, res, 401, { ok: false, error: check.reason });
         }
-        let prevPayload;
-        try {
-          prevPayload = JSON.parse(b64urlDecode(prevTicket.split(".")[0]));
-        } catch {
-          return sendJson(req, res, 401, { ok: false, error: "invalid_prev_ticket" });
-        }
-        if (prevPayload.sub !== auth.subject || prevPayload.ep !== id) {
+        previous = check.payload;
+        if (previous.sub !== auth.subject) {
           return sendJson(req, res, 403, { ok: false, error: "ticket_subject_or_episode_mismatch" });
         }
-        priorWork = prevPayload.work;
-        refreshes = Number(prevPayload.refreshes || 0) + 1;
-        maxExp = Number(prevPayload.maxExp || maxExp);
-        if (refreshes > maxTicketRefreshes || nowSec >= maxExp) {
+        providerId = ticketPolicy(previous, id);
+        if (!providerId) return sendJson(req, res, 403, { ok: false, error: "ticket_provider_unavailable" });
+        refreshLimit = Math.min(refreshLimit, previous.refreshLimit ?? refreshLimit);
+        refreshes = Number(previous.refreshes || 0) + 1;
+        maxExp = Math.min(maxExp, Number(previous.maxExp || maxExp));
+        if (refreshes > refreshLimit || nowSec >= maxExp) {
           return sendJson(req, res, 403, { ok: false, error: "ticket_refresh_limit_exceeded" });
         }
       }
 
       let record;
-      if (!allowlist[id]) {
-        try { record = await resolveEpisode(id); }
-        catch { return sendJson(req, res, 404, { ok: false, error: "asset_unavailable" }); }
-        if (priorWork && record.work !== priorWork) {
-          return sendJson(req, res, 403, { ok: false, error: "ticket_work_mismatch" });
+      try {
+        if (allowlist[id] && (providerId === "akwam" || !providerId && akwam.enabled && !mp4plus.enabled)) {
+          record = { providerId: "akwam", work: null, sources: [{ key: "legacy" }] };
+        } else {
+          record = providerId ? await resolveAsset(providerId, id, { force: providers.get(providerId).forceTicketRenewal }) : await chooseAsset(id);
         }
+      } catch {
+        return sendJson(req, res, 404, { ok: false, error: "asset_unavailable" });
       }
+      if (previous?.work && record.work !== previous.work
+        || previous?.sources?.some(key => !record.sources.some(source => source.key === key))) {
+        return sendJson(req, res, 403, { ok: false, error: "ticket_work_mismatch" });
+      }
+
       const exp = Math.min(nowSec + ticketTtlSec, maxExp);
       const payload = {
         ep: id,
-        ...(record?.work ? { work: record.work, sources: record.sources.map(source => source.key) } : {}),
+        provider: record.providerId,
+        work: record.work,
+        sources: previous?.sources ?? record.sources.map(source => source.key),
+        ...(record.providerId === "myseed" && record.expiresAtMs != null ? { mediaExpiresAt: record.expiresAtMs } : {}),
         sub: auth.subject,
         jti: crypto.randomBytes(8).toString("hex"),
         iat: nowSec,
         exp,
         maxExp,
         refreshes,
+        refreshLimit,
+        recovery: 1,
       };
       const ticket = signPlaybackTicket(payload, ticketSigningSecret);
       stats.ticketsIssued += 1;
@@ -672,8 +788,8 @@ export function createHardenedRelay(config = {}) {
         ticket,
         expiresAt: new Date(exp * 1000).toISOString(),
         ttlSeconds: Math.max(0, exp - nowSec),
-        refreshesRemaining: Math.max(0, maxTicketRefreshes - refreshes),
-        ...(record?.work ? { sourceCount: record.sources.length } : {}),
+        refreshesRemaining: Math.max(0, refreshLimit - refreshes),
+        ...(record.work && (id.startsWith("movie-") || record.providerId === "mp4plus") ? { sourceCount: payload.sources.length } : {}),
         relayPath: `/relay?id=${encodeURIComponent(id)}&ticket=${encodeURIComponent(ticket)}`,
       });
     }
@@ -690,7 +806,7 @@ export function createHardenedRelay(config = {}) {
     }
 
     if (reqUrl.pathname === "/relay" && (req.method === "GET" || req.method === "HEAD")) {
-      if (!akwamProxyPermitted) {
+      if (!akwam.enabled && !mp4plus.enabled && !myseed.enabled) {
         return sendJson(req, res, 403, { ok: false, error: "proxy_delivery_not_permitted" });
       }
       if (dailyBytesStreamed >= dailyEgressCapBytes) {
@@ -721,34 +837,29 @@ export function createHardenedRelay(config = {}) {
           id,
           targetUrl: "https://127.0.0.1:1/unreachable.mp4",
           range,
-          allowRetry: false,
+          allowRetry: false, record: { providerId: "akwam" },
         });
       }
 
-      if (!knownAsset(id)) {
+      const providerId = ticketPolicy(tCheck.payload, id);
+      if (!providerId || !providers.get(providerId).supports(id)) {
         return sendJson(req, res, 403, { ok: false, error: "episode_not_allowlisted" });
       }
 
-      const forceRefresh = reqUrl.searchParams.get("refresh") === "1";
+      const force = reqUrl.searchParams.get("refresh") === "1";
       const variant = reqUrl.searchParams.get("variant");
       const work = tCheck.payload.work;
-      if (variant !== null && (variant !== "1" || !work || !id.startsWith("movie-"))) {
+      if (variant !== null && (variant !== "1" || !work || (!id.startsWith("movie-") && providerId !== "mp4plus"))) {
         return sendJson(req, res, 404, { ok: false, error: "media_unavailable" });
       }
       try {
-        const rec = await resolveEpisode(id, { forceRefresh });
-        const sourceKey = tCheck.payload.sources?.[Number(variant)];
-        const source = sourceKey ? rec.sources?.find(candidate => candidate.key === sourceKey) : rec.sources?.[0];
-        if (work && work !== rec.work || sourceKey && !source || variant && !sourceKey || !work && source && !source.verified) {
-          return sendJson(req, res, 404, { ok: false, error: "media_unavailable" });
-        }
+        const record = await resolveAsset(providerId, id, { force });
+        const index = variant === "1" ? 1 : 0;
+        const source = matchingSource(record, tCheck.payload, index);
+        if (!source) return sendJson(req, res, 404, { ok: false, error: "media_unavailable" });
         return streamUpstream({
-          clientReq: req,
-          clientRes: res,
-          id,
-          targetUrl: source?.url || rec.url,
-          range, work, sourceKey,
-          allowRetry: true,
+          clientReq: req, clientRes: res, id, targetUrl: source.url, totalBytes: source.totalBytes, range,
+          record, payload: tCheck.payload, index, allowRetry: tCheck.payload.recovery !== 0,
         });
       } catch (err) {
         return sendJson(req, res, err.httpStatus || 502, { ok: false, error: "media_unavailable" });
@@ -761,6 +872,7 @@ export function createHardenedRelay(config = {}) {
   server.on("close", () => {
     clearInterval(memTimer);
     clearInterval(cleanupTimer);
+    secondaryCatalog?.close();
     strictTlsAgent.destroy();
   });
 

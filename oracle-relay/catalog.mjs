@@ -61,7 +61,7 @@ export function catalogKey(id) {
   return null;
 }
 
-function textContent(value) {
+export function textContent(value) {
   return value.replace(/<[^>]*>/g, " ").replace(/&(?:amp|nbsp|quot|apos|#(?:[0-9]{1,7}|x[0-9a-f]{1,6}));/gi, entity => {
     const named = { "&amp;": "&", "&nbsp;": " ", "&quot;": '"', "&apos;": "'" };
     if (named[entity.toLowerCase()]) return named[entity.toLowerCase()];
@@ -71,7 +71,7 @@ function textContent(value) {
   }).trim();
 }
 
-function normalizedAlias(value) {
+export function normalizedAlias(value) {
   return value.normalize("NFKC").toLowerCase()
     .replace(/[أإآٱ]/g, "ا").replace(/[ىی]/g, "ي").replace(/ک/g, "ك")
     .replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) & 15))
@@ -241,13 +241,14 @@ function addShortEpisodes(candidates, html, root, title, episode) {
   }
 }
 
-export function requestUpstream(url, { agent, range, signal, json = false, allowPrefix = false } = {}) {
+export function requestUpstream(url, { agent, range, signal, json = false, allowPrefix = false, headers, maxBytes } = {}) {
   const lastByte = /^bytes=0-(\d{1,3})$/.exec(range || "")?.[1];
-  const limit = range ? Math.min(Number(lastByte ?? -1) + 1, FORMAT_PROBE_BYTES) : MAX_HTML;
+  const limit = maxBytes ?? (range ? Math.min(Number(lastByte ?? -1) + 1, FORMAT_PROBE_BYTES) : MAX_HTML);
   return new Promise((resolve, reject) => {
     const req = https.request(url, {
       agent, lookup: publicLookup, signal, headers: {
         "User-Agent": "Horizon Watch", Accept: range ? (limit > MP4_PROBE_BYTES ? "*/*" : "video/mp4") : json ? "application/json" : "text/html",
+        ...headers,
         ...(range ? { Range: range } : {}),
       },
     }, res => {
@@ -381,7 +382,9 @@ export function createCatalog({ roots = TITLE_ROOTS, agent, request = requestUps
         runtime: arabic.runtime, imdbId: arabic.imdbId };
     }
     return { aliases, year, season: key.season, seasonTitle: seasonInfo?.name,
-      episodes: season?.episodes?.map(row => row.number) };
+      episodes: season?.episodes?.map(row => row.number),
+      seasonCount: arabic.seasons?.filter(row => row.number > 0).length,
+      runtime: season?.episodes?.find(row => row.number === Number(key.episode))?.runtime };
   }
 
   function lookupRoot(key, signal) {
@@ -573,7 +576,7 @@ export function createCatalog({ roots = TITLE_ROOTS, agent, request = requestUps
       const movie = !!work;
       const candidates = [];
       const seen = new Set();
-      const found = () => ({ work, sources: candidates.sort((a, b) => Number(b.verified) - Number(a.verified)) });
+      const found = () => ({ assetId: id, work, sources: candidates.sort((a, b) => Number(b.verified) - Number(a.verified)) });
       let networkError;
       for (const watch of matches) {
         let html;
@@ -620,7 +623,7 @@ export function createCatalog({ roots = TITLE_ROOTS, agent, request = requestUps
           const verified = rangeValid && probe.bytes.readUInt32BE(0) <= size;
           const bestEffort = movie && probe.status === 200 && !probe.headers["content-encoding"];
           if (!verified && !bestEffort) continue;
-          candidates.push({ url: url.href, verified, key: watch.pathname.split("/")[2] + ":" + slot });
+          candidates.push({ url: url.href, format: "mp4", verified, key: watch.pathname.split("/")[2] + ":" + slot });
           if (!movie || candidates.length === 2) return found();
         }
         if (!movie && disallowedSource && sources.length === 1) throw new Error("disallowed_url");
@@ -636,5 +639,5 @@ export function createCatalog({ roots = TITLE_ROOTS, agent, request = requestUps
     return task;
   }
 
-  return { has, resolveSources, resolve: async (id, options) => (await resolveSources(id, options)).sources[0].url };
+  return { has, readIdentity, resolveSources, resolve: async (id, options) => (await resolveSources(id, options)).sources[0].url };
 }

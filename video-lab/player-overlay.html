@@ -7,19 +7,21 @@
     <meta name="color-scheme" content="dark" />
     <title>Horizon Video Lab · Player Overlay</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="player-overlay.css?v=vl-2" />
+    <link rel="stylesheet" href="player-overlay.css?v=vl-5" />
     <script src="focus-lease.js" defer></script>
     <script src="player-bridge-client.js" defer></script>
-    <script src="episode-catalog.js" defer></script>
+    <script src="episode-catalog.js?v=vl-2" defer></script>
     <script src="playback-providers.js?v=vl-2" defer></script>
     <script src="player-diagnostics.js" defer></script>
     <script src="independent-subtitles.js" defer></script>
-    <script src="player-overlay.js?v=vl-2" defer></script>
+    <script src="player-overlay.js?v=vl-5" defer></script>
   </head>
   <body>
     <main id="player-shell" class="player-shell">
       <iframe id="player-frame" title="YapGrid video player" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen
         referrerpolicy="no-referrer" tabindex="-1"></iframe>
+      <div id="control-mask-top" class="control-mask control-mask-top" aria-hidden="true"></div>
+      <div id="control-mask-bottom" class="control-mask control-mask-bottom" aria-hidden="true"></div>
       <div class="horizon-caption" aria-live="off"><span id="horizon-caption-text" hidden></span></div>
       <p id="player-loading" class="player-loading" role="status" hidden></p>
       <button id="remote-capture" type="button" tabindex="0" aria-label="Horizon video remote control"></button>

@@ -11,6 +11,17 @@
   };
   var PREVIEW_ORIGIN = "https://horizon-video-lab-preview.ali-al-anbari.workers.dev";
   var CONTROL_IDS = ["rewind", "play-pause", "forward", "previous-episode", "subtitles", "episodes", "next-episode", "manual-end", "provider-choice", "unload-provider", "diagnostics-open", "recover-provider", "experiment-play", "experiment-pause", "experiment-back", "experiment-forward", "experiment-volume", "experiment-unmute", "experiment-focus", "experiment-skip", "watch-exit", "watch-fullscreen", "audio-language", "vidzen-server"];
+  var LEGACY_MASK_SIZE_KEY = "horizon-video-lab-mask-size-v1";
+  var CONTROL_SHADING_PRESETS = {
+    off: { top: 0, bottom: 0 },
+    minimal: { top: 5, bottom: 5 },
+    light: { top: 8, bottom: 8 },
+    subtle: { top: 10, bottom: 10 },
+    medium: { top: 12, bottom: 15 },
+    standard: { top: 15, bottom: 20 },
+    strong: { top: 20, bottom: 25 },
+    maximum: { top: 25, bottom: 35 },
+  };
   var COMMANDS = { rewind: "seek_backward", "play-pause": "pause_toggle", forward: "seek_forward" };
   var IDLE_MS = 5000;
   // A watchdog for a future acknowledged adapter, not a delay before sending.
@@ -150,6 +161,14 @@
     var PLAYER_PROGRESS_KEY = "horizon-video-lab-progress-v1";
     var playerProgressStorage = options && options.progressStorage;
     try { if (!playerProgressStorage) playerProgressStorage = root.localStorage; } catch (_error) { playerProgressStorage = null; }
+    // Retire the temporary Video Lab mask-size key so Watch Settings stays authoritative.
+    try { if (playerProgressStorage && typeof playerProgressStorage.removeItem === "function") playerProgressStorage.removeItem(LEGACY_MASK_SIZE_KEY); } catch (_error) {}
+    var activeControlShading = route.shading && CONTROL_SHADING_PRESETS[route.shading] ? route.shading : "standard";
+    var shadingHeights = CONTROL_SHADING_PRESETS[activeControlShading];
+    if (playerShell && playerShell.style && typeof playerShell.style.setProperty === "function") {
+      playerShell.style.setProperty("--mask-top-height", shadingHeights.top + "vh");
+      playerShell.style.setProperty("--mask-bottom-height", shadingHeights.bottom + "vh");
+    }
     var initialSavedProgress = route.startOver ? null : route.resumePosition !== null && route.resumeDuration !== null
       && route.resumePosition > 0 && route.resumePosition <= route.resumeDuration + 2
       ? { position: Math.min(route.resumePosition, route.resumeDuration), duration: route.resumeDuration,
@@ -1119,6 +1138,7 @@
       state = STATES.PLAYBACK_HIDDEN;
       setOverlayVisible(false);
       overlay.classList.remove("is-quick-pause");
+      playerShell.classList.remove("is-quick-pause");
       get("command-status").textContent = "";
       get("command-status").classList.remove("is-seek-help");
       get("seek-preview").hidden = true;
@@ -1929,7 +1949,7 @@
       var trailItems = trail.split(",");
       if (trailItems.length > 16) trail = [trailItems[0]].concat(trailItems.slice(-15)).join(",");
       var url = appendHandoff(catalog.pageUrl(target, subtitleMode, manualEndEnabled, null,
-        route.fromSearch, route.showTitle, route.tvdbId, provider));
+        route.fromSearch, route.showTitle, route.tvdbId, provider, route.shading));
       transitionTo(url ? url + "&episodeTrail=" + encodeURIComponent(trail) : null);
     }
     function appendHandoff(url) {
@@ -2328,6 +2348,7 @@
         else if (key === "OK" && !event.repeat && (transportMode() !== "unsupported")) {
           if (provider !== providers.VIDBOLT) pauseTrace = { inputAt: now(), hidden: true };
           overlay.classList.add("is-quick-pause");
+          playerShell.classList.add("is-quick-pause");
           showControls();
           activateControl();
         } else if (!event.repeat || key.indexOf("Arrow") === 0) showControls();
@@ -2420,7 +2441,9 @@
       if (diagnosticsTimer !== null) { clock.clearTimeout(diagnosticsTimer); diagnosticsTimer = null; }
       clearBoltWatchdog();
       clearBoltControlTimer();
+      setOverlayVisible(false);
       overlay.classList.remove("is-quick-pause");
+      playerShell.classList.remove("is-quick-pause");
       episodeLookup += 1;
       clearIdle();
       clearConnectionTimer();
@@ -2579,7 +2602,7 @@
       get("vidbolt-native-focus").hidden = desktopWatch || provider !== providers.VIDBOLT;
       get("vidlink-focus-default").hidden = provider !== providers.VIDLINK || vidLinkMode === "jwOn";
       overlay.classList.add("is-diagnostics");
-      controls.forEach(function (button) { button.tabIndex = -1; });
+      controls.forEach(function (button) { if (button) button.tabIndex = -1; });
       diagnosticButtons.forEach(function (button, index) {
         button.tabIndex = index === 0 || (provider === providers.CINESRC && index < 5)
           || (provider === providers.VIDFAST && index >= 5 && index <= 6)

@@ -51,3 +51,6 @@ controller/pico2w/state.json
 controller/pico2w/state.json.tmp
 controller/pico2w/*.der
 controller/pico2w/*.crt
+
+# Generated Playwright screenshots
+/artifacts/cinematic-control-masking/

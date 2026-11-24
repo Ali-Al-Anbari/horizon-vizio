@@ -271,6 +271,7 @@
     // E. Free playback availability for the current Details selection.
     var providersMod = root.HorizonArabicProviders;
     var relayEnabled = false;
+    var relayFlagRetryable = false;
     var relayAvailability = null;
     var relayChecks = new Map();
 
@@ -280,13 +281,37 @@
       return isArabic && root.HorizonWatchI18n ? root.HorizonWatchI18n.ar(label) : label;
     }
 
+    function relayAbortController() {
+      return typeof root.AbortController === "function" ? new root.AbortController() : { abort: function () {} };
+    }
+
     function readAvailability(path) {
-      var controller = new AbortController();
-      var timer = setTimeout(function () { controller.abort(); }, 9000);
-      return root.fetch(path, { cache: "no-store", credentials: "omit", redirect: "error", signal: controller.signal })
-        .then(function (response) { return response.ok ? response.json() : null; })
-        .catch(function () { return null; })
-        .then(function (reply) { clearTimeout(timer); return reply; });
+      var controller = relayAbortController();
+      return new Promise(function (resolve) {
+        var timer = setTimeout(function () { resolve(null); controller.abort(); }, 9000);
+        function finish(reply) { clearTimeout(timer); resolve(reply); }
+        Promise.resolve().then(function () {
+          var opts = { cache: "no-store", credentials: "omit", redirect: "error" };
+          if (controller && controller.signal) opts.signal = controller.signal;
+          return root.fetch(path, opts);
+        }).then(function (response) { return response.ok ? response.json() : null; })
+          .then(finish, function () { finish(null); });
+      });
+    }
+
+    function fetchRelayFlag() {
+      if (!providersMod || typeof root.fetch !== "function") return null;
+      if (relayAvailability) return relayAvailability;
+      relayAvailability = readAvailability("/api/arabic/relay-availability")
+        .then(function (status) { return status === null ? readAvailability("/api/arabic/relay-availability") : status; })
+        .then(function (status) {
+          relayEnabled = !!status && status.enabled === true;
+          relayFlagRetryable = status === null;
+          relayAvailability = null;
+          decorateDetails();
+          return relayEnabled;
+        });
+      return relayAvailability;
     }
 
     function prepareRelayQuery(query) {
@@ -298,18 +323,30 @@
         return current.pending || Promise.resolve(current.available);
       }
       if (relayChecks.size >= 96) relayChecks.delete(relayChecks.keys().next().value);
-      var entry = { until: 0, available: false };
+      var entry = { until: 0, available: false, retryable: false };
       relayChecks.set(id, entry);
-      entry.pending = readAvailability("/api/arabic/relay-catalog?id=" + encodeURIComponent(id))
+      var path = "/api/arabic/relay-catalog?id=" + encodeURIComponent(id);
+      function lookup() { return readAvailability(path); }
+      function retryable(reply) { return !reply || reply.retryable === true; }
+      entry.pending = lookup()
+        .then(function (reply) { return retryable(reply) ? lookup() : reply; })
         .then(function (reply) {
           var available = !!reply && reply.available === true;
           entry.available = available;
+          entry.retryable = !available && retryable(reply);
           entry.until = Date.now() + (available ? 60000 : 20000);
           entry.pending = null;
           decorateDetails();
           return available;
         });
       return entry.pending;
+    }
+
+    function canonicalTmdbId(item, fallbackId) {
+      var candidate = item && item.hasTmdbId && item.tmdbId
+        ? Number(item.tmdbId)
+        : Number(fallbackId != null ? fallbackId : (item && item.id));
+      return Number.isFinite(candidate) && candidate > 0 && candidate < 7000000 ? candidate : null;
     }
 
     function freeOption(query) {
@@ -322,27 +359,28 @@
       }) || null;
     }
 
-    function relayCheckPending(query) {
-      var id = providersMod && providersMod.relayAssetId(query);
-      var entry = id && relayChecks.get(id);
-      return !!(id && (relayAvailability || (entry && entry.pending)));
-    }
-
     function decorateDetails() {
       var t = app.state.title;
       if (!t || app.state.contentLibrary !== "arabic") return;
       var actions = doc.getElementById("detail-actions");
       var primary = actions && actions.querySelector(".detail-primary[data-playback-asset]");
       if (!primary) return;
+      var resolvedTmdbId = canonicalTmdbId(t);
       var query = {
-        type: t.type, tmdbId: t.id, titleAr: t.titleAr, titleEn: t.titleEn,
+        type: t.type, tmdbId: resolvedTmdbId, titleAr: t.titleAr, titleEn: t.titleEn,
         year: t.date ? t.date.slice(0, 4) : null,
         season: Number(primary.dataset.season) || null, episode: Number(primary.dataset.episode) || null
       };
       prepareRelayQuery(query);
       var playable = !!freeOption(query);
-      var label = playable ? "Play" : tr(relayCheckPending(query) ? "Checking availability…" : "Unavailable");
-      primary.setAttribute("aria-disabled", playable ? "false" : "true");
+      var id = providersMod && providersMod.relayAssetId(query);
+      var entry = id && relayChecks.get(id);
+      var waitingForDetail = !id && Number(t.id) >= 7000000 && !app.state.detail;
+      var pending = waitingForDetail || (id && (relayAvailability || (entry && entry.pending)));
+      var retryable = entry && entry.retryable;
+      var label = playable ? "Play" : tr(pending ? "Checking availability…" : retryable ? "Retry" : "Unavailable");
+      var canActivate = !!(playable || pending || retryable);
+      primary.setAttribute("aria-disabled", canActivate ? "false" : "true");
       if (!playable) primary.setAttribute("aria-label", label);
       else if (primary.dataset.playbackLabel) primary.setAttribute("aria-label", primary.dataset.playbackLabel);
       if (primary.textContent !== label) primary.textContent = label;
@@ -352,14 +390,7 @@
 
     var obs = new MutationObserver(decorateDetails);
     if (doc.getElementById("detail-actions")) obs.observe(doc.getElementById("detail-actions"), { childList: true });
-    if (providersMod && typeof root.fetch === "function") {
-      relayAvailability = readAvailability("/api/arabic/relay-availability")
-        .then(function (status) {
-          relayEnabled = !!status && status.enabled === true;
-          relayAvailability = null;
-          decorateDetails();
-        });
-    }
+    fetchRelayFlag();
 
     // F. Full-screen Horizon Video Lab overlay for Arabic HLS / MP4 / YouTube / LG App
     var stage = doc.getElementById("lg-player-stage");
@@ -750,7 +781,7 @@
       Object.keys(neighbors).forEach(function (direction) {
         var target = neighbors[direction];
         if (!target) return;
-        prepareRelayQuery({ type: "tv", tmdbId: sess.item.id, season: target.season, episode: target.episode })
+        prepareRelayQuery({ type: "tv", tmdbId: canonicalTmdbId(sess.item), season: target.season, episode: target.episode })
           .then(function (available) {
             if (!available || !state.playerOpen || state.playerSession !== sess) return;
             sess[direction] = target;
@@ -829,6 +860,7 @@
           try { element.currentTime = startSec; startPosition = startSec; } catch (_e) {}
         }
         updateTimeBar(element.currentTime || 0, element.duration || sess.durationSec);
+        renderDiag();
       });
       element.addEventListener("play", function () {
         if (!active()) return;
@@ -837,6 +869,7 @@
         updatePlayPauseVisual(true);
         chrome.classList.remove("is-quick-pause");
         resetIdle();
+        renderDiag();
       });
       element.addEventListener("playing", function () {
         if (!active()) return;
@@ -945,9 +978,19 @@
       element.src = sourceUrl || option.streamUrl;
       if (!startPaused) {
         var p = element.play();
-        if (p && typeof p.catch === "function") p.catch(function () {
-          if (state.playerOpen && state.playerSession === sess && videoEl === element) updatePlayPauseVisual(false);
-        });
+        if (p && typeof p.then === "function") {
+          p.then(function () {}, function () {
+            if (!state.playerOpen || state.playerSession !== sess || videoEl !== element) return;
+            if (sess.relay) {
+              sess.relay.wasPlaying = false;
+              stopRelayStartupTimer();
+            }
+            updatePlayPauseVisual(false);
+            showControls(1);
+            clearControlsHideTimer();
+            if (pCommandStatus) pCommandStatus.textContent = tr("Press OK to start playback");
+          });
+        }
       }
       showControls(1);
     }
@@ -956,11 +999,14 @@
       var headers = { "X-Horizon-Action": action };
       var body;
       if (data) { headers["Content-Type"] = "application/json"; body = JSON.stringify(data); }
-      return root.fetch(path, { method: "POST", credentials: "same-origin", cache: "no-store",
-        headers: headers, body: body, signal: signal }).then(function (response) {
+      var opts = { method: "POST", credentials: "same-origin", cache: "no-store", headers: headers, body: body };
+      if (signal) opts.signal = signal;
+      return root.fetch(path, opts).then(function (response) {
         return response.json().then(function (value) {
-          if (!response.ok) throw new Error(value.code || "request_failed");
+          if (!response.ok) throw new Error((value && value.code) || ("http_" + response.status));
           return value;
+        }, function () {
+          throw new Error("http_" + response.status);
         });
       });
     }
@@ -989,7 +1035,7 @@
 
     function pairRelayDevice(option, arItem, sess, startPaused) {
       if (relayRequest) return;
-      var request = new AbortController();
+      var request = relayAbortController();
       relayRequest = request;
       var card = stage.querySelector(".lg-player-status-card");
       var message = card && card.querySelector("p");
@@ -1028,16 +1074,17 @@
       if (!state.playerOpen || state.playerSession !== sess) return;
       clearOverlayMedia();
       var relay = sess.relay;
-      var request = new AbortController();
+      var request = relayAbortController();
       var refreshTicket = relay.ticket && relay.expiresAt <= Date.now() + 5000;
       var data = { episodeId: option.relayEpisodeId };
       if (refreshTicket) data.previousTicket = relay.ticket;
 
       function failed(error) {
         if (!relaySessionActive(sess, request)) return;
-        var pairing = error.message === "pairing_required";
-        var ended = error.message === "ticket_renewal_rejected";
-        var unavailable = error.message === "relay_asset_unavailable";
+        var msg = error && error.message ? error.message : "unknown";
+        var pairing = msg === "pairing_required";
+        var ended = msg === "ticket_renewal_rejected";
+        var unavailable = msg === "relay_asset_unavailable";
         if (unavailable) {
           relayChecks.set(option.relayEpisodeId, { available: false, until: Date.now() + 20000 });
           decorateDetails();
@@ -1056,13 +1103,17 @@
 
       function play() {
         if (!relaySessionActive(sess, request)) return;
-        relayRequest = null;
         stage.replaceChildren();
         relay.attemptAt = Date.now();
         var source = RELAY_ORIGIN + "/relay?id=" + encodeURIComponent(option.relayEpisodeId)
           + "&ticket=" + encodeURIComponent(relay.ticket) + (refreshUpstream ? "&refresh=1" : "")
           + (relay.variant ? "&variant=1" : "");
-        openHtml5VideoPlayback(option, arItem, relay.confirmedSec, source, startPaused);
+        try {
+          openHtml5VideoPlayback(option, arItem, relay.confirmedSec, source, startPaused);
+        } catch (_error) {
+          failed(new Error("player_start_failed"));
+        }
+        if (relaySessionActive(sess, request)) relayRequest = null;
       }
 
       var needsTicket = !relay.ticket || refreshTicket;
@@ -1484,7 +1535,8 @@
       var libraryPref = launchSection === "arabic" ? "arabic" : "standard";
       var found = arabic.findByKey(type, Number(id));
       var arItem = (found && (libraryPref === "arabic" || found.royaSeriesId)) ? found : null;
-      var q = { type: type, tmdbId: Number(id), season: season || null, episode: episode || null };
+      var stateTitle = (app.state.title && app.state.title.type === type && Number(app.state.title.id) === Number(id)) ? app.state.title : null;
+      var q = { type: type, tmdbId: canonicalTmdbId(stateTitle || arItem || found, id), season: season || null, episode: episode || null };
       var match = core.readHistory(root.localStorage, launchSection).find(function (row) {
         return row.type === type && row.id === Number(id)
           && (type === "movie" || (row.season === Number(season) && row.episode === Number(episode)));
@@ -1515,25 +1567,44 @@
       overlay.hidden = false;
       if (localizePlayer) localizePlayer(launchSection === "arabic");
       pBadge.hidden = launchSection === "arabic";
-      var lookup = relayEnabled && relayChecks.get(providersMod.relayAssetId(q));
-      var waitingForFlag = (libraryPref === "arabic" || savedRelay) && providersMod.relayAssetId(q) && relayAvailability;
+      var relayId = providersMod.relayAssetId(q);
+      var lookup = relayEnabled && relayChecks.get(relayId);
+      var waitingForFlag = (libraryPref === "arabic" || savedRelay) && relayId && relayAvailability;
       var pending = waitingForFlag || (lookup && lookup.pending);
+      function reopenSelection() {
+        var focusTarget = returnFocusNode;
+        root.__HORIZON_LG_LAUNCH__(type, id, season, episode, startOver, confirmedTitle, launchSection);
+        returnFocusNode = focusTarget;
+      }
       if (pending && (!option || option.availability !== "playable")) {
         var pendingSession = { item: arItem, mode: "unavailable", section: launchSection, observedPlayback: false };
         state.playerSession = pendingSession;
         showLoading("Checking availability…");
         pending.then(function (available) {
           if (!state.playerOpen || state.playerSession !== pendingSession) return;
-          if (available || waitingForFlag) {
-            var focusTarget = returnFocusNode;
-            root.__HORIZON_LG_LAUNCH__(type, id, season, episode, startOver, confirmedTitle, launchSection);
-            returnFocusNode = focusTarget;
-          } else relayStatus("Unavailable", "", null);
+          if (available || waitingForFlag) reopenSelection();
+          else if (lookup && lookup.retryable) relayStatus("Playback unavailable", "Could not start playback. Try Reload.", {
+            label: "Reload", onClick: function () {
+              relayChecks.delete(relayId);
+              reopenSelection();
+            }
+          });
+          else relayStatus("Unavailable", "", null);
         });
         return true;
       }
 
       if (!option || option.availability !== "playable") {
+        if (lookup && lookup.retryable) {
+          relayChecks.delete(relayId);
+          reopenSelection();
+          return true;
+        }
+        if (!relayEnabled && relayFlagRetryable && relayId && (libraryPref === "arabic" || savedRelay)) {
+          fetchRelayFlag();
+          reopenSelection();
+          return true;
+        }
         state.playerSession = { mode: "unavailable", section: launchSection, item: arItem, observedPlayback: false };
         relayStatus("Unavailable", "", null);
         return true;
@@ -1646,7 +1717,6 @@
     root.addEventListener("keydown", function (event) {
       var key = normalizeLGKey(event);
       var active = doc.activeElement;
-      var rawCode = event.keyCode || event.which;
 
       if (state.playerOpen) {
         event.preventDefault();

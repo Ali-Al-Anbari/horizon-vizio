@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import https from "node:https";
+import { Readable, Writable } from "node:stream";
 import { rootCertificates } from "node:tls";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -317,4 +320,51 @@ test("Oracle verifies dynamic catalog entries before minting and scopes tickets 
     assert.equal(denied.status, 403);
   }
   assert.equal((await call("/ticket?id=tv-297621-s2-e3", { headers, method: "POST" })).status,404);
+});
+
+test("Oracle refreshes one expired rendition and preserves the signed work and requested bytes", async t => {
+  const tmp = await mkdtemp(join(tmpdir(), "akwam-refresh-"));
+  t.after(() => rm(tmp, { recursive: true, force: true }));
+  const caBundlePath = join(tmp, "test-ca.pem");
+  await writeFile(caBundlePath, rootCertificates[0]);
+  const ticketSigningSecret = "x".repeat(36);
+  const data = fixture();
+  const fresh = "https://s1d1.downet.net/refreshed.mp4";
+  const originalBytes = Buffer.from("000000186674797069736F6D", "hex");
+  const mediaRequests = [];
+  t.mock.method(https, "request", (url, { headers }, callback) => {
+    const stale = mediaRequests.length === 0;
+    mediaRequests.push({ url: url.href, range: headers.Range });
+    if (stale) data.pages.set("/watch/130/13/movie", '<source src="' + fresh + '">');
+    const req = new EventEmitter();
+    req.end = () => {
+      const res = Readable.from(stale ? [] : [originalBytes], { objectMode: false });
+      res.statusCode = stale ? 410 : 206;
+      res.headers = stale ? {} : { "content-range": "bytes 0-11/100", "content-type": "video/mp4", "content-length": "12" };
+      queueMicrotask(() => callback(res));
+    };
+    req.destroy = () => {};
+    return req;
+  });
+  const { server, stats } = createHardenedRelay({ caBundlePath, issuerSecret: "fixture-issuer", ticketSigningSecret,
+    akwamProxyPermitted: true, catalog: data });
+  t.after(() => server.emit("close"));
+  const ticket = signPlaybackTicket({ ep: movie, exp: Date.now() / 1000 + 60, work: "13", sources: ["130:0"] }, ticketSigningSecret);
+  const req = Object.assign(new EventEmitter(), {
+    url: "/relay?id=" + movie + "&ticket=" + encodeURIComponent(ticket), method: "GET",
+    headers: { range: "bytes=0-11" }, socket: { remoteAddress: "127.0.0.1" },
+  });
+  const observed = await new Promise((resolve, reject) => {
+    const chunks = [];
+    const res = new Writable({ write(chunk, _encoding, callback) { chunks.push(chunk); callback(); } });
+    res.writeHead = (status, headers) => { res.statusCode = status; res.headers = headers; res.headersSent = true; };
+    res.on("error", reject);
+    res.on("finish", () => resolve({ status: res.statusCode, headers: res.headers, bytes: Buffer.concat(chunks) }));
+    server.listeners("request")[0](req, res).catch(reject);
+  });
+  assert.deepEqual(mediaRequests, [{ url: media, range: "bytes=0-11" }, { url: fresh, range: "bytes=0-11" }]);
+  assert.equal(observed.status, 206);
+  assert.equal(observed.headers["content-range"], "bytes 0-11/100");
+  assert.deepEqual(observed.bytes, originalBytes);
+  assert.equal(stats.expiredAutoRetries, 1);
 });

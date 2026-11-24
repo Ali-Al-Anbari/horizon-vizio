@@ -441,12 +441,30 @@ export function createHardenedRelay(config = {}) {
     if (descriptorCache.get(key) === record) descriptorCache.delete(key);
   }
 
+  function isTransientCatalogError(error) {
+    if (!error) return false;
+    if (error.transient === true) return true;
+    if (error.status !== undefined) return error.status >= 500 || error.status === 408 || error.status === 429;
+    const msg = String(error.message || "");
+    return Boolean(error.code) || error.name === "TimeoutError" || error.name === "AbortError"
+      || /^(?:metadata|catalog)_http_(?:408|429|5\d\d)$/.test(msg)
+      || msg === "catalog_search_unavailable"
+      || msg === "catalog_challenge"
+      || msg === "upstream_cooldown"
+      || msg === "secondary_catalog_busy"
+      || msg === "secondary_asset_unavailable";
+  }
+
   async function chooseAsset(id) {
+    let transient = null;
     for (const providerId of providers.keys()) {
       try { return await resolveAsset(providerId, id); }
-      catch { /* The next permitted provider must independently match the same ID. */ }
+      catch (error) {
+        if (isTransientCatalogError(error)) transient ||= error;
+        /* The next permitted provider must independently match the same ID. */
+      }
     }
-    throw new Error("asset_unavailable");
+    throw Object.assign(new Error("asset_unavailable"), transient ? { transient: true } : {});
   }
 
   function matchingSource(record, payload, index) {
@@ -698,7 +716,8 @@ export function createHardenedRelay(config = {}) {
       try {
         if (!allowlist[id] || !akwam.enabled || mp4plus.enabled) await chooseAsset(id);
         return sendJson(req, res, 200, { available: true, episodeId: id });
-      } catch {
+      } catch (error) {
+        if (isTransientCatalogError(error)) return sendJson(req, res, 503, { available: false, retryable: true });
         return sendJson(req, res, 404, { available: false });
       }
     }

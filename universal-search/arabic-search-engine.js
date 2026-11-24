@@ -853,6 +853,40 @@
       }
 
       var finalized = finalizeUnifiedItem(merged);
+      if (!finalized.hasTmdbId && (finalized.titleAr || finalized.titleEn)) {
+        var lookupQuery = finalized.titleAr || finalized.titleEn;
+        return queryWorkerArabic(fetcher, lookupQuery, type, signal).then(function (wData) {
+          var candidates = (wData && Array.isArray(wData.results)) ? wData.results : [];
+          var nAr = normalizeArabic(finalized.titleAr || finalized.title || "");
+          var sAr = stripLeadingAl(nAr);
+          var nEn = normalizeArabic(finalized.titleEn || "");
+          for (var c = 0; c < candidates.length; c++) {
+            var cand = candidates[c];
+            if (!cand || cand.type !== type || !yearsCompatible(cand.date, finalized.date)) continue;
+            var candTmdb = Number(cand.tmdbId || cand.id);
+            if (!Number.isFinite(candTmdb) || candTmdb <= 0 || candTmdb >= 7000000) continue;
+            var cAr = normalizeArabic(cand.titleAr || cand.originalTitle || cand.title || "");
+            var cEn = normalizeArabic(cand.titleEn || cand.title || "");
+            var same = (nAr && cAr && (cAr === nAr || stripLeadingAl(cAr) === sAr))
+              || (nEn && cEn && cEn === nEn);
+            if (!same) continue;
+            merged.tmdbId = candTmdb;
+            merged.hasTmdbId = true;
+            if (cand.date && (!merged.date || /-01-01$/.test(merged.date))) merged.date = cand.date;
+            if (!merged.poster && cand.poster) merged.poster = cand.poster;
+            if (!merged.backdrop && cand.backdrop) merged.backdrop = cand.backdrop;
+            merged.sources = (merged.sources || []);
+            if (merged.sources.indexOf("tmdb") < 0) merged.sources.unshift("tmdb");
+            finalized = finalizeUnifiedItem(merged);
+            break;
+          }
+          detailCache[key] = finalized;
+          return finalized;
+        }, function () {
+          detailCache[key] = finalized;
+          return finalized;
+        });
+      }
       detailCache[key] = finalized;
       return finalized;
     });

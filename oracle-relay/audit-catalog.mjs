@@ -25,6 +25,13 @@ const expanded = [
   "tv-218324-s1-e1", "tv-218324-s2-e8", "tv-218324-s3-e15",
   "tv-122543-s2-e30", "tv-122543-s3-e15", "tv-122543-s4-e30", "tv-122543-s9-e1",
 ];
+// Exact title/year identities from Watch metadata. TV uses S01E01.
+const modernEgyptian = [
+  "movie-1224392", "movie-1119605", "movie-1250602", "movie-1261562", "movie-1276086",
+  "movie-1232790", "movie-1170841", "movie-1324136", "movie-1316404", "movie-1324315",
+  "tv-224882-s1-e1", "tv-246245-s1-e1", "tv-246244-s1-e1", "tv-245985-s1-e1", "tv-260658-s1-e1",
+  "tv-271181-s1-e1", "tv-276068-s1-e1", "tv-271790-s1-e1", "tv-304229-s1-e1", "tv-302614-s1-e1",
+];
 const unseenMovies = ["movie-84250", "movie-280470", "movie-47324", "movie-44085", "movie-517814", "movie-7973"];
 const agent = process.env.CA_BUNDLE_PATH ? new https.Agent({
   ca: readFileSync(process.env.CA_BUNDLE_PATH), rejectUnauthorized: true, keepAlive: true, maxSockets: 6,
@@ -42,7 +49,8 @@ if (process.argv[2] === "--find") {
   const args = process.argv.slice(2);
   const cold = args.includes("--cold");
   const assets = args.filter(id => !id.startsWith("--"));
-  const selections = assets.length ? assets : args.includes("--expanded") ? expanded : args.includes("--unseen-movies") ? unseenMovies : sample;
+  const selections = assets.length ? assets : args.includes("--expanded") ? expanded
+    : args.includes("--modern-egyptian") ? modernEgyptian : args.includes("--unseen-movies") ? unseenMovies : sample;
   const options = { agent, probeFormats: args.includes("--probe-formats"), ...(args.includes("--discover-only") ? { roots: {} } : {}) };
   const catalog = createCatalog(options);
   const started = performance.now();

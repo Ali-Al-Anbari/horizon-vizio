@@ -441,9 +441,7 @@
       el.addEventListener("click", click); return el;
     }
     function detailAction(label, click, className, action) {
-      var el = button(label, function () {
-        if (this.getAttribute("aria-disabled") !== "true") click();
-      }, className);
+      var el = button(label, function () { if (this.getAttribute("aria-disabled") !== "true") click(); }, className);
       el.dataset.action = action;
       return el;
     }

@@ -6,11 +6,13 @@ import { chromium } from "playwright-core";
 
 const origin = "http://localhost:8798";
 const assets = new URL("../universal-search/", import.meta.url);
+const smartCastUA = "Mozilla/5.0 Vizio SmartCast Chrome/79.0";
 
 async function withWatch(callback, availability = false, verifiedAsset = null, options = {}) {
   const browser = await chromium.launch({ channel: "chrome" });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, userAgent: options.userAgent });
+    if (options.withoutAbortController) await page.addInitScript(() => { window.AbortController = undefined; });
     page.setDefaultTimeout(5000);
     const tickets = [];
     const mediaRequests = [];
@@ -54,6 +56,9 @@ async function withWatch(callback, availability = false, verifiedAsset = null, o
       }
       if (url.pathname === "/api/arabic/relay-catalog") {
         if (options.catalogGate && url.searchParams.get("id") === verifiedAsset) await options.catalogGate;
+        if (options.catalogReplies && url.searchParams.get("id") === verifiedAsset && options.catalogReplies.length) {
+          return route.fulfill({ json: options.catalogReplies.shift() });
+        }
         return route.fulfill({ json: { available: isVerified(url.searchParams.get("id")) } });
       }
       if (url.pathname.startsWith("/api/")) return route.fulfill({ status: 404 });
@@ -64,7 +69,7 @@ async function withWatch(callback, availability = false, verifiedAsset = null, o
     const availabilitySettled = page.waitForEvent(availability === "offline" ? "requestfailed" : "requestfinished", {
       predicate: request => new URL(request.url()).pathname === "/api/arabic/relay-availability",
     });
-    await page.goto(origin + (options.userAgent ? "/?mock=1" : "/?mock=1&lg=1"));
+    await page.goto(origin + (options.userAgent ? "/?from=home&mock=1" : "/?mock=1&lg=1"));
     await availabilitySettled;
     await callback(page, tickets, mediaRequests);
   } finally {
@@ -90,6 +95,76 @@ async function openArabicMovie(page, id, title) {
   }, { id, title });
 }
 
+test("SmartCast OK enters the shared player after a transient catalog failure", async () => {
+  let releaseCatalog;
+  const catalogGate = new Promise(resolve => { releaseCatalog = resolve; });
+  const catalogReplies = [{ available: false, retryable: true }];
+  try {
+    await withWatch(async (page, tickets, mediaRequests) => {
+      assert.equal(await page.evaluate(() => window.__HORIZON_LG_MODE__), false);
+      await selectArabicLibrary(page);
+      await openArabicMovie(page, 1316416, "سيكو سيكو");
+      const primary = page.locator("#detail-actions .detail-primary");
+      await primary.filter({ hasText: "جارٍ التحقق من التوفر…" }).waitFor();
+      await primary.focus();
+      await page.keyboard.press("Enter");
+      await page.locator("#lg-player-overlay .lg-player-loading").waitFor({ timeout: 2000 });
+      assert.deepEqual(tickets, []);
+      releaseCatalog();
+      await page.waitForFunction(() => {
+        const video = document.querySelector("#lg-player-stage video");
+        return video && video.currentTime > 0.4 && video.videoWidth > 0;
+      });
+      assert.deepEqual(tickets, [{ episodeId: "movie-1316416" }]);
+      assert.ok(mediaRequests.some(range => range.startsWith("bytes=")));
+      await page.keyboard.press("Escape");
+      assert.equal(await page.locator("#lg-player-stage video").count(), 0);
+      assert.equal(await primary.evaluate(el => el === document.activeElement), true);
+    }, true, "movie-1316416", { userAgent: smartCastUA, catalogGate, catalogReplies, paired: true, withoutAbortController: true });
+  } finally {
+    releaseCatalog();
+  }
+});
+
+test("SmartCast OK retries an inconclusive result and shows pairing if the device is unpaired", async () => {
+  const catalogReplies = [{ available: false, retryable: true }, { available: false, retryable: true }];
+  await withWatch(async (page, tickets) => {
+    await selectArabicLibrary(page);
+    await openArabicMovie(page, 1316416, "سيكو سيكو");
+    const primary = page.locator("#detail-actions .detail-primary").filter({ hasText: /^إعادة المحاولة$/ });
+    await primary.waitFor();
+    assert.equal(catalogReplies.length, 0);
+    assert.deepEqual(tickets, []);
+    await primary.focus();
+    await page.keyboard.press("Enter");
+    await page.getByRole("button", { name: "عرض رمز الإقران" }).waitFor();
+    assert.deepEqual(tickets, [{ episodeId: "movie-1316416" }]);
+    assert.equal(await page.locator("#lg-player-stage video").count(), 0);
+  }, true, "movie-1316416", { userAgent: smartCastUA, catalogReplies });
+});
+
+test("SmartCast Back during catalog lookup prevents a late ticket request", async () => {
+  let releaseCatalog;
+  const catalogGate = new Promise(resolve => { releaseCatalog = resolve; });
+  try {
+    await withWatch(async (page, tickets) => {
+      await selectArabicLibrary(page);
+      await openArabicMovie(page, 1316416, "سيكو سيكو");
+      const primary = page.locator("#detail-actions .detail-primary");
+      await primary.filter({ hasText: "جارٍ التحقق من التوفر…" }).focus();
+      await page.keyboard.press("Enter");
+      await page.locator("#lg-player-overlay .lg-player-loading").waitFor();
+      await page.keyboard.press("Escape");
+      releaseCatalog();
+      await primary.filter({ hasText: /^Play$/ }).waitFor();
+      assert.equal(await page.locator("#lg-player-overlay").isVisible(), false);
+      assert.deepEqual(tickets, []);
+    }, true, "movie-1316416", { userAgent: smartCastUA, catalogGate });
+  } finally {
+    releaseCatalog();
+  }
+});
+
 test("Delayed free availability for الحريفة suppresses WATCH IT and one Play starts native MP4", async () => {
   let releaseCatalog;
   const catalogGate = new Promise(resolve => { releaseCatalog = resolve; });
@@ -100,8 +175,6 @@ test("Delayed free availability for الحريفة suppresses WATCH IT and one P
       const primary = page.locator("#detail-actions .detail-primary");
       const details = page.locator("#detail-copy");
       await primary.filter({ hasText: "جارٍ التحقق من التوفر…" }).waitFor();
-      assert.equal(await primary.getAttribute("aria-disabled"), "true");
-      await primary.evaluate(el => el.click());
       assert.deepEqual(tickets, []);
       assert.doesNotMatch(await details.innerText(), /WATCH IT|subscription|Provider/i);
       assert.equal(await page.locator("#lg-provider-select-btn, #lg-provider-menu, #lg-detail-availability").count(), 0);
@@ -295,7 +368,7 @@ test("Next from فخر الدلتا S01E01 launches the exact next episode and k
 
 for (const { name, arabic, userAgent } of [
   { name: "LG webOS Arabic", arabic: true },
-  { name: "Vizio SmartCast English", arabic: false, userAgent: "Mozilla/5.0 Vizio SmartCast Chrome/79.0" },
+  { name: "Vizio SmartCast English", arabic: false, userAgent: smartCastUA },
 ]) {
   test(name + " Search fits and wraps results and keeps D-pad focus visible when scrolling", async () => {
     await withWatch(async page => {

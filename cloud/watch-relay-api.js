@@ -53,10 +53,11 @@ export async function watchRelayCatalog(request, env, fetcher = fetch) {
       headers: { Authorization: "Bearer " + env.ISSUER_SECRET },
       redirect: "manual", signal: controller.signal,
     });
+    if (upstream.status >= 500) return json(200, { available: false, retryable: true });
     const reply = upstream.ok ? await upstream.json() : null;
     return json(200, { available: reply?.available === true && reply.episodeId === id });
   } catch {
-    return json(200, { available: false });
+    return json(200, { available: false, retryable: true });
   } finally { clearTimeout(timer); }
 }
 

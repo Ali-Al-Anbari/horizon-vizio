@@ -84,6 +84,21 @@ test("Watch exposes only non-cacheable relay availability to an unauthenticated 
   assert.equal(disabled.status, 503);
 });
 
+test("Watch marks catalog transport failures as retryable and keeps explicit misses definitive", async t => {
+  const { env } = fixture();
+  const catalog = () => new Request(ORIGIN + "/api/arabic/relay-catalog?id=movie-1316416");
+  for (const status of [401, 403, 404, 429, 500, 502]) {
+    const response = await api(catalog(), env, { fetch: async () => new Response(null, { status }) });
+    assert.deepEqual(await response.json(), status >= 500 ? { available: false, retryable: true } : { available: false });
+  }
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const lookup = api(catalog(), env, { fetch: (_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  }) });
+  t.mock.timers.tick(7500);
+  assert.deepEqual(await (await lookup).json(), { available: false, retryable: true });
+});
+
 test("Watch requires a paired session in addition to its same-origin action header", async () => {
   const { env, revoke } = fixture();
   const fetch = forbiddenFetch;

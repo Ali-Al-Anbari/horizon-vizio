@@ -120,9 +120,7 @@
     if (incoming.manualWatched === null && previous) incoming.manualWatched = previous.manualWatched;
     if (previous && previous.manualOnly) incoming.manualOnly = true;
     if (incoming.progress && previous && previous.progress
-        && (previous.progress.updatedAt > incoming.progress.updatedAt
-          || (previous.progress.updatedAt === incoming.progress.updatedAt
-            && previous.progress.position > incoming.progress.position))) {
+        && previous.progress.updatedAt > incoming.progress.updatedAt) {
       incoming.progress = previous.progress;
       incoming.at = Math.min(incoming.at, previous.at);
     }

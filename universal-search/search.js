@@ -3643,6 +3643,7 @@
       startOver = !!startOver || !!(record && record.progress && record.progress.completed);
       var handoff = createPlaybackHandoff("movie", state.title.id);
       var url = player.movieUrl(state.title.id, state.title.title, startOver ? null : progress, !!startOver, handoff);
+      if (url && handoff) url += "&handoffAt=" + Date.now();
       if (!url) { text("detail-status", "Invalid movie selection."); return; }
       if (startOver) core.clearProgress(local, "movie", state.title.id);
       if (typeof root.__HORIZON_LG_LAUNCH__ === "function"
@@ -4717,17 +4718,20 @@
             returned.subtitle, entry.progress.updatedAt, Object.assign({}, old || {}, prior || {}, { progress: entry.progress })));
         });
         if (old || acceptedEpisodeProgress || acceptedHandoff && returned.showTitle) {
-          var returnedArtwork = Object.assign({}, old || {}, episodeRow || {});
+          var returnedArtwork = episodeRow
+            ? Object.assign({}, old ? { poster: old.poster, backdrop: old.backdrop, tvdbId: old.tvdbId } : {}, episodeRow)
+            : (old ? { poster: old.poster, backdrop: old.backdrop, tvdbId: old.tvdbId } : {});
           returnedArtwork.episodeTitle = episodeRow && episodeRow.episodeTitle || returned.episodeTitle || "";
           returnedArtwork.progress = acceptedEpisodeProgress || episodeRow && episodeRow.progress || null;
+          var writtenAt = (acceptedEpisodeProgress && acceptedEpisodeProgress.updatedAt) || Date.now();
           core.writeHistory(local, core.item("tv", returned.id,
             old && old.title || returned.showTitle || "TV Show", returned.season, returned.episode,
-            returned.subtitle, Date.now(), returnedArtwork));
-          if (acceptedEpisodeProgress) {
+            returned.subtitle, writtenAt, returnedArtwork));
+          if (acceptedHandoff || acceptedEpisodeProgress) {
             core.writeActiveEpisode(local, returned.id, {
               season: returned.season,
               episode: returned.episode,
-              at: acceptedEpisodeProgress.updatedAt || Date.now()
+              at: writtenAt
             });
           }
         }

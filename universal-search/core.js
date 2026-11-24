@@ -118,9 +118,7 @@
     if (entry.manualWatched === null && previous) entry.manualWatched = previous.manualWatched;
     if (previous && previous.manualOnly) entry.manualOnly = true;
     if (entry.progress && previous && previous.progress
-        && (previous.progress.updatedAt > entry.progress.updatedAt
-          || previous.progress.updatedAt === entry.progress.updatedAt
-            && previous.progress.position > entry.progress.position)) {
+        && previous.progress.updatedAt > entry.progress.updatedAt) {
       entry.progress = previous.progress;
       entry.at = Math.min(entry.at, previous.at);
     }
@@ -417,6 +415,19 @@
       };
     }
 
+    var byRecency = episodes.slice().sort(function (a, b) {
+      var aTime = a.progress ? a.progress.updatedAt : a.at;
+      var bTime = b.progress ? b.progress.updatedAt : b.at;
+      return (bTime - aTime) || (b.season - a.season) || (b.episode - a.episode);
+    });
+    var latestConfirmed = episodes.filter(function (r) { return !!(r && r.progress); }).sort(function (a, b) {
+      return (b.progress.updatedAt - a.progress.updatedAt) || (b.season - a.season) || (b.episode - a.episode);
+    })[0] || null;
+    if (activePointer && latestConfirmed && latestConfirmed.progress.updatedAt > activePointer.at
+        && (latestConfirmed.season !== activePointer.season || latestConfirmed.episode !== activePointer.episode)) {
+      activePointer = null;
+    }
+
     if (activePointer) {
       var current = activePointer;
       var currentBase = findEpisode(current.season, current.episode);
@@ -424,7 +435,9 @@
       while (maxDepth-- > 0) {
         var row = findEpisode(current.season, current.episode);
         var rowUpdated = row && row.progress ? row.progress.updatedAt : (row ? row.at : 0);
-        var fresh = row && rowUpdated >= activePointer.at;
+        var isActiveEp = current.season === activePointer.season && current.episode === activePointer.episode;
+        var fresh = row && (rowUpdated >= activePointer.at
+          || (isActiveEp && row.progress && rowUpdated >= activePointer.at - 2000));
         if (fresh && isEpisodeCompleted(row)) {
           var nextCandidate = catalog ? nextCatalogEpisode(current, catalog) : null;
           if (!nextCandidate) {
@@ -433,22 +446,15 @@
           current = nextCandidate;
           currentBase = row;
         } else {
-          var isRewatchStart = current.season === activePointer.season && current.episode === activePointer.episode;
           if (row && fresh && row.progress && row.progress.position > 0) {
             return makeTarget(current.season, current.episode, row, false, false, false, rowUpdated, currentBase || row);
           }
-          return makeTarget(current.season, current.episode, row, !isRewatchStart, false, false,
+          return makeTarget(current.season, current.episode, row, !isActiveEp, false, false,
             currentBase ? (currentBase.progress ? currentBase.progress.updatedAt : currentBase.at) : activePointer.at,
             currentBase || row);
         }
       }
     }
-
-    var byRecency = episodes.slice().sort(function (a, b) {
-      var aTime = a.progress ? a.progress.updatedAt : a.at;
-      var bTime = b.progress ? b.progress.updatedAt : b.at;
-      return (bTime - aTime) || (b.season - a.season) || (b.episode - a.episode);
-    });
 
     var mostRecent = byRecency[0];
     if (!mostRecent) return null;
@@ -577,8 +583,10 @@
     if (!row || row.isNextUnwatched) return 0;
     if (row.manualWatched === true || row.manualWatched !== false
         && row.progress && row.progress.completed) return 1;
-    return row.progress && row.progress.duration > 0
-      ? Math.max(0, Math.min(1, row.progress.position / row.progress.duration)) : 0;
+    if (!row.progress) return 0;
+    var pos = Number(row.progress.position), dur = Number(row.progress.duration);
+    if (!Number.isFinite(pos) || !Number.isFinite(dur) || dur <= 0 || pos <= 0) return 0;
+    return Math.max(0, Math.min(1, pos / dur));
   }
   function rankResults(rows, query) {
     var q = String(query || "").toLocaleLowerCase().trim();

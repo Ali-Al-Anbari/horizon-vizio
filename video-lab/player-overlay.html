@@ -7,14 +7,14 @@
     <meta name="color-scheme" content="dark" />
     <title>Horizon Video Lab · Player Overlay</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="player-overlay.css" />
+    <link rel="stylesheet" href="player-overlay.css?v=vl-2" />
     <script src="focus-lease.js" defer></script>
     <script src="player-bridge-client.js" defer></script>
     <script src="episode-catalog.js" defer></script>
-    <script src="playback-providers.js" defer></script>
+    <script src="playback-providers.js?v=vl-2" defer></script>
     <script src="player-diagnostics.js" defer></script>
     <script src="independent-subtitles.js" defer></script>
-    <script src="player-overlay.js" defer></script>
+    <script src="player-overlay.js?v=vl-2" defer></script>
   </head>
   <body>
     <main id="player-shell" class="player-shell">
@@ -62,7 +62,7 @@
             <button id="watch-exit" type="button" tabindex="-1" aria-label="Exit to Watch" title="Exit to Watch" hidden><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 5 5v5"/></svg><span class="action-label">Exit to Watch</span></button>
           </div>
           </div>
-          <div id="experimental-controls" class="control-row experimental" aria-label="Experimental provider controls" hidden>
+          <div id="experimental-controls" class="control-row experimental" aria-label="Provider controls" hidden>
             <button id="experiment-play" type="button" tabindex="-1">Play</button>
             <button id="experiment-pause" type="button" tabindex="-1">Pause</button>
             <button id="experiment-back" type="button" tabindex="-1">−10s</button>
@@ -107,7 +107,7 @@
         </div>
         <section id="diagnostics-panel" class="diagnostics-panel" aria-label="Video Lab diagnostics" hidden>
           <div class="diagnostics-header"><h2>Video Lab diagnostics</h2><button id="diagnostics-close" type="button" tabindex="-1">Close · Back</button></div>
-          <p class="diagnostics-note">Local browser probes and experimental provider status. Provider media requests are not inspected.</p>
+          <p class="diagnostics-note">Local browser probes and provider status. Provider media requests are not inspected.</p>
           <p id="diag-experimental" class="diagnostics-note" hidden></p>
           <div id="compat-controls" class="compat-controls" hidden>
             <p id="diag-variant">CineSrc test: Baseline</p>

@@ -192,12 +192,12 @@
         var parsed = JSON.parse(playerProgressStorage.getItem(PLAYER_PROGRESS_KEY) || "null");
         var items = parsed && parsed.version === 1 && Array.isArray(parsed.items) ? parsed.items : [];
         var existing = items.find(function (entry) { return entry && entry.identity === record.identity; });
-        if (existing && existing.completed === true) record.completed = true;
-        if (existing && Number.isFinite(existing.position) && Number.isFinite(existing.duration)
-            && record.position + 1 < existing.position && !allowRegression) {
-          if (!completed) return null;
-          record.position = Math.min(existing.position, existing.duration);
-          record.duration = existing.duration;
+        if (existing && existing.completed === true) {
+          record.completed = true;
+          if (!allowRegression) {
+            record.position = Math.min(existing.position, existing.duration);
+            record.duration = existing.duration;
+          }
         }
         items = items.filter(function (entry) { return entry && entry.identity !== record.identity; });
         items.unshift(record); items = items.slice(0, 100);
@@ -207,15 +207,31 @@
       } catch (_error) { return null; }
     }
     function confirmedProgressRecord() {
-      if (provider !== providers.VIDBOLT || !boltSession || boltSession.identity !== boltIdentity()) return null;
-      var position = boltLastConfirmed && boltLastConfirmed.identity === boltIdentity()
-        ? boltLastConfirmed.position : boltPosition;
-      if (boltSession.restoreKind === "resume" && boltSession.restoreResult === "position confirmed"
-          && boltSession.advancedAt === null && boltSession.restoreBaseline) return boltSession.restoreBaseline;
-      if (!Number.isFinite(position) || !Number.isFinite(boltDuration) || boltDuration <= 0 || boltDuration > 10000000
-          || position <= 0 || position > boltDuration + 2) return null;
-      return { position: Math.min(position, boltDuration), duration: boltDuration,
-        updatedAt: Date.now(), provider: "vidbolt", completed: boltSession.endedAt !== null };
+      if (provider === providers.VIDBOLT) {
+        if (!boltSession || boltSession.identity !== boltIdentity()) return null;
+        var position = boltLastConfirmed && boltLastConfirmed.identity === boltIdentity()
+          ? boltLastConfirmed.position : boltPosition;
+        if (boltSession.restoreKind === "resume" && boltSession.restoreResult === "position confirmed"
+            && boltSession.advancedAt === null && boltSession.restoreBaseline
+            && !(boltLastConfirmed && boltLastConfirmed.identity === boltIdentity())
+            && Math.abs((boltPosition || 0) - Math.max(0, boltSession.restoreBaseline.position - 10)) <= 12) {
+          return boltSession.restoreBaseline;
+        }
+        if (!Number.isFinite(position) || !Number.isFinite(boltDuration) || boltDuration <= 0 || boltDuration > 10000000
+            || position <= 0 || position > boltDuration + 2) return null;
+        var boltCompleted = boltSession.endedAt !== null
+          || (credibleBoltCompletionTimeline() && position / boltDuration >= 0.95);
+        return { position: Math.min(position, boltDuration), duration: boltDuration,
+          updatedAt: Date.now(), provider: "vidbolt", completed: boltCompleted };
+      }
+      if (["vidy", "stellar", "vidzen"].indexOf(provider) >= 0) {
+        var minDur = isMovie ? 1200 : 600;
+        if (!Number.isFinite(labPosition) || !Number.isFinite(labDuration) || labDuration < minDur
+            || labDuration > 10000000 || labPosition <= 0 || labPosition > labDuration + 2) return null;
+        return { position: Math.min(labPosition, labDuration), duration: labDuration,
+          updatedAt: Date.now(), provider: provider, completed: labPosition / labDuration >= 0.95 };
+      }
+      return null;
     }
     function markStoredProgressComplete() {
       var identity = boltIdentity();
@@ -313,6 +329,7 @@
     var menuConfirm = false;
     var state = STATES.PLAYBACK_HIDDEN;
     var idleTimer = null;
+    var connectionTimer = null;
     var dispatchTimer = null;
     var dispatchFrame = null;
     var commandNumber = 0;
@@ -322,7 +339,7 @@
     var disposed = false;
     var movieLoadTimer = null;
     var diagnosticsTimer = null;
-    var labStatus = "No experimental provider selected.";
+    var labStatus = "No provider selected.";
     var labFirstEvent = null;
     var labPosition = null;
     var labDuration = null;
@@ -505,19 +522,17 @@
         if (pending.kind === "server" && pending.playable) {
           get("player-loading").hidden = true;
           get("player-loading").classList.remove("is-warning");
-          get("command-status").textContent = "VidZen playback active (requested "
-            + vidzenServerLabels[currentVidzenServer]
-            + "; actual server and checkpoint unconfirmed).";
+          get("command-status").textContent = "";
           renderBoltPlayPause(); resetIdle();
           return;
         }
         unloadFrame();
         if (pending.kind === "server") {
           get("player-loading").classList.add("is-warning");
-          loading("VidZen did not confirm the requested server near the verified checkpoint. Use Reload or Provider.");
+          loading("VidZen could not switch to the requested server. Use Reload or choose another provider.");
           if (state === STATES.PLAYBACK_HIDDEN) showControls();
           if (state === STATES.CONTROLS_VISIBLE) focusControl(23);
-          get("command-status").textContent = "Server playback unconfirmed; stored progress is unchanged.";
+          get("command-status").textContent = "";
           renderBoltPlayPause(); resetIdle();
           return;
         }
@@ -533,31 +548,23 @@
         labPaused = true;
         providerPlaying = false;
         get("player-loading").classList.add("is-warning");
-        loading(providerLabel() + " did not confirm " + pending.kind
-          + " near " + boltClock(pending.target) + ". Player stopped; use Resume, Reload, or Provider.");
-        get("command-status").textContent = "Position not confirmed; playback stopped at the last verified checkpoint.";
+        loading(providerLabel() + " did not respond. Use Resume, Reload, or choose another provider.");
+        get("command-status").textContent = "";
         renderTimeline(); renderBoltPlayPause(); resetIdle();
       }, LAB_RELOAD_TIMEOUT_MS);
     }
     function virtualPauseToggle() {
-      if (labPending) {
-        get("command-status").textContent = "Waiting for the player to confirm the requested position.";
-        return;
-      }
+      if (labPending) return;
       if (virtualPaused) {
         var saved = virtualPaused;
         if (saved.provider !== provider || saved.identity !== boltIdentity()) return;
         loadProviderFrame(saved.position, true);
         armLabPending("resume", saved.position, saved);
-        get("command-status").textContent = "Resuming " + providerLabel()
-          + " near " + boltClock(saved.position) + "; awaiting playback confirmation.";
+        get("command-status").textContent = "";
         renderBoltPlayPause(); resetIdle();
         return;
       }
-      if (!labPositionUsable() || frame.src === "about:blank") {
-        get("command-status").textContent = "A fresh, identity-checked position is required before virtual pause.";
-        return;
-      }
+      if (!labPositionUsable() || frame.src === "about:blank") return;
       var checkpoint = { provider: provider, identity: boltIdentity(),
         position: labPosition, verifiedPosition: labPosition, duration: labDuration };
       unloadFrame();
@@ -568,38 +575,26 @@
       labPaused = true;
       providerPlaying = false;
       get("player-loading").hidden = true;
-      get("command-status").textContent = "Virtual pause at " + boltClock(checkpoint.position)
-        + ": player stopped. OK recreates it from this checkpoint.";
+      get("command-status").textContent = "";
       renderTimeline(); renderBoltPlayPause(); resetIdle();
     }
     function virtualSeek(delta) {
-      if (labPending) {
-        get("command-status").textContent = "Awaiting the previous position request; no new seek sent.";
-        return;
-      }
+      if (labPending) return;
       var baseline = virtualPaused || (labPositionUsable() ? {
         provider: provider, identity: boltIdentity(), position: labPosition, duration: labDuration } : null);
-      if (!baseline || baseline.identity !== boltIdentity()) {
-        get("command-status").textContent = "A fresh, identity-checked position is required before seeking.";
-        return;
-      }
+      if (!baseline || baseline.identity !== boltIdentity()) return;
       var target = Math.max(0, Math.min(baseline.duration, baseline.position + delta));
-      if (target === baseline.position) {
-        get("command-status").textContent = "At the seek boundary; no position change requested.";
-        return;
-      }
+      if (target === baseline.position) return;
       if (virtualPaused) {
         virtualPaused.position = target;
-        get("command-status").textContent = "Resume target " + boltClock(target)
-          + " set while virtually paused. Stored progress stays at the last confirmed position.";
+        get("command-status").textContent = "";
         renderSeekPreview(CONTROL_IDS[selected]);
         return;
       }
       unloadFrame();
       loadProviderFrame(target, true);
       armLabPending("seek", target, baseline);
-      get("command-status").textContent = "Seeking to " + boltClock(target)
-        + " by reloading " + providerLabel() + "; awaiting position confirmation.";
+      get("command-status").textContent = "";
       renderBoltPlayPause(); resetIdle();
     }
     function clearVidzenPending() {
@@ -607,25 +602,17 @@
       vidzenPending = null;
     }
     function sendVidzenControl(kind, delta) {
-      if (vidzenPending) {
-        get("command-status").textContent = "Waiting for VidZen to confirm the previous command.";
-        return;
-      }
+      if (vidzenPending) return;
       if (!labPositionUsable() || frame.src === "about:blank" || !frameLoaded
           || kind === "toggle" && vidzenStatusAt === null) {
-        get("command-status").textContent = "VidZen needs a fresh, identity-checked player status before controls are available.";
         providers.sendCommand(frame, "getStatus", [], provider);
         return;
       }
       var command = kind === "toggle" ? labPaused ? "play" : "pause" : "seek";
       var target = command === "seek"
         ? Math.max(0, Math.min(labDuration, labPosition + delta)) : null;
-      if (command === "seek" && target === labPosition) {
-        get("command-status").textContent = "At the seek boundary; no command sent.";
-        return;
-      }
+      if (command === "seek" && target === labPosition) return;
       if (!providers.sendCommand(frame, command, command === "seek" ? [target] : [], provider)) {
-        get("command-status").textContent = "VidZen command could not be sent.";
         return;
       }
       vidzenPending = { command: command, target: target, generation: labGeneration };
@@ -633,15 +620,15 @@
       vidzenPendingTimer = clock.setTimeout(function () {
         if (vidzenPending !== pending) return;
         clearVidzenPending();
-        get("command-status").textContent = "VidZen did not confirm " + command + "; actual playback state is unknown.";
         providers.sendCommand(frame, "getStatus", [], provider);
         renderBoltPlayPause();
+        resetIdle();
       }, 10000);
       clock.setTimeout(function () {
         if (!disposed && vidzenPending === pending && labGeneration === pending.generation)
           providers.sendCommand(frame, "getStatus", [], provider);
       }, 650);
-      get("command-status").textContent = "VidZen " + command + " requested; awaiting actual player state.";
+      get("command-status").textContent = "";
       renderBoltPlayPause();
     }
     function boltDiagnostic() {
@@ -706,8 +693,8 @@
           boltSeekPending = false; s.seekTarget = null; s.seekUnconfirmed = true;
           if (s.restoreSent && s.restoreResult === "awaiting position confirmation") {
             s.restoreResult = "not confirmed; playback remains available";
-            get("command-status").textContent = "VidBolt did not confirm the saved position; playback remains available from its current position.";
           }
+          if (state === STATES.CONTROLS_VISIBLE) resetIdle();
         }
         var reason = null;
         if (!transitionStarted && !episodeLookupPending
@@ -752,7 +739,6 @@
       var target = s.duration > 0 ? Math.min(s.restoreTarget, s.duration) : s.restoreTarget;
       if (!providers.sendCommand(frame, "seek", [target], provider)) {
         s.restoreResult = "seek command could not be sent";
-        get("command-status").textContent = "Saved position is unavailable to VidBolt; playback continues from its current position.";
         return;
       }
       s.restoreSent = true;
@@ -763,8 +749,6 @@
       s.restoreResult = "awaiting position confirmation";
       boltSeekPending = true;
       diagnostics.recordCommand("seek");
-      get("command-status").textContent = (s.restoreKind === "recovery" ? "Recovery position" : "Resume position")
-        + " requested at " + boltClock(target) + "; awaiting VidBolt confirmation.";
     }
     function recordBoltEvent(message) {
       var s = boltSession;
@@ -801,7 +785,7 @@
         get("player-loading").hidden = true;
         var pausedProgress = confirmedProgressRecord();
         if (pausedProgress) storePlayerProgress(pausedProgress.position, pausedProgress.duration,
-          pausedProgress.completed, true);
+          pausedProgress.completed, true, true);
       } else if (message.type === "vidbolt:ended") {
         s.controlPending = null;
         clearBoltControlTimer();
@@ -840,14 +824,13 @@
               boltLastConfirmed = { identity: s.identity, position: message.currentTime };
               storePlayerProgress(message.currentTime, s.duration, false, true, true);
             }
-            get("command-status").textContent = (s.restoreKind === "recovery" ? "Recovery" : "Resume")
-              + " position confirmed by VidBolt timeupdate.";
             s.restoreTarget = null;
             s.restoreSent = false;
           } else {
             boltLastConfirmed = { identity: s.identity, position: message.currentTime };
             storePlayerProgress(message.currentTime, s.duration, false, true, true);
           }
+          if (state === STATES.CONTROLS_VISIBLE) resetIdle();
         }
         if (!seekArrival && s.seekTarget === null && time >= s.seekUntil
             && message.currentTime > s.progressReference + 0.25) {
@@ -914,8 +897,7 @@
       loadProviderFrame(null, true);
       boltRecoveryGeneration = boltSession ? boltSession.generation : null;
       boltRecoveryDecision = reason === "manual" ? "manual recovery requested" : "active iframe error; automatic recovery used";
-      get("command-status").textContent = "VidBolt recovery " + boltRecoveryAttempts + ": " + boltLastRecoveryReason
-        + ". New iframe loading; TV result unverified.";
+      get("command-status").textContent = "";
       if (reason === "manual" && state === STATES.CONTROLS_VISIBLE) focusControl(11);
       if (state === STATES.DIAGNOSTICS_OPEN) renderDiagnostics();
     }
@@ -924,13 +906,6 @@
       if (!pauseTrace) return;
       pauseTrace.restoredAt = now();
       lastPauseTiming = pauseTrace;
-      if (pauseTrace.hidden) {
-        var summary = " Quick Pause: bar " + Math.round(pauseTrace.overlayAt - pauseTrace.inputAt)
-          + " ms; ready " + (pauseTrace.readyAt === undefined ? "?" : Math.round(pauseTrace.readyAt - pauseTrace.inputAt))
-          + " ms; reply " + (pauseTrace.replyAt === undefined ? "?" : Math.round(pauseTrace.replyAt - pauseTrace.inputAt))
-          + " ms; focus " + Math.round(pauseTrace.restoredAt - pauseTrace.inputAt) + " ms.";
-        get("command-status").textContent += summary;
-      }
       pauseTrace = null;
     }
     function renderSeekLabels() {
@@ -950,17 +925,16 @@
         if (boltPosition !== null && now() - boltPositionAt <= 15000) {
           var target = Math.max(0, Math.min(boltDuration !== null && boltDuration > 0
             ? boltDuration : Infinity, boltPosition + delta));
-          detail = " · target " + boltClock(target);
-        } else detail = " · waiting for current position";
+          detail = " · " + boltClock(target);
+        }
       } else if (transportMode() === "virtual" || provider === "vidzen") {
         var position = virtualPaused ? virtualPaused.position : labPosition;
         var duration = virtualPaused ? virtualPaused.duration : labDuration;
-        if (virtualPaused || labPositionUsable()) detail = " · target "
+        if (virtualPaused || labPositionUsable()) detail = " · "
           + boltClock(Math.max(0, Math.min(duration, position + delta)));
-        else detail = " · waiting for current position";
       }
       preview.textContent = (delta < 0 ? "Rewind " : "Forward ")
-        + SEEK_LABELS[seekLevels[id]] + detail + " · OK to confirm";
+        + SEEK_LABELS[seekLevels[id]] + detail;
       preview.hidden = false;
     }
     function resetSeekSelection() {
@@ -998,9 +972,7 @@
       seekLevels[id] = Math.max(0, Math.min(SEEK_COUNTS.length - 1,
         seekLevels[id] + (increase ? 1 : -1)));
       renderSeekLabels();
-      get("command-status").textContent = seekHint(id);
-      get("command-status").classList.add("is-seek-help");
-      get("screen-reader-status").textContent = get("command-status").textContent;
+      get("screen-reader-status").textContent = seekHint(id);
       return true;
     }
 
@@ -1016,7 +988,6 @@
       var active = playerFullscreen();
       if (fullscreenWasActive && !active) {
         fullscreenExitAt = now();
-        get("command-status").textContent = "Fullscreen exited.";
       }
       fullscreenWasActive = active;
       var fullscreenText = active ? "Exit Fullscreen" : "Fullscreen";
@@ -1040,9 +1011,7 @@
         var target = playerFullscreen() ? doc : playerShell;
         var result = action.call(target);
         Promise.resolve(result).then(function () {
-          if (!disposed) { syncDesktopFullscreen();
-            get("command-status").textContent = playerFullscreen() ? "Fullscreen active." : "Fullscreen exited.";
-          }
+          if (!disposed) syncDesktopFullscreen();
         }, function () {
           if (!disposed) get("command-status").textContent = "Fullscreen request was blocked by the browser.";
         });
@@ -1050,15 +1019,24 @@
         get("command-status").textContent = "Fullscreen request was blocked by the browser.";
       }
     }
+    function clearConnectionTimer() {
+      if (connectionTimer !== null) { clock.clearTimeout(connectionTimer); connectionTimer = null; }
+    }
+    function isPlaybackPausedOrEnded() {
+      if (virtualPaused) return true;
+      if (provider === providers.VIDBOLT) {
+        return !!(boltSession && (boltSession.paused === true || boltSession.pauseIntent || boltSession.endedAt !== null));
+      }
+      if (playbackOnly()) return !!labPaused;
+      if (provider === providers.VIDRIFT) return riftPaused === true;
+      return false;
+    }
     function clearIdle() {
       if (idleTimer !== null) { clock.clearTimeout(idleTimer); idleTimer = null; }
     }
     function resetIdle() {
       clearIdle();
-      if (state === STATES.CONTROLS_VISIBLE && !disposed && !activeBatch && !virtualPaused
-          && !(provider === "vidzen" && labPaused)
-          && !(provider === providers.VIDBOLT && boltSession
-            && (boltSession.paused === true || boltSession.pauseIntent || boltSession.endedAt !== null))) {
+      if (state === STATES.CONTROLS_VISIBLE && !disposed && !activeBatch && !isPlaybackPausedOrEnded()) {
         idleTimer = clock.setTimeout(function () {
           idleTimer = null;
           if (state === STATES.CONTROLS_VISIBLE) hideControls();
@@ -1089,11 +1067,7 @@
       selected = Math.max(0, Math.min(controls.length - 1, index));
       var id = CONTROL_IDS[selected];
       if (controls[selected]) focus(controls[selected]);
-      if (state === STATES.CONTROLS_VISIBLE && !activeBatch
-          && (id === "rewind" || id === "forward")) {
-        get("command-status").textContent = seekHint(id);
-        get("command-status").classList.add("is-seek-help");
-      } else get("command-status").classList.remove("is-seek-help");
+      get("command-status").classList.remove("is-seek-help");
       if (state === STATES.CONTROLS_VISIBLE) renderSeekPreview(id);
     }
     function showControls() {
@@ -1105,33 +1079,21 @@
       focusControl(selected);
       markPause("overlayAt");
       get("command-status").classList.remove("is-seek-help");
-      get("command-status").textContent = provider === providers.VIDBOLT ? "" : transportMode() === "virtual"
-        ? "Pause stops the player; Resume and Seek recreate it at a confirmed timestamp."
-        : provider === "vidzen" ? "VidZen controls await player status confirmation."
-        : isCommandProvider()
-        ? "Experimental commands use the provider iframe; TV effect remains unverified."
-        : playbackOnly() ? "Provider playback controls are inside the player. Horizon can reload or switch providers."
-        : adapter && typeof adapter.send === "function"
-        ? "Preparing secure player connection…"
-        : "Playback commands unavailable until the secure Pico bridge is connected.";
+      get("command-status").textContent = "";
       if (!isCommandProvider() && !playbackOnly() && adapter && typeof adapter.open === "function") {
-        var connectionTimer = clock.setTimeout(function () {
-          if (!disposed && state === STATES.CONTROLS_VISIBLE
-              && get("command-status").textContent === "Preparing secure player connection…") {
-            get("command-status").textContent = "Player Bridge is unavailable. YapGrid controls cannot be confirmed; use VidBolt or retry later.";
+        clearConnectionTimer();
+        connectionTimer = clock.setTimeout(function () {
+          connectionTimer = null;
+          if (!disposed && state === STATES.CONTROLS_VISIBLE) {
+            get("command-status").textContent = "Player Bridge is unavailable. Use VidBolt or retry later.";
             resetIdle();
           }
         }, 5000);
         adapter.open().then(function () {
-          clock.clearTimeout(connectionTimer);
-          if (!disposed && state === STATES.CONTROLS_VISIBLE
-              && get("command-status").textContent === "Preparing secure player connection…") {
-            get("command-status").textContent = "Player connection ready; playback effect remains unverified.";
-          }
+          clearConnectionTimer();
         }, function (error) {
-          clock.clearTimeout(connectionTimer);
-          if (!disposed && state === STATES.CONTROLS_VISIBLE
-              && get("command-status").textContent === "Preparing secure player connection…") {
+          clearConnectionTimer();
+          if (!disposed && state === STATES.CONTROLS_VISIBLE) {
             get("command-status").textContent =
               "Bridge error: " + (error && error.message ? error.message : "unknown");
           }
@@ -1142,10 +1104,9 @@
     }
     function hideControls(force) {
       if (disposed || state !== STATES.CONTROLS_VISIBLE) return;
-      if (!force && (virtualPaused || provider === "vidzen" && labPaused)) return;
-      if (!force && provider === providers.VIDBOLT && boltSession
-          && (boltSession.paused === true || boltSession.pauseIntent || boltSession.endedAt !== null)) return;
+      if (!force && isPlaybackPausedOrEnded()) return;
       clearIdle();
+      clearConnectionTimer();
       if (upNextTarget && provider === providers.VIDBOLT && boltSeekPending) {
         resetIdle();
         return;
@@ -1565,9 +1526,7 @@
       renderProviderChoice();
       loadProviderFrame(baseline && baseline.position, true);
       if (baseline && baseline.position > 0) armLabPending("server", baseline.position, baseline);
-      get("command-status").textContent = "Requested VidZen " + vidzenServerLabels[chosen]
-        + " (actual server may vary)" + (baseline ? " near " + boltClock(baseline.position)
-          + "; awaiting playback confirmation." : "; playback position unavailable.");
+      get("command-status").textContent = "";
       focusControl(23);
     }
     function closeAudioLanguageMenu() {
@@ -1614,10 +1573,7 @@
         unloadFrame();
         vidBoltAutoplay = true;
         loadProviderFrame(null, true);
-        var label = audioLabels[lang] || "Default";
-        get("command-status").textContent = lang === "auto"
-          ? "VidBolt audio preference set to Automatic / Default."
-          : "VidBolt audio preference set to " + label + "; actual track availability is unverified.";
+        get("command-status").textContent = "";
       }
       closeAudioLanguageMenu();
     }
@@ -1936,13 +1892,11 @@
       if (!isMovie && route.showTitle) query += "&showTitle=" + encodeURIComponent(String(route.showTitle).slice(0, 120));
       if (!isMovie && route.episodeTrail) query += "&episodeTrail=" + encodeURIComponent(route.episodeTrail);
       if (route.handoff) query += "&handoff=" + encodeURIComponent(route.handoff);
-      if (playbackOnly() && labPosition !== null && labDuration !== null)
-        storePlayerProgress(labPosition, labDuration, false, true);
       var confirmed = confirmedProgressRecord();
       var prior = readPlayerProgress(boltIdentity());
-      var flushed = confirmed && boltSession && boltSession.advancedAt !== null
+      var flushed = confirmed
         ? storePlayerProgress(confirmed.position, confirmed.duration,
-          confirmed.completed || !!(prior && prior.completed), true) : null;
+          confirmed.completed || !!(prior && prior.completed), true, !(prior && prior.completed)) : null;
       var saved = flushed || readPlayerProgress(boltIdentity()) || confirmed;
       if (saved && ["vidbolt", "vidy", "stellar", "vidzen"].indexOf(saved.provider) >= 0)
         query += "&position=" + encodeURIComponent(saved.position)
@@ -1966,6 +1920,10 @@
       return "https://horizon-universal-search-preview.ali-al-anbari.workers.dev/" + query;
     }
     function launchEpisode(target) {
+      var currentConfirmed = confirmedProgressRecord();
+      if (currentConfirmed) {
+        storePlayerProgress(currentConfirmed.position, currentConfirmed.duration, currentConfirmed.completed, true, true);
+      }
       var trail = (route.episodeTrail ? route.episodeTrail + "," : "")
         + currentEpisode.season + ":" + currentEpisode.episode;
       var trailItems = trail.split(",");
@@ -2135,80 +2093,51 @@
     }
     function sendBoltSeek(delta) {
       if (provider !== providers.VIDBOLT || !boltSession || !frameLoaded || frame.src === "about:blank") return false;
-      if (!providerReady && !providerPlaying && boltSession.paused !== true) {
-        get("command-status").textContent = "Wait for VidBolt ready; no seek sent.";
-        return false;
-      }
-      if (boltSeekPending) {
-        get("command-status").textContent = "Await a confirmed VidBolt seek position; no second seek sent.";
-        return false;
-      }
+      if (!providerReady && !providerPlaying && boltSession.paused !== true) return false;
+      if (boltSeekPending) return false;
       var position = boltPosition;
       var positionAt = boltPositionAt;
-      if (position === null || !isFinite(position) || position < 0 || now() - positionAt > 15000) {
-        get("command-status").textContent = "VidBolt position is unavailable or stale; no seek sent.";
-        return false;
-      }
+      if (position === null || !isFinite(position) || position < 0 || now() - positionAt > 15000) return false;
       var target = Math.max(0, Math.min(boltDuration !== null && boltDuration > 0 ? boltDuration : Infinity,
         position + delta));
-      if (target === position) {
-        get("command-status").textContent = "At the seek boundary; no seek sent.";
-        return false;
-      }
-      if (!providers.sendCommand(frame, "seek", [target], provider)) {
-        get("command-status").textContent = "VidBolt seek could not be sent.";
-        return false;
-      }
+      if (target === position) return false;
+      if (!providers.sendCommand(frame, "seek", [target], provider)) return false;
       boltSeekPending = true;
       boltSession.seekUntil = now() + BOLT_SEEK_GRACE_MS;
       boltSession.seekTarget = target;
       boltSession.seekUnconfirmed = false;
       diagnostics.recordCommand("seek");
-      get("command-status").textContent = "Seek requested to " + boltClock(target)
-        + "; awaiting VidBolt position confirmation.";
-      get("screen-reader-status").textContent = get("command-status").textContent;
+      get("command-status").textContent = "";
+      get("screen-reader-status").textContent = "Seeking to " + boltClock(target);
       return true;
     }
     function toggleBoltPlayPause() {
       var s = boltSession;
       if (!s) return;
-      if (s.controlPending) {
-        get("command-status").textContent = "Await VidBolt's play/pause response; no opposite command sent.";
-        return;
-      }
-      if (s.controlLastSentAt !== null && now() - s.controlLastSentAt < 750) {
-        get("command-status").textContent = "Wait briefly before another VidBolt play/pause request.";
-        return;
-      }
+      if (s.controlPending) return;
+      if (s.controlLastSentAt !== null && now() - s.controlLastSentAt < 750) return;
       var command = s.paused === false ? "pause" : "play";
-      if (!providers.sendCommand(frame, command, [], provider)) {
-        get("command-status").textContent = "VidBolt " + command + " could not be sent.";
-        return;
-      }
+      if (!providers.sendCommand(frame, command, [], provider)) return;
       s.controlLastSentAt = now();
       s.controlPending = { type: command, at: now() };
       s.pauseIntent = command === "pause";
       diagnostics.recordCommand(command);
       renderBoltPlayPause();
-      get("command-status").textContent = "VidBolt " + command + " requested; awaiting provider event.";
+      get("command-status").textContent = "";
       clearBoltControlTimer();
       var generation = s.generation;
       boltControlTimer = clock.setTimeout(function () {
         boltControlTimer = null;
         if (!boltSession || boltSession.generation !== generation || !boltSession.controlPending) return;
-        var wasPause = boltSession.controlPending.type === "pause";
         boltSession.controlPending = null;
         boltSession.paused = null;
         renderBoltPlayPause();
-        get("command-status").textContent = wasPause
-          ? "VidBolt pause response missing; state unknown, watchdog held for your pause request."
-          : "VidBolt play response missing; state unknown.";
       }, BOLT_CONTROL_PENDING_MS);
     }
     function activateExperimental(id) {
       if (id === "experiment-focus") { startNativeFocus(); return; }
       if (!usesExperimentalRow() || !frameLoaded || frame.src === "about:blank") {
-        get("command-status").textContent = "Wait for the experimental iframe to load; no command sent.";
+        get("command-status").textContent = "Wait for the player to load.";
         return;
       }
       var command = id.slice(11);
@@ -2494,6 +2423,7 @@
       overlay.classList.remove("is-quick-pause");
       episodeLookup += 1;
       clearIdle();
+      clearConnectionTimer();
       clearUpNext();
       if (batchPollTimer !== null) { clock.clearTimeout(batchPollTimer); batchPollTimer = null; }
       if (batchStopTimer !== null) { clock.clearTimeout(batchStopTimer); batchStopTimer = null; }
@@ -2672,17 +2602,19 @@
       resetIdle();
     }
     function unloadFrame() {
+      clearConnectionTimer();
       independentSubtitles.clear();
       if (playbackOnly() && !labPending && labPosition !== null && labDuration !== null)
-        storePlayerProgress(labPosition, labDuration, false, true);
+        storePlayerProgress(labPosition, labDuration, labDuration > 0 && labPosition / labDuration >= 0.95, true, true);
       labPosition = null;
       labDuration = null;
       labPositionAt = 0;
       labPaused = false;
       if (provider === providers.VIDBOLT) {
         var unloadedProgress = confirmedProgressRecord();
+        var unloadedPrior = readPlayerProgress(boltIdentity());
         if (unloadedProgress) storePlayerProgress(unloadedProgress.position, unloadedProgress.duration,
-          unloadedProgress.completed, true);
+          unloadedProgress.completed || !!(unloadedPrior && unloadedPrior.completed), true, !(unloadedPrior && unloadedPrior.completed));
       }
       clearBoltControlTimer();
       clearBoltWatchdog();
@@ -2724,15 +2656,14 @@
       unloadFrame();
       loadProviderFrame();
       focusControl(11);
-      get("command-status").textContent = "YapGrid player reloaded for the same title. Previous position is unavailable; playback starts again.";
+      get("command-status").textContent = "";
     }
     function reloadProvider() {
       if (disposed || route.invalid || activeBatch) return;
       clearLabPending(); clearVidzenPending();
       if (virtualPaused && (provider === "vidy" || provider === "stellar")) {
         focusControl(11);
-        get("command-status").textContent = "Player remains virtually paused. Resume recreates it at "
-          + boltClock(virtualPaused.position) + ".";
+        get("command-status").textContent = "";
         return;
       }
       var checkpoint = labPosition !== null && labDuration !== null ? labPosition
@@ -2741,10 +2672,7 @@
       loadProviderFrame(checkpoint, true);
       if (state === STATES.PLAYBACK_HIDDEN) showControls();
       focusControl(11);
-      get("command-status").textContent = providerLabel() + " reloaded for the same title. "
-        + ((provider === "vidy" || provider === "stellar") && checkpoint > 0
-          ? "Saved start position requested; awaiting provider progress confirmation."
-          : "Playback may restart from the beginning.");
+      get("command-status").textContent = "";
     }
     function loadProviderFrame(resumeAt, recovering) {
       labGeneration += 1;
@@ -2924,27 +2852,27 @@
             return;
           }
           var confirmedSeek = labPending.kind === "seek";
-          var confirmedServer = labPending.kind === "server";
           clearLabPending();
           virtualPaused = null;
-          get("command-status").textContent = providerLabel() + " "
-            + (confirmedSeek ? "seek confirmed" : confirmedServer
-              ? "position confirmed after server request" : "resume confirmed")
-            + " near " + boltClock(message.currentTime) + ".";
+          get("command-status").textContent = "";
           get("player-loading").hidden = true;
           if (confirmedSeek) storePlayerProgress(message.currentTime, message.duration, false, true, true);
+          if (state === STATES.CONTROLS_VISIBLE) resetIdle();
         }
         if (provider === "vidzen" && vidzenPending && vidzenPending.command === "seek"
             && (!credible || Math.abs(message.currentTime - vidzenPending.target) > LAB_POSITION_TOLERANCE)) {
           labStatus += " Seek position not confirmed.";
           return;
         }
+        var prevLabPaused = labPaused;
+        var prevLabPlaying = providerPlaying;
         if (message.type === "lab:play") { providerPlaying = true; labPaused = false; }
         if (message.type === "lab:timeupdate" && credible) { providerPlaying = true; labPaused = false; }
         if (message.type === "lab:pause") { providerPlaying = false; labPaused = true; }
         if (message.type === "lab:ended") { providerPlaying = false; labPaused = true; }
         if (message.type === "lab:status") { providerPlaying = !message.paused; labPaused = message.paused; vidzenStatusAt = now(); }
         if (provider === "vidzen" && labPaused && state === STATES.PLAYBACK_HIDDEN) showControls();
+        var vidzenConfirmedCmd = false;
         if (provider === "vidzen" && vidzenPending && vidzenPending.generation === labGeneration && credible) {
           var vp = vidzenPending;
           var confirmed = vp.command === "seek" && (message.type === "lab:timeupdate"
@@ -2956,7 +2884,8 @@
               || message.type === "lab:status" && message.paused === false);
           if (confirmed) {
             clearVidzenPending();
-            get("command-status").textContent = "VidZen " + vp.command + " confirmed by player state.";
+            vidzenConfirmedCmd = true;
+            get("command-status").textContent = "";
             if (vp.command === "seek") storePlayerProgress(message.currentTime, message.duration, false, true, true);
           }
         }
@@ -2967,7 +2896,7 @@
               && labPosition !== null && labPosition >= 60))) {
             var endDur = credible ? message.duration : labDuration;
             var endPos = credible ? message.currentTime : labPosition;
-            if (endDur >= 600) storePlayerProgress(endPos, endDur, true, true);
+            if (endDur >= 600) storePlayerProgress(endPos, endDur, true, true, true);
             startUpNext();
           }
         } else if (labPending || (provider === "vidzen" && vidzenPending && vidzenPending.command === "seek")) {
@@ -2982,10 +2911,10 @@
           labDuration = message.duration;
           labPositionAt = now();
           if (message.currentTime > 0) {
-            var completed = message.type === "lab:ended"
+            var completed = (message.type === "lab:ended" || message.type === "lab:timeupdate")
               && message.currentTime / message.duration >= 0.95;
             if (!vidzenPending || vidzenPending.command !== "seek") storePlayerProgress(message.currentTime, message.duration, completed,
-              completed || message.type === "lab:pause" || message.type === "lab:seeked");
+              completed || message.type === "lab:pause" || message.type === "lab:seeked", true);
           }
           if (!isMovie && !independentTimelineEnded && !(labPending || (provider === "vidzen" && vidzenPending && vidzenPending.command === "seek"))
               && message.currentTime / message.duration >= 0.95) {
@@ -2999,7 +2928,10 @@
           renderTimeline();
         }
         renderBoltPlayPause();
-        if (state === STATES.CONTROLS_VISIBLE) resetIdle();
+        if (state === STATES.CONTROLS_VISIBLE) {
+          if (labPaused && !prevLabPaused) clearIdle();
+          else if ((!labPaused && prevLabPaused) || (providerPlaying && !prevLabPlaying) || vidzenConfirmedCmd) resetIdle();
+        }
         if (provider === "vidzen" && (message.type === "lab:status" || message.type === "lab:timeupdate") && credible
             && labRestoreTarget !== null && labRestoreTarget > 0 && !vidzenPending) {
           var restoreAt = labRestoreTarget;
@@ -3221,11 +3153,12 @@
       if (disposed || state !== STATES.CONTROLS_VISIBLE || activeBatch || route.invalid) return;
       if (providers.compatible(currentEpisode).indexOf(chosen) < 0 || chosen === provider) return;
       clearLabPending(); clearVidzenPending();
-      if (labPosition !== null && labDuration !== null) storePlayerProgress(labPosition, labDuration, false, true);
+      clearIdle();
+      if (labPosition !== null && labDuration !== null) storePlayerProgress(labPosition, labDuration, labDuration > 0 && labPosition / labDuration >= 0.95, true, true);
       unloadFrame();
       virtualPaused = null;
       provider = chosen;
-      labStatus = "New experimental selection; iframe pending.";
+      labStatus = "Provider switched; player loading.";
       labFirstEvent = null;
       compatibilityMode = providers.BASELINE;
       vidFastMode = providers.BASELINE;
@@ -3262,6 +3195,7 @@
       loadProviderFrame();
       setOverlayVisible(true);
       focusControl(8);
+      resetIdle();
     }
     function bindFrameEvents(activeFrame) {
     activeFrame.addEventListener("load", function () {
@@ -3275,7 +3209,7 @@
           providers.initializeLabFrame(frame, provider);
         }
         if (provider === "vidzen") providers.sendCommand(frame, "getStatus", [], provider);
-        loading(providerLabel() + " iframe loaded. Playback and audio unverified; open Diagnostics or choose another provider.");
+        get("player-loading").hidden = true;
       }
       if (provider === providers.VIDBOLT && boltSession) {
         boltSession.loadCount = Math.min(999, boltSession.loadCount + 1);

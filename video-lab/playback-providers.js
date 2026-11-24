@@ -56,7 +56,7 @@
   }
   function label(value) {
     var s = select(value);
-    if (LAB_LABELS[s]) return LAB_LABELS[s] + " · experimental";
+    if (LAB_LABELS[s]) return LAB_LABELS[s];
     if (s === VIDFAST) return "VidFast";
     if (s === VIDLINK) return "VidLink";
     if (s === VIDRIFT) return "VidRift";

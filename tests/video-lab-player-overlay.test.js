@@ -282,7 +282,7 @@ test("each first arrow reveals controls without moving selection or sending a co
     assert.equal(app.state(), "CONTROLS_VISIBLE", key);
     assert.equal(app.document.activeElement.id, "play-pause", key);
     assert.equal(app.get("overlay").classList.contains("is-visible"), true);
-    assert.match(app.get("command-status").textContent, /bridge is connected/);
+    assert.equal(app.get("command-status").textContent, "");
     assert.equal(app.get("player-frame").src, initial);
     assert.equal(app.get("player-frame").sourceChanges, 1);
     assert.equal(app.timers.size, 1); // Only the five-second idle timer.
@@ -351,7 +351,7 @@ test("Quick Pause displays controls immediately and records readiness, reply and
   assert.equal(timing.dispatchedAt - timing.inputAt, 416);
   assert.equal(timing.replyAt - timing.inputAt, 536);
   assert.equal(timing.restoredAt - timing.inputAt, 536);
-  assert.match(app.get("command-status").textContent, /playback effect is unverified.*Quick Pause: bar 0 ms; ready 400 ms; reply 536 ms; focus 536 ms/);
+  assert.doesNotMatch(app.get("command-status").textContent, /Quick Pause: bar/);
   assert.equal(app.document.activeElement.id, "play-pause");
   app.advance(5000);
   assert.equal(app.state(), "PLAYBACK_HIDDEN");
@@ -440,7 +440,7 @@ test("seek preview displays all acceleration levels and a validated VidBolt targ
   app.key("ArrowUp"); app.key("ArrowRight");
   const preview = app.get("seek-preview");
   assert.equal(preview.hidden, false);
-  assert.match(preview.textContent, /Forward 10s · target 2:10 · OK to confirm/);
+  assert.match(preview.textContent, /Forward 10s · 2:10/);
   for (const level of ["30s", "1m", "2m", "5m", "10m"]) {
     app.key("ArrowRight", true);
     assert.match(preview.textContent, new RegExp("Forward " + level));
@@ -1146,7 +1146,7 @@ test("movie provider list selects VidBolt and Vidy by D-pad", () => {
   assert.equal(app.document.activeElement.id, "provider-choice");
   chooseProvider(app, "Vidy");
   assert.equal(app.get("player-frame").src, "https://www.vidy.st/movie/550?autoplay=true&nextEpisode=false&episodeSelector=false&autoplayNextEpisode=false");
-  assert.equal(app.get("provider-choice").textContent, "Provider: Vidy · experimental");
+  assert.equal(app.get("provider-choice").textContent, "Provider: Vidy");
   assert.equal(app.get("unload-provider").hidden, false);
   assert.equal(app.get("recover-provider").hidden, false);
   assert.equal(app.get("play-pause").disabled, false);
@@ -1211,7 +1211,7 @@ test("Stellar virtual pause stops iframe and verifies resume before advancing pr
   report(5);
   assert.equal(saved.read().items[0].position, 120, "restart pre-roll is not saved");
   report(122);
-  assert.match(app.get("command-status").textContent, /resume confirmed/);
+  assert.equal(app.get("command-status").textContent, "");
   assert.equal(app.get("play-pause-label").textContent, "Pause");
 });
 
@@ -1273,7 +1273,7 @@ test("virtual paused seek uses Horizon escalation without moving stored checkpoi
   app.get("play-pause").click();
   assert.match(app.get("player-frame").src, /startAt=1800/);
   report(1802);
-  assert.match(app.get("command-status").textContent, /resume confirmed/);
+  assert.equal(app.get("command-status").textContent, "");
   assert.equal(saved.read().items[0].position, 1200,
     "target is not a progress checkpoint until playback advances and a write is due");
 });
@@ -1288,16 +1288,16 @@ test("VidZen commands use exact origin and require player state confirmation", (
   app.get("play-pause").click();
   assert.equal(app.posted.at(-1).data.command, "pause");
   app.message({ type: "vidzen:status", currentTime: 120, duration: 7200, paused: true }, "https://vidzen.fun");
-  assert.match(app.get("command-status").textContent, /pause confirmed/);
+  assert.equal(app.get("command-status").textContent, "");
   app.get("play-pause").click();
   assert.equal(app.posted.at(-1).data.command, "play");
   app.message({ type: "vidzen", event: "play", currentTime: 120, duration: 7200 }, "https://vidzen.fun");
-  assert.match(app.get("command-status").textContent, /play confirmed/);
+  assert.equal(app.get("command-status").textContent, "");
   app.get("forward").click();
   assert.equal(app.posted.at(-1).data.command, "seek");
   assert.equal(app.posted.at(-1).data.time, 130);
   app.message({ type: "vidzen", event: "timeupdate", currentTime: 130, duration: 7200 }, "https://vidzen.fun");
-  assert.match(app.get("command-status").textContent, /seek confirmed/);
+  assert.equal(app.get("command-status").textContent, "");
 });
 
 test("VidZen Server menu preserves a verified checkpoint and rejects stale events", () => {
@@ -1329,7 +1329,7 @@ test("VidZen Server menu preserves a verified checkpoint and rejects stale event
   assert.equal(saved.read().items[0].position, 120);
   app.message({ type: "vidzen", event: "timeupdate", currentTime: 122,
     duration: 7200 }, "https://vidzen.fun");
-  assert.match(app.get("command-status").textContent, /position confirmed after server request/);
+  assert.equal(app.get("command-status").textContent, "");
   app.get("player-frame").fire("load");
   app.message({ type: "vidzen:status", currentTime: 123, duration: 7200,
     paused: false }, "https://vidzen.fun");
@@ -1358,7 +1358,7 @@ test("VidZen Server menu keeps exact TV episode and failed confirmation recovera
   assert.match(app.get("player-frame").src, /\/tv\/1399\/1\/1\?autoPlay=true&server=hyperion&startAt=300/);
   app.advance(25000);
   assert.equal(app.get("player-frame").src, "about:blank");
-  assert.match(app.get("command-status").textContent, /stored progress is unchanged/);
+  assert.match(app.get("player-loading").textContent, /could not switch to the requested server/i);
   assert.notEqual(app.get("provider-choice").disabled, true);
   assert.notEqual(app.get("recover-provider").disabled, true);
   assert.notEqual(app.get("watch-exit").disabled, true);
@@ -1373,7 +1373,7 @@ test("VidZen server switch preserves playable video on checkpoint timeout and ke
   app.get("vidzen-server").click();
   app.get("vidzen-server-options").children[4].click();
   assert.match(app.get("player-frame").src, /movie\/550\?autoPlay=true&server=jupiter&startAt=120/);
-  assert.match(app.get("command-status").textContent, /Requested VidZen Jupiter \(actual server may vary\)/);
+  assert.equal(app.get("command-status").textContent, "");
   app.get("player-frame").fire("load");
   app.message({ type: "vidzen:status", currentTime: 2, duration: 7200,
     paused: false }, "https://vidzen.fun");
@@ -1383,7 +1383,7 @@ test("VidZen server switch preserves playable video on checkpoint timeout and ke
   app.message({ type: "vidzen", event: "timeupdate", currentTime: 17, duration: 7200 }, "https://vidzen.fun");
   app.advance(10000);
   assert.notEqual(app.get("player-frame").src, "about:blank", "playable video is not terminated on 25s timeout");
-  assert.match(app.get("command-status").textContent, /playback active.*requested Jupiter.*actual server/i);
+  assert.equal(app.get("command-status").textContent, "");
   app.key("ArrowDown");
   app.get("play-pause").click();
   assert.equal(app.posted.at(-1).data.command, "pause", "direct play/pause survives 25s timeout");
@@ -1477,7 +1477,7 @@ test("desktop Watch fullscreen lives in the control row, keeps the iframe, and c
   app.document.fire("fullscreenchange");
   assert.equal(app.get("watch-fullscreen").textContent, "Fullscreen");
   assert.equal(app.get("watch-fullscreen").getAttribute("aria-pressed"), "false");
-  assert.equal(app.get("command-status").textContent, "Fullscreen exited.");
+  assert.equal(app.get("command-status").textContent, "");
   assert.equal(app.key("Escape").prevented, true, "browser Escape does not also exit Watch");
   assert.equal(app.navigation.length, 0);
   app.key("ArrowRight");
@@ -1532,7 +1532,7 @@ test("Watch provider switch remains explicit and Space exposes VidBolt Play", ()
   assert.equal(app.document.activeElement.id, "play-pause");
   chooseProvider(app, "Vidy");
   assert.equal(app.get("player-frame").src, "https://www.vidy.st/movie/550?autoplay=true&nextEpisode=false&episodeSelector=false&autoplayNextEpisode=false");
-  assert.equal(app.get("provider-choice").textContent, "Provider: Vidy · experimental");
+  assert.equal(app.get("provider-choice").textContent, "Provider: Vidy");
   assert.equal(app.get("watch-exit").hidden, false);
 });
 
@@ -1543,7 +1543,7 @@ test("Watch offers a deliberate Play request after iframe load when autoplay rea
   app.get("play-pause").click();
   assert.deepEqual(JSON.parse(JSON.stringify(app.posted.at(-1))),
     { data: { type: "play" }, origin: "https://vidbolt.xyz" });
-  assert.match(app.get("command-status").textContent, /requested; awaiting provider event/);
+  assert.equal(app.get("command-status").textContent, "");
 });
 
 test("Watch Episode List returns to the selected TV episode in Watch", () => {
@@ -1583,7 +1583,7 @@ test("YapGrid Reload Player replaces only its iframe and retains movie or exact 
     assert.notEqual(app.get("player-frame"), oldFrame);
     assert.equal(app.get("player-frame").src, expected);
     assert.equal(app.document.activeElement.id, "recover-provider");
-    assert.match(app.get("command-status").textContent, /Previous position is unavailable/);
+    assert.equal(app.get("command-status").textContent, "");
     assert.deepEqual(app.navigation, []);
     app.key("Backspace");
     assert.equal(app.state(), "PLAYBACK_HIDDEN");
@@ -1828,7 +1828,7 @@ test("VidBolt captions reject short ad timelines and untrusted source messages",
 test("provider switching keeps controls for VidBolt and disables unsupported lab controls", () => {
   const app = setup({ search: "?type=movie&id=550" });
   const primary = ["rewind", "play-pause", "forward"].map(id => app.get(id));
-  for (const name of ["VidBolt", "Vidy · experimental"]) {
+  for (const name of ["VidBolt", "Vidy"]) {
     app.key("ArrowDown"); app.get("provider-choice").focus(); chooseProvider(app, name);
     assert.equal(app.get("provider-choice").textContent, "Provider: " + name);
     assert.deepEqual(["rewind", "play-pause", "forward"].map(id => app.get(id)), primary);
@@ -2257,12 +2257,12 @@ test("VidBolt seeks only from recent validated timeupdate and autoplay toggle re
   app.key("ArrowDown");
   app.get("forward").click();
   assert.equal(app.posted.length, 0);
-  assert.match(app.get("command-status").textContent, /Wait for VidBolt ready/);
+  assert.equal(app.get("command-status").textContent, "");
   app.message({ type: "ready" }, "https://vidbolt.xyz");
   app.get("forward").click();
   assert.equal(app.posted.length, 1);
   assert.equal(JSON.stringify(app.posted[0].data), '{"type":"volume","volume":1}');
-  assert.match(app.get("command-status").textContent, /position is unavailable/);
+  assert.equal(app.get("command-status").textContent, "");
   app.message({ type: "timeupdate", time: 8 }, "https://vidbolt.xyz");
   app.message({ type: "durationchange", duration: 100 }, "https://vidbolt.xyz");
   app.get("rewind").click();
@@ -2348,7 +2348,7 @@ test("VidBolt resume waits for ready, rewinds ten seconds, and confirms the abso
     { type: "volume", volume: 1 }, { type: "seek", time: 40 }
   ]);
   app.message({ type: "timeupdate", time: 40, duration: 100 }, "https://vidbolt.xyz");
-  assert.match(app.get("command-status").textContent, /Resume position confirmed/);
+  assert.equal(app.get("command-status").textContent, "");
   assert.equal(saved.read().items[0].position, 50, "the contextual rewind does not replace the saved place");
 });
 
@@ -2779,7 +2779,7 @@ test("VidBolt episode identity and provider switches never reuse another positio
   assert.equal(next.get("player-frame").src, "https://vidbolt.xyz/tv/1396/1/3?autoPlay=true");
   const old = next.get("player-frame");
   next.key("ArrowDown"); chooseProvider(next, "Vidy");
-  assert.equal(next.get("provider-choice").textContent, "Provider: Vidy · experimental");
+  assert.equal(next.get("provider-choice").textContent, "Provider: Vidy");
   assert.notEqual(next.get("player-frame"), old);
 });
 
@@ -2883,12 +2883,12 @@ test("VidBolt Left/Right use YapGrid levels and OK commits one absolute seek", (
   app.key("ArrowLeft");
   assert.equal(app.document.activeElement.id, "rewind");
   app.key("ArrowLeft");
-  assert.match(app.get("command-status").textContent, /Rewind −30s · target 14:30/);
+  assert.match(app.get("seek-preview").textContent, /Rewind 30s · 14:30/);
   for (const label of ["1m", "2m", "5m", "10m"]) {
     app.key("ArrowLeft", true);
     assert.equal(app.get("rewind-label").textContent, "−" + label);
   }
-  assert.match(app.get("command-status").textContent, /target 5:00/);
+  assert.match(app.get("seek-preview").textContent, /5:00/);
   assert.equal(app.posted.filter(item => item.data.type === "seek").length, 0);
   app.keyup("ArrowLeft");
   assert.equal(app.posted.filter(item => item.data.type === "seek").length, 0);
@@ -2937,7 +2937,7 @@ test("VidBolt repeat selection needs OK and resets on Back, stale position and i
   app.key("ArrowDown"); app.key("ArrowRight");
   app.key("Enter");
   assert.equal(app.posted.filter(item => item.data.type === "seek").length, 0);
-  assert.match(app.get("command-status").textContent, /position is unavailable or stale/);
+  assert.equal(app.get("command-status").textContent, "");
   app.get("recover-provider").click();
   app.advance(1000);
   assert.equal(app.posted.filter(item => item.data.type === "seek").length, 0);
@@ -3028,7 +3028,7 @@ test("VidBolt Auto Recover opt-out survives manual reload and provider switching
   app.key("Backspace");
   app.key("ArrowDown");
   app.get("provider-choice").focus(); chooseProvider(app, "Vidy");
-  assert.equal(app.get("provider-choice").textContent, "Provider: Vidy · experimental");
+  assert.equal(app.get("provider-choice").textContent, "Provider: Vidy");
   app.key("ArrowDown");
   app.get("provider-choice").focus(); chooseProvider(app, "VidBolt");
   assert.equal(app.get("provider-choice").textContent, "Provider: VidBolt");
@@ -3716,8 +3716,8 @@ test("Audio language menu supports D-pad selection, persists preference, and rel
   // Check URL of new frame has audio=ja
   assert.match(app.get("player-frame").src, /vidbolt\.xyz\/tv\/1396\/1\/2\?autoPlay=true&audio=ja/);
 
-  // Status notes that actual track availability is unverified
-  assert.match(app.get("command-status").textContent, /VidBolt audio preference set to Japanese; actual track availability is unverified/);
+  // No routine technical status message shown on audio preference change
+  assert.equal(app.get("command-status").textContent, "");
 
   // Independent subtitles remain OFF
   assert.equal(app.get("subtitle-mode").textContent, "OFF");
@@ -3749,7 +3749,7 @@ test("Audio language selection preserves movie identity and timestamp on relaunc
   app.key("Enter");
   assert.equal(app.get("audio-language-mode").textContent, "German");
   assert.match(app.get("player-frame").src, /vidbolt\.xyz\/movie\/550\?autoPlay=true&audio=de/);
-  assert.match(app.get("command-status").textContent, /German.*actual track availability is unverified/);
+  assert.equal(app.get("command-status").textContent, "");
 
   // Back closes without changing if open
   app.key("Enter"); // re-open

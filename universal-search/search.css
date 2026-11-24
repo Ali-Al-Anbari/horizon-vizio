@@ -1652,6 +1652,103 @@ body.watch-desktop-pointer.settings-active .watch-content { height: 100vh; min-h
   background: rgba(255, 255, 255, 0.2);
   border-color: #fff;
 }
+.settings-entry-options {
+  display: block;
+}
+.settings-entry-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+}
+.settings-entry-head > span:first-child {
+  flex: 1 1 290px;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 500;
+  color: #ffffff;
+}
+.settings-entry-head > span:first-child small {
+  display: block;
+  margin-top: 3px;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.84rem;
+  font-weight: normal;
+}
+.settings-entry-value {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 100px;
+  background: rgba(138, 186, 255, 0.14);
+  color: #8abcff;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.settings-option-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.settings-entry button.settings-option-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1.5px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  text-align: left;
+  position: relative;
+}
+.settings-entry button.settings-option-btn strong {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #ffffff;
+  line-height: 1.2;
+}
+.settings-entry button.settings-option-btn small {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.62);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.settings-entry button.settings-option-btn.is-selected {
+  background: rgba(138, 186, 255, 0.18);
+  border-color: #8abcff;
+}
+.settings-entry button.settings-option-btn.is-selected::after {
+  content: "✓";
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #8abcff;
+}
+.settings-entry button.settings-option-btn.is-selected small {
+  color: rgba(216, 232, 255, 0.9);
+}
+.settings-entry button.settings-option-btn:focus,
+.settings-entry button.settings-option-btn.is-focused {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: #ffffff;
+}
+.settings-entry button.settings-option-btn.is-selected:focus,
+.settings-entry button.settings-option-btn.is-selected.is-focused {
+  background: rgba(138, 186, 255, 0.3);
+  border-color: #ffffff;
+}
+.settings-entry button.settings-option-btn.is-selected:focus::after,
+.settings-entry button.settings-option-btn.is-selected.is-focused::after {
+  color: #ffffff;
+}
 .settings-history-item {
   display: flex;
   align-items: center;

@@ -2823,8 +2823,24 @@
           + " · Fade " + (heroPreferences.fade ? "On" : "Off");
       }
       var browseSummary = get("settings-summary-browsing");
+      var activeShading = typeof core.readControlShadingPref === "function"
+        ? core.readControlShadingPref(local) : "standard";
+      var shadingOptions = core.CONTROL_SHADING_OPTIONS || [];
+      var activeShadingMeta = shadingOptions.find(function (opt) { return opt.id === activeShading; })
+        || { id: "standard", label: "Standard", detail: "15% / 20%" };
+      var shadingValueEl = get("settings-control-shading-value");
+      if (shadingValueEl) shadingValueEl.textContent = activeShadingMeta.label + " · " + activeShadingMeta.detail;
+      var shadingGrid = get("settings-control-shading-options");
+      if (shadingGrid) {
+        Array.from(shadingGrid.querySelectorAll("[data-shading]")).forEach(function (btn) {
+          var selected = btn.dataset.shading === activeShading;
+          btn.classList.toggle("is-selected", selected);
+          btn.setAttribute("aria-checked", String(selected));
+        });
+      }
       if (browseSummary) {
-        browseSummary.textContent = "Hero delay: " + (heroPreferences.delay ? heroPreferences.delay + "ms" : "Immediate");
+        browseSummary.textContent = "Hero delay: " + (heroPreferences.delay ? heroPreferences.delay + "ms" : "Immediate")
+          + " · Control Shading: " + activeShadingMeta.label + " (" + activeShadingMeta.detail + ")";
       }
       var libButton = get("settings-content-library");
       if (libButton) {
@@ -2846,7 +2862,7 @@
       },
       browsing: {
         title: "Browsing & Display",
-        desc: "Fine-tune hero preview latency and display responsiveness",
+        desc: "Fine-tune hero preview latency and playback control shading",
         panelId: "settings-panel-browsing"
       },
       library: {
@@ -3607,8 +3623,9 @@
       startOver = !!startOver || !!(matching && matching.progress && matching.progress.completed
         && matching.manualWatched !== false);
       var handoff = createPlaybackHandoff("tv", state.title.id, season, episode);
+      var shading = typeof core.readControlShadingPref === "function" ? core.readControlShadingPref(local) : "standard";
       var url = player.tvUrl(state.title.id, season, episode, state.subtitle, state.title.title, state.title.tvdbId,
-        startOver ? null : progress, !!startOver, handoff);
+        startOver ? null : progress, !!startOver, handoff, shading);
       if (url && handoff) url += "&handoffAt=" + Date.now();
       if (!url) { text("detail-status", "Invalid episode selection."); return; }
       if (startOver) core.clearProgress(local, "tv", state.title.id, season, episode);
@@ -3642,7 +3659,8 @@
       var progress = record && record.progress && !record.progress.completed ? record.progress : null;
       startOver = !!startOver || !!(record && record.progress && record.progress.completed);
       var handoff = createPlaybackHandoff("movie", state.title.id);
-      var url = player.movieUrl(state.title.id, state.title.title, startOver ? null : progress, !!startOver, handoff);
+      var shading = typeof core.readControlShadingPref === "function" ? core.readControlShadingPref(local) : "standard";
+      var url = player.movieUrl(state.title.id, state.title.title, startOver ? null : progress, !!startOver, handoff, shading);
       if (url && handoff) url += "&handoffAt=" + Date.now();
       if (!url) { text("detail-status", "Invalid movie selection."); return; }
       if (startOver) core.clearProgress(local, "movie", state.title.id);
@@ -3785,11 +3803,36 @@
           if (railPosition >= 0 && key === "ArrowRight") {
             focus(subButtons[0]);
           } else if (subIdx >= 0) {
+            var shadingWrap = state.settingsCategory === "browsing" ? get("settings-control-shading-options") : null;
+            var shadingBtns = shadingWrap && !shadingWrap.closest("[hidden]")
+              ? Array.from(shadingWrap.querySelectorAll("[data-focus]")) : [];
+            var shadingIdx = shadingBtns.indexOf(current);
             var actionsWrap = state.settingsHistoryItem ? get("settings-history-actions") : null;
             var actionBtns = actionsWrap && !actionsWrap.hidden
               ? Array.from(actionsWrap.querySelectorAll("[data-focus]")) : [];
             var actIdx = actionBtns.indexOf(current);
-            if (actIdx >= 0 && (key === "ArrowLeft" || key === "ArrowRight")) {
+            if (shadingIdx >= 0) {
+              var shadingCols = 4;
+              var shadingCol = shadingIdx % shadingCols;
+              if (key === "ArrowRight") {
+                if (shadingIdx < shadingBtns.length - 1) focus(shadingBtns[shadingIdx + 1]);
+              } else if (key === "ArrowLeft") {
+                if (shadingCol > 0) focus(shadingBtns[shadingIdx - 1]);
+                else focus(get("settings-subpage-back"));
+              } else if (key === "ArrowDown") {
+                if (shadingIdx + shadingCols < shadingBtns.length) focus(shadingBtns[shadingIdx + shadingCols]);
+                else focus(get("settings-control-shading-reset") || subButtons[subButtons.length - 1]);
+              } else if (key === "ArrowUp") {
+                if (shadingIdx - shadingCols >= 0) focus(shadingBtns[shadingIdx - shadingCols]);
+                else focus(get("settings-hero-delay") || get("settings-subpage-back"));
+              }
+            } else if (shadingBtns.length && current === get("settings-hero-delay") && key === "ArrowDown") {
+              var selectedShadingBtn = shadingBtns.find(function (b) { return b.classList.contains("is-selected"); });
+              focus(selectedShadingBtn || shadingBtns[0]);
+            } else if (shadingBtns.length && current === get("settings-control-shading-reset") && key === "ArrowUp") {
+              var selectedShadingBack = shadingBtns.find(function (b) { return b.classList.contains("is-selected"); });
+              focus(selectedShadingBack || shadingBtns[shadingBtns.length - 1]);
+            } else if (actIdx >= 0 && (key === "ArrowLeft" || key === "ArrowRight")) {
               if (key === "ArrowRight" && actIdx < actionBtns.length - 1) focus(actionBtns[actIdx + 1]);
               else if (key === "ArrowLeft") focus(actIdx > 0 ? actionBtns[actIdx - 1] : get("settings-subpage-back"));
             } else if (key === "ArrowDown") focus(subButtons[Math.min(subButtons.length - 1, subIdx + 1)]);
@@ -4397,8 +4440,31 @@
       heroPreferences.delay = HERO_DELAYS[(current + 1) % HERO_DELAYS.length];
       saveHeroPreferences();
       this.textContent = heroPreferences.delay ? heroPreferences.delay + (contentLibrary === "arabic" ? " مللي ثانية" : "ms") : localize("Immediate");
+      renderSettings();
       focus(this);
     });
+    var shadingOptionsHost = get("settings-control-shading-options");
+    if (shadingOptionsHost) {
+      Array.from(shadingOptionsHost.querySelectorAll("[data-shading]")).forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          if (typeof core.writeControlShadingPref === "function") {
+            core.writeControlShadingPref(local, this.dataset.shading);
+          }
+          renderSettings();
+          focus(this);
+        });
+      });
+    }
+    var shadingResetBtn = get("settings-control-shading-reset");
+    if (shadingResetBtn) {
+      shadingResetBtn.addEventListener("click", function () {
+        if (typeof core.writeControlShadingPref === "function") {
+          core.writeControlShadingPref(local, core.CONTROL_SHADING_DEFAULT || "standard");
+        }
+        renderSettings();
+        focus(this);
+      });
+    }
     get("settings-hero-fade").addEventListener("click", function () {
       heroPreferences.fade = !heroPreferences.fade;
       saveHeroPreferences();

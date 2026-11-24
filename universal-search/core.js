@@ -6,6 +6,18 @@
   var PREFS_KEY = "horizon-universal-search-providers-v1";
   var SUBTITLE_KEY = "horizon-watch-subtitles-v1";
   var CONTENT_LIBRARY_KEY = "horizon-watch-content-library-v1";
+  var CONTROL_SHADING_KEY = "horizon-watch-control-shading-v1";
+  var CONTROL_SHADING_DEFAULT = "standard";
+  var CONTROL_SHADING_OPTIONS = [
+    { id: "off", label: "Off", detail: "0% / 0%", top: 0, bottom: 0 },
+    { id: "minimal", label: "Minimal", detail: "5% / 5%", top: 5, bottom: 5 },
+    { id: "light", label: "Light", detail: "8% / 8%", top: 8, bottom: 8 },
+    { id: "subtle", label: "Subtle", detail: "10% / 10%", top: 10, bottom: 10 },
+    { id: "medium", label: "Medium", detail: "12% / 15%", top: 12, bottom: 15 },
+    { id: "standard", label: "Standard", detail: "15% / 20%", top: 15, bottom: 20 },
+    { id: "strong", label: "Strong", detail: "20% / 25%", top: 20, bottom: 25 },
+    { id: "maximum", label: "Maximum", detail: "25% / 35%", top: 25, bottom: 35 }
+  ];
   var STATE_KEY = "horizon-universal-search-view-v1";
   var HANDOFF_KEY = "horizon-watch-player-handoff-v1";
   var BROWSED_SEASONS_KEY = "horizon-watch-browsed-seasons-v1";
@@ -640,26 +652,51 @@
     if (mode !== "standard" && mode !== "arabic") return;
     try { storage.setItem(CONTENT_LIBRARY_KEY, JSON.stringify({ version: 1, mode: mode })); } catch (_error) {}
   }
+  function validControlShading(value) {
+    if (typeof value !== "string") return null;
+    for (var i = 0; i < CONTROL_SHADING_OPTIONS.length; i += 1) {
+      if (CONTROL_SHADING_OPTIONS[i].id === value) return value;
+    }
+    return null;
+  }
+  function readControlShadingPref(storage) {
+    try {
+      var raw = storage && storage.getItem(CONTROL_SHADING_KEY);
+      if (!raw) return CONTROL_SHADING_DEFAULT;
+      var parsed = JSON.parse(raw);
+      return parsed && parsed.version === 1 && validControlShading(parsed.preset)
+        ? parsed.preset : CONTROL_SHADING_DEFAULT;
+    } catch (_error) { return CONTROL_SHADING_DEFAULT; }
+  }
+  function writeControlShadingPref(storage, preset) {
+    var valid = validControlShading(preset);
+    if (!valid || !storage) return;
+    try { storage.setItem(CONTROL_SHADING_KEY, JSON.stringify({ version: 1, preset: valid })); } catch (_error) {}
+  }
   function playerResumeParams(progress, startOver) {
     if (startOver) return "&startOver=1";
     var record = progressRecord(progress);
     return record ? "&resume=" + Math.floor(record.position) + "&duration=" + Math.floor(record.duration)
       + "&resumeUpdated=" + Math.floor(record.updatedAt) : "";
   }
-  function tvPlayerUrl(id, season, episode, subtitle, title, tvdbId, progress, startOver, handoff) {
+  function tvPlayerUrl(id, season, episode, subtitle, title, tvdbId, progress, startOver, handoff, shading) {
     if (!positive(id) || !positive(season) || !positive(episode)) return null;
+    var validShading = validControlShading(shading);
     var url = PLAYER_ORIGIN + "/player-overlay.html?season=" + season + "&episode=" + episode
       + "&sub=" + (subtitle === "on" ? "on" : "off") + "&showId=" + id + "&from=search&provider=vidbolt";
     return url + (safeText(title, 120) ? "&name=" + encodeURIComponent(safeText(title, 120)) : "")
       + (positive(tvdbId) ? "&tvdb=" + tvdbId : "") + playerResumeParams(progress, startOver)
-      + (typeof handoff === "string" && /^[A-Za-z0-9_-]{8,80}$/.test(handoff) ? "&handoff=" + handoff : "");
+      + (typeof handoff === "string" && /^[A-Za-z0-9_-]{8,80}$/.test(handoff) ? "&handoff=" + handoff : "")
+      + (validShading ? "&shading=" + validShading : "");
   }
-  function moviePlayerUrl(id, title, progress, startOver, handoff) {
+  function moviePlayerUrl(id, title, progress, startOver, handoff, shading) {
     if (!positive(id)) return null;
+    var validShading = validControlShading(shading);
     return PLAYER_ORIGIN + "/player-overlay.html?type=movie&id=" + id + "&from=search&provider=vidbolt"
       + (safeText(title, 120) ? "&name=" + encodeURIComponent(safeText(title, 120)) : "")
       + playerResumeParams(progress, startOver)
-      + (typeof handoff === "string" && /^[A-Za-z0-9_-]{8,80}$/.test(handoff) ? "&handoff=" + handoff : "");
+      + (typeof handoff === "string" && /^[A-Za-z0-9_-]{8,80}$/.test(handoff) ? "&handoff=" + handoff : "")
+      + (validShading ? "&shading=" + validShading : "");
   }
   function imageUrl(path, size) {
     if (typeof path === "string" && /^https:\/\/(image\.tmdb\.org|i\.ytimg\.com|btttr\.cc|d3mfc5qyv0pefp\.cloudfront\.net|img\.roya\.tv|arabcinemeta\.osamayousry\.com)\//i.test(path)) {
@@ -760,7 +797,9 @@
   }
   root.HorizonSearchCore = { PLAYER_ORIGIN: PLAYER_ORIGIN, LAUNCHER_ORIGIN: LAUNCHER_ORIGIN,
     HISTORY_KEY: HISTORY_KEY, PREFS_KEY: PREFS_KEY, SUBTITLE_KEY: SUBTITLE_KEY,
-    CONTENT_LIBRARY_KEY: CONTENT_LIBRARY_KEY, STATE_KEY: STATE_KEY,
+    CONTENT_LIBRARY_KEY: CONTENT_LIBRARY_KEY, CONTROL_SHADING_KEY: CONTROL_SHADING_KEY,
+    CONTROL_SHADING_DEFAULT: CONTROL_SHADING_DEFAULT, CONTROL_SHADING_OPTIONS: CONTROL_SHADING_OPTIONS,
+    STATE_KEY: STATE_KEY,
     HANDOFF_KEY: HANDOFF_KEY, BROWSED_SEASONS_KEY: BROWSED_SEASONS_KEY, EPISODE_CATALOG_KEY: EPISODE_CATALOG_KEY,
     HIDDEN_CONTINUE_KEY: HIDDEN_CONTINUE_KEY, HISTORY_BACKUP_KEY: HISTORY_BACKUP_KEY,
     HISTORY_DELETIONS_KEY: HISTORY_DELETIONS_KEY, ACTIVE_EPISODES_KEY: ACTIVE_EPISODES_KEY,
@@ -780,6 +819,7 @@
     rankResults: rankResults,
     readPrefs: readPrefs, writePrefs: writePrefs, readSubtitlePref: readSubtitlePref, writeSubtitlePref: writeSubtitlePref,
     readLibraryPref: readLibraryPref, writeLibraryPref: writeLibraryPref,
+    validControlShading: validControlShading, readControlShadingPref: readControlShadingPref, writeControlShadingPref: writeControlShadingPref,
     tvPlayerUrl: tvPlayerUrl, moviePlayerUrl: moviePlayerUrl, imageUrl: imageUrl, providerApp: providerApp, providerWatchUrl: providerWatchUrl,
     websiteSearch: websiteSearch, returnEpisode: returnEpisode, returnMovie: returnMovie, providerIdentity: providerIdentity,
     groupProviders: groupProviders };

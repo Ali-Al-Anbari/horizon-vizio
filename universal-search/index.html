@@ -6,15 +6,15 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.youtube.com https://s.ytimg.com; style-src 'self' 'unsafe-inline'; img-src 'self' https://image.tmdb.org https://i.ytimg.com https://btttr.cc https://d3mfc5qyv0pefp.cloudfront.net https://img.roya.tv https://arabcinemeta.osamayousry.com data:; media-src 'self' https://horizon.129-213-139-127.sslip.io https://archive.org https://*.archive.org https://*.us.archive.org https://test-streams.mux.dev https://media.w3.org https://vod.kwikmotion.com https://*.kwikmotion.com blob:; connect-src 'self' https://horizon.129-213-139-127.sslip.io https://www.youtube.com https://backend.roya.tv https://ticket.roya-tv.com https://vod.kwikmotion.com https://*.kwikmotion.com https://arabcinemeta.osamayousry.com; object-src 'none'; frame-src https://www.youtube.com https://www.youtube-nocookie.com; base-uri 'none'; form-action 'none'" />
   <title>Horizon Watch</title>
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="search.css?v=phase4a-5" />
+  <link rel="stylesheet" href="search.css?v=phase4a-6" />
   <link rel="stylesheet" href="lg-webos-compat.css?v=lg-2" />
   <link rel="stylesheet" href="horizon-video-lab-controls.css?v=vl-2" />
   <script src="lg-compat.js?v=lg-2" defer></script>
   <script src="history-sections.js?v=sec-2" defer></script>
-  <script src="core.js?v=lg-relay-3" defer></script>
+  <script src="core.js?v=lg-relay-4" defer></script>
   <script src="recommendations.js" defer></script>
   <script src="discover-engine.js" defer></script>
-  <script src="player-adapter.js" defer></script>
+  <script src="player-adapter.js?v=shading-1" defer></script>
   <script src="mock-data.js" defer></script>
   <script src="watch-performance.js?v=hero-test-2" defer></script>
   <script src="roya-catalog.js?v=lg-3" defer></script>
@@ -23,7 +23,7 @@
   <script src="arabic-providers.js?v=lg-7" defer></script>
   <script src="watch-i18n.js?v=1" defer></script>
   <script src="lg-webos-adapter.js?v=lg-15" defer></script>
-  <script src="search.js?v=phase4a-10" defer></script>
+  <script src="search.js?v=phase4a-11" defer></script>
 </head>
 <body>
   <main class="shell">
@@ -319,7 +319,7 @@
             </div>
             <div class="settings-cat-info">
               <strong>Browsing &amp; Display</strong>
-              <p>Hero preview update delay and preview responsiveness</p>
+              <p>Hero preview update delay and playback control shading</p>
               <span id="settings-summary-browsing" class="settings-cat-summary"></span>
             </div>
             <span class="settings-cat-arrow" aria-hidden="true">›</span>
@@ -376,6 +376,26 @@
             <h3>Hero Preview</h3>
             <div class="settings-list">
               <div class="settings-entry"><span>Hero Update Delay<small>Delay before updating backdrop when moving across posters.</small></span><button id="settings-hero-delay" data-focus type="button"></button></div>
+            </div>
+            <h3 style="margin-top:20px;">Playback</h3>
+            <div class="settings-list">
+              <div class="settings-entry settings-entry-options">
+                <div class="settings-entry-head">
+                  <span>Control Shading<small>Controls the dark gradients behind the playback controls.</small></span>
+                  <span id="settings-control-shading-value" class="settings-entry-value">Standard · 15% / 20%</span>
+                </div>
+                <div id="settings-control-shading-options" class="settings-option-grid" role="radiogroup" aria-label="Control Shading">
+                  <button id="settings-shading-off" class="settings-option-btn" data-shading="off" data-focus type="button" role="radio" aria-checked="false"><strong>Off</strong><small>0% / 0%</small></button>
+                  <button id="settings-shading-minimal" class="settings-option-btn" data-shading="minimal" data-focus type="button" role="radio" aria-checked="false"><strong>Minimal</strong><small>5% / 5%</small></button>
+                  <button id="settings-shading-light" class="settings-option-btn" data-shading="light" data-focus type="button" role="radio" aria-checked="false"><strong>Light</strong><small>8% / 8%</small></button>
+                  <button id="settings-shading-subtle" class="settings-option-btn" data-shading="subtle" data-focus type="button" role="radio" aria-checked="false"><strong>Subtle</strong><small>10% / 10%</small></button>
+                  <button id="settings-shading-medium" class="settings-option-btn" data-shading="medium" data-focus type="button" role="radio" aria-checked="false"><strong>Medium</strong><small>12% / 15%</small></button>
+                  <button id="settings-shading-standard" class="settings-option-btn is-selected" data-shading="standard" data-focus type="button" role="radio" aria-checked="true"><strong>Standard</strong><small>15% / 20%</small></button>
+                  <button id="settings-shading-strong" class="settings-option-btn" data-shading="strong" data-focus type="button" role="radio" aria-checked="false"><strong>Strong</strong><small>20% / 25%</small></button>
+                  <button id="settings-shading-maximum" class="settings-option-btn" data-shading="maximum" data-focus type="button" role="radio" aria-checked="false"><strong>Maximum</strong><small>25% / 35%</small></button>
+                </div>
+              </div>
+              <div class="settings-entry"><span>Restore Default Shading<small>Reset Control Shading to Standard (15% / 20%).</small></span><button id="settings-control-shading-reset" data-focus type="button">Restore Default</button></div>
             </div>
           </section>
           <section id="settings-panel-library" class="settings-panel" aria-label="Manage Library and Content" hidden>

@@ -34,6 +34,12 @@
       || value === "stellar" || value === "embedwave" || value === "apiplayer"
       || value === "vidzen" ? value : null;
   }
+  function shadingParameter(search) {
+    var value = parameter(search, "shading");
+    return value === "off" || value === "minimal" || value === "light"
+      || value === "subtle" || value === "medium" || value === "standard"
+      || value === "strong" || value === "maximum" ? value : null;
+  }
   function parse(search) {
     if (parameter(search, "type") === "movie") {
       var movieText = parameter(search, "id");
@@ -42,6 +48,7 @@
       return { mediaType: "movie", current: movie, invalid: !movie, subtitle: "off",
         fromSearch: parameter(search, "from") === "search",
         provider: providerParameter(search),
+        shading: shadingParameter(search),
         resumePosition: parameter(search, "resume") !== null
           && finiteNonnegative(Number(parameter(search, "resume"))) ? Number(parameter(search, "resume")) : null,
         resumeDuration: parameter(search, "duration") !== null
@@ -65,6 +72,7 @@
       testEnd: parameter(search, "testEnd") === "1",
       fromSearch: parameter(search, "from") === "search",
       provider: providerParameter(search),
+      shading: shadingParameter(search),
       resumePosition: parameter(search, "resume") !== null
         && finiteNonnegative(Number(parameter(search, "resume"))) ? Number(parameter(search, "resume")) : null,
       resumeDuration: parameter(search, "duration") !== null
@@ -83,10 +91,13 @@
   function finiteNonnegative(value) { return typeof value === "number" && isFinite(value) && value >= 0; }
   function finitePositive(value) { return typeof value === "number" && isFinite(value) && value > 0 && value <= 10000000; }
   function finiteTimestamp(value) { return typeof value === "number" && isFinite(value) && value > 0 && value <= 8640000000000000; }
-  function pageUrl(target, subtitle, testEnd, page, fromSearch, showTitle, tvdbId, provider) {
+  function pageUrl(target, subtitle, testEnd, page, fromSearch, showTitle, tvdbId, provider, shading) {
     if (!target || !episodeFor(target.showId, target.season, target.episode)) return null;
     var primary = root.HorizonPlaybackProviders ? root.HorizonPlaybackProviders.PRIMARY : "yapgrid";
     var destination = page === "list" ? "episode-list-placeholder.html" : "player-overlay.html";
+    var validShading = shading === "off" || shading === "minimal" || shading === "light"
+      || shading === "subtle" || shading === "medium" || shading === "standard"
+      || shading === "strong" || shading === "maximum" ? shading : null;
     return destination + "?season=" + target.season + "&episode=" + target.episode
       + "&sub=" + (subtitle === "on" ? "on" : "off") + (testEnd ? "&testEnd=1" : "")
       + (target.showId === SHOW_ID ? "" : "&showId=" + target.showId)
@@ -97,7 +108,8 @@
         || provider === "vidfast" || provider === "yapgrid" || provider === "vidy"
         || provider === "stellar" || provider === "embedwave" || provider === "apiplayer"
         || provider === "vidzen") && provider !== primary
-        ? "&provider=" + provider : "");
+        ? "&provider=" + provider : "")
+      + (validShading ? "&shading=" + validShading : "");
   }
   function embedUrl(target) {
     if (target && positive(target.movieId)) return "https://yapgrid.com/embed/movie/" + target.movieId;
